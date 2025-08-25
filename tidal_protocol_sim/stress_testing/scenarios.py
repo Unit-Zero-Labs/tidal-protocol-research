@@ -126,6 +126,14 @@ class TidalStressTestSuite:
                 "Test debt cap under extreme liquidation conditions",
                 lambda engine: self._debt_cap_stress_test(engine),
                 duration=100
+            ),
+            
+            # High Tide scenario
+            StressTestScenario(
+                "High_Tide_BTC_Decline",
+                "BTC gradual decline with active yield token rebalancing",
+                lambda engine: self._setup_high_tide_scenario(engine),
+                duration=60
             )
         ]
     
@@ -206,6 +214,21 @@ class TidalStressTestSuite:
         # Apply moderate price shock to test cap effectiveness
         shocks = {Asset.ETH: -0.20, Asset.BTC: -0.20, Asset.FLOW: -0.30}
         engine.state.apply_price_shock(shocks)
+        
+    def _setup_high_tide_scenario(self, engine: TidalSimulationEngine):
+        """Setup High Tide scenario - this is a placeholder for integration with HighTideSimulationEngine"""
+        # Note: This scenario requires special handling in the stress test runner
+        # to use HighTideSimulationEngine instead of the regular TidalSimulationEngine
+        
+        # For now, apply a gradual BTC decline pattern
+        # The actual High Tide logic will be handled by HighTideSimulationEngine
+        print("Setting up High Tide scenario - BTC decline with active rebalancing")
+        
+        # Initialize BTC decline (this will be overridden by HighTideSimulationEngine)
+        initial_btc_price = engine.state.current_prices.get(Asset.BTC, 100_000.0)
+        target_decline = -0.20  # 20% decline as baseline
+        
+        # This is a placeholder - actual scenario execution happens in HighTideSimulationEngine
     
     def run_all_scenarios(self, base_config) -> Dict[str, dict]:
         """Run all stress test scenarios"""

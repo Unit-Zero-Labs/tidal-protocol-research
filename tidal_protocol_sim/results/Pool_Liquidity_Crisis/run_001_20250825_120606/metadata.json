@@ -1,0 +1,14 @@
+{
+  "run_id": "run_001_20250825_120606",
+  "scenario_name": "Pool_Liquidity_Crisis",
+  "timestamp": "2025-08-25 12:06:06",
+  "parameters": {
+    "num_monte_carlo_runs": 100,
+    "simulation_steps": 1000,
+    "num_lenders": 5,
+    "num_traders": 3,
+    "num_liquidators": 2
+  },
+  "execution_time": 2.610895872116089,
+  "status": "completed"
+}

@@ -49,8 +49,8 @@ class AssetPool:
             self.collateral_factor = 0.75
             self.liquidation_threshold = 0.80
         elif self.asset == Asset.BTC:
-            self.collateral_factor = 0.75
-            self.liquidation_threshold = 0.80
+            self.collateral_factor = 0.80
+            self.liquidation_threshold = 0.85
         elif self.asset == Asset.FLOW:
             self.collateral_factor = 0.50
             self.liquidation_threshold = 0.60

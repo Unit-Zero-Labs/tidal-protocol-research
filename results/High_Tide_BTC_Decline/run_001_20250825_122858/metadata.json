@@ -1,0 +1,14 @@
+{
+  "run_id": "run_001_20250825_122858",
+  "scenario_name": "High_Tide_BTC_Decline",
+  "timestamp": "2025-08-25 12:28:58",
+  "parameters": {
+    "num_monte_carlo_runs": 1,
+    "simulation_steps": 1000,
+    "num_lenders": 5,
+    "num_traders": 3,
+    "num_liquidators": 2
+  },
+  "execution_time": 0,
+  "status": "completed"
+}

@@ -461,8 +461,11 @@ def list_scenario_results(scenario_name: str) -> int:
     
     try:
         from tidal_protocol_sim.analysis.results_manager import ResultsManager
+        from pathlib import Path
         
-        results_manager = ResultsManager()
+        # Use tidal_protocol_sim/results directory
+        results_dir = Path(__file__).parent / "results"
+        results_manager = ResultsManager(str(results_dir))
         runs = results_manager.list_scenario_runs(scenario_name)
         
         if not runs:
@@ -503,8 +506,11 @@ def compare_runs(scenario_name: str, run1_id: str, run2_id: str, verbose: bool =
     
     try:
         from tidal_protocol_sim.analysis.results_manager import ResultsManager
+        from pathlib import Path
         
-        results_manager = ResultsManager()
+        # Use tidal_protocol_sim/results directory
+        results_dir = Path(__file__).parent / "results"
+        results_manager = ResultsManager(str(results_dir))
         
         # Load both runs
         runs = results_manager.list_scenario_runs(scenario_name)
@@ -577,7 +583,9 @@ def view_run_charts(scenario_name: str, run_id: str) -> int:
         from tidal_protocol_sim.analysis.results_manager import ResultsManager
         from pathlib import Path
         
-        results_manager = ResultsManager()
+        # Use tidal_protocol_sim/results directory
+        results_dir = Path(__file__).parent / "results"
+        results_manager = ResultsManager(str(results_dir))
         runs = results_manager.list_scenario_runs(scenario_name)
         
         target_run = next((run for run in runs if run["run_id"] == run_id), None)

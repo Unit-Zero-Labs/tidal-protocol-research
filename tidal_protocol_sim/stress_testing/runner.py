@@ -13,10 +13,12 @@ from pathlib import Path
 from .scenarios import TidalStressTestSuite
 from .analyzer import StressTestAnalyzer
 from ..simulation.engine import TidalSimulationEngine
+from ..simulation.high_tide_engine import HighTideSimulationEngine, HighTideConfig
 from ..simulation.config import SimulationConfig
 from ..core.protocol import Asset
 from ..analysis.results_manager import ResultsManager, RunMetadata
 from ..analysis.scenario_charts import ScenarioChartGenerator
+from ..analysis.agent_summary_table import AgentSummaryTableGenerator
 
 
 class StressTestRunner:
@@ -30,8 +32,11 @@ class StressTestRunner:
         
         # Results management components
         self.auto_save = auto_save
-        self.results_manager = ResultsManager() if self.auto_save else None
+        # Use tidal_protocol_sim/results directory to keep results organized with other scenarios
+        results_dir = Path(__file__).parent.parent / "results"
+        self.results_manager = ResultsManager(str(results_dir)) if self.auto_save else None
         self.chart_generator = ScenarioChartGenerator()  # Always create chart generator
+        self.table_generator = AgentSummaryTableGenerator()  # Agent summary table generator
     
     def run_monte_carlo_stress_test(
         self, 
@@ -60,12 +65,17 @@ class StressTestRunner:
         
         for run in range(num_runs):
             try:
-                # Create engine with potentially varied parameters
-                config = self._create_varied_config() if vary_params else self.config
-                engine = TidalSimulationEngine(config)
-                
-                # Run specific scenario
-                result = self.test_suite.run_scenario(scenario_name, config)
+                # Special handling for High Tide scenario
+                if scenario_name == "High_Tide_BTC_Decline":
+                    result = self._run_high_tide_scenario(vary_params)
+                else:
+                    # Create engine with potentially varied parameters
+                    config = self._create_varied_config() if vary_params else self.config
+                    engine = TidalSimulationEngine(config)
+                    
+                    # Run specific scenario
+                    result = self.test_suite.run_scenario(scenario_name, config)
+                    
                 runs_results.append(result)
                 
                 if (run + 1) % 10 == 0:
@@ -155,8 +165,11 @@ class StressTestRunner:
             config = self._apply_custom_params(config, custom_params)
         
         # Run scenario
-        engine = TidalSimulationEngine(config)
-        results = self.test_suite.run_scenario(scenario_name, config)
+        if scenario_name == "High_Tide_BTC_Decline":
+            results = self._run_high_tide_scenario(vary_params=False)
+        else:
+            engine = TidalSimulationEngine(config)
+            results = self.test_suite.run_scenario(scenario_name, config)
         
         # Analyze results
         analysis = self.analyzer.analyze_single_scenario(scenario_name, results)
@@ -171,6 +184,32 @@ class StressTestRunner:
             self._save_scenario_results(scenario_name, final_results, 0, 1)
         
         return final_results
+    
+    def _run_high_tide_scenario(self, vary_params: bool = True) -> Dict:
+        """Run High Tide scenario using specialized HighTideSimulationEngine"""
+        # Create High Tide configuration
+        config = HighTideConfig()
+        
+        if vary_params:
+            # Apply Monte Carlo variations
+            config.num_high_tide_agents = np.random.randint(10, 50)
+            config.btc_decline_duration = np.random.randint(45, 75)  # 45-75 minutes
+            
+            # Randomize final price range
+            decline_severity = np.random.uniform(0.15, 0.30)  # 15-30% decline
+            config.btc_final_price_range = (
+                config.btc_initial_price * (1 - decline_severity - 0.05),
+                config.btc_initial_price * (1 - decline_severity + 0.05)
+            )
+            
+            # Randomize pool utilization
+            config.moet_btc_pool_size *= np.random.uniform(0.6, 1.4)  # ±40% variation
+        
+        # Create and run High Tide simulation engine
+        engine = HighTideSimulationEngine(config)
+        results = engine.run_high_tide_simulation()
+        
+        return results
     
     def _create_varied_config(self) -> SimulationConfig:
         """Create configuration with parameter variations for Monte Carlo"""
@@ -287,6 +326,29 @@ class StressTestRunner:
                         scenario_name, chart_data, charts_dir)
                 except Exception as e:
                     print(f"Warning: Chart generation failed - {str(e)}")
+            
+            # Generate agent summary table for High Tide scenario
+            if scenario_name == "High_Tide_BTC_Decline" and hasattr(self, 'table_generator'):
+                try:
+                    # Use the scenario results for table generation
+                    if "scenario_results" in results:
+                        table_data = results["scenario_results"]
+                    elif "sample_scenario_results" in results:
+                        table_data = results["sample_scenario_results"]
+                    else:
+                        table_data = results
+                    
+                    # Generate and save agent summary table
+                    agent_table = self.table_generator.generate_agent_summary_table(
+                        table_data, output_dir=run_dir
+                    )
+                    
+                    # Print table to console for immediate viewing
+                    if not agent_table.empty:
+                        self.table_generator.print_agent_summary_table(agent_table)
+                        
+                except Exception as e:
+                    print(f"Warning: Agent summary table generation failed - {str(e)}")
             
             # Create summary report
             summary_data = {

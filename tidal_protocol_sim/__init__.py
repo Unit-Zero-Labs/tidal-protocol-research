@@ -11,6 +11,7 @@ __author__ = "Tidal Protocol Team"
 # Core components
 from .core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
 from .core.moet import MoetStablecoin
+from .core.yield_tokens import YieldToken, YieldTokenManager, YieldTokenPool
 # Removed TidalMath - functionality integrated into protocol.py
 
 # Agents
@@ -18,9 +19,11 @@ from .agents.base_agent import BaseAgent, AgentAction, AgentState
 from .agents.tidal_lender import TidalLender
 from .agents.trader import BasicTrader
 from .agents.liquidator import Liquidator
+from .agents.high_tide_agent import HighTideAgent, create_high_tide_agents
 
 # Simulation
 from .simulation.engine import TidalSimulationEngine
+from .simulation.high_tide_engine import HighTideSimulationEngine, HighTideConfig
 from .simulation.config import SimulationConfig, StressTestScenarios
 from .simulation.state import SimulationState
 
@@ -34,14 +37,16 @@ from .analysis.metrics import TidalMetricsCalculator
 __all__ = [
     # Core
     "TidalProtocol", "Asset", "AssetPool", "LiquidityPool",
-    "MoetStablecoin",
+    "MoetStablecoin", "YieldToken", "YieldTokenManager", "YieldTokenPool",
     
     # Agents
     "BaseAgent", "AgentAction", "AgentState",
     "TidalLender", "BasicTrader", "Liquidator",
+    "HighTideAgent", "create_high_tide_agents",
     
     # Simulation
-    "TidalSimulationEngine", "SimulationConfig", "StressTestScenarios", "SimulationState",
+    "TidalSimulationEngine", "HighTideSimulationEngine", "HighTideConfig",
+    "SimulationConfig", "StressTestScenarios", "SimulationState",
     
     # Stress Testing
     "StressTestRunner", "QuickStressTest", "TidalStressTestSuite",

@@ -12,6 +12,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from ..core.protocol import Asset
+from .high_tide_charts import HighTideChartGenerator
 
 
 class ScenarioChartGenerator:
@@ -19,6 +20,7 @@ class ScenarioChartGenerator:
     
     def __init__(self):
         self._setup_styling()
+        self.high_tide_generator = HighTideChartGenerator()
     
     def _setup_styling(self):
         """Setup clean, professional chart styling"""
@@ -46,6 +48,12 @@ class ScenarioChartGenerator:
         
         # Ensure charts directory exists
         charts_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Special handling for High Tide scenario
+        if scenario_name == "High_Tide_BTC_Decline":
+            return self.high_tide_generator.generate_high_tide_charts(
+                scenario_name, results, charts_dir
+            )
         
         try:
             return self._create_simulation_time_series(results, charts_dir, scenario_name)

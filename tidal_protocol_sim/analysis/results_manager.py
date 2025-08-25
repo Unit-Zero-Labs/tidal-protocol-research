@@ -9,6 +9,7 @@ import os
 import json
 import time
 import threading
+import pandas as pd
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Any
@@ -123,6 +124,10 @@ class ResultsManager:
         with open(metadata_file, 'w') as f:
             json.dump(asdict(metadata), f, indent=2)
         
+        # Save position tracking data if available
+        if "position_tracking" in results:
+            self._save_position_tracking_csv(run_dir, results["position_tracking"])
+        
         return results_file
     
     def save_summary_report(self, run_dir: Path, summary: Dict[str, Any]) -> Path:
@@ -133,6 +138,19 @@ class ResultsManager:
             f.write(self._generate_markdown_summary(summary))
         
         return summary_file
+    
+    def _save_position_tracking_csv(self, run_dir: Path, position_data: Dict[str, Any]) -> Path:
+        """Save position tracking data as CSV"""
+        tracking_file = run_dir / f"agent_position_tracker_{position_data['tracked_agent_id']}.csv"
+        
+        # Convert tracking data to DataFrame
+        df = pd.DataFrame(position_data["minute_by_minute_data"])
+        
+        # Save CSV
+        df.to_csv(tracking_file, index=False)
+        
+        print(f"💾 Position tracker saved: {tracking_file}")
+        return tracking_file
     
     def _generate_markdown_summary(self, summary: Dict[str, Any]) -> str:
         """Generate markdown summary from results"""
