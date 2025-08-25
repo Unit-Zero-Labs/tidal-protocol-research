@@ -34,40 +34,40 @@ class StressTestAnalyzer:
             if "error" in result:
                 continue
             
-            # Protocol metrics
+            # Extract from summary statistics (more reliable)
+            summary_stats = result.get("summary_statistics", {})
             final_state = result.get("final_protocol_state", {})
-            metrics["protocol_treasury"].append(final_state.get("protocol_treasury", 0))
+            
+            # Protocol metrics
+            metrics["protocol_treasury"].append(summary_stats.get("final_protocol_treasury", 0))
             
             # Liquidation metrics
             liquidation_events = result.get("liquidation_events", [])
             metrics["total_liquidations"].append(len(liquidation_events))
             
             # Agent health factors
-            agent_states = result.get("agent_states", {})
-            health_factors = [
-                agent.get("health_factor", float('inf')) 
-                for agent in agent_states.values()
-                if agent.get("health_factor") != float('inf')
-            ]
-            if health_factors:
-                metrics["agent_health_factors"].append(np.mean(health_factors))
+            min_hf = summary_stats.get("min_health_factor", 1.0)
+            avg_hf = summary_stats.get("avg_health_factor", 1.0)
+            if avg_hf != float('inf') and avg_hf > 0:
+                metrics["agent_health_factors"].append(avg_hf)
             
             # Debt cap utilization
             debt_cap = final_state.get("debt_cap", 1)
-            total_borrowed = final_state.get("total_borrowed", 0)
+            total_borrowed = summary_stats.get("final_total_borrowed", 0)
             if debt_cap > 0:
                 utilization = total_borrowed / debt_cap
                 metrics["debt_cap_utilization"].append(min(utilization, 1.0))
             
             # Supply/borrow metrics
-            metrics["total_supplied"].append(final_state.get("total_supplied", 0))
+            metrics["total_supplied"].append(summary_stats.get("final_total_supplied", 0))
             metrics["total_borrowed"].append(total_borrowed)
             
             # MOET price stability
             metrics_history = result.get("metrics_history", [])
             if metrics_history:
                 final_prices = metrics_history[-1].get("asset_prices", {})
-                moet_price = final_prices.get("MOET", 1.0)
+                # Handle both string and Asset enum keys
+                moet_price = final_prices.get("MOET", final_prices.get("Asset.MOET", 1.0))
                 price_deviation = abs(moet_price - 1.0)
                 metrics["moet_price_stability"].append(price_deviation)
         

@@ -11,7 +11,7 @@ __author__ = "Tidal Protocol Team"
 # Core components
 from .core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
 from .core.moet import MoetStablecoin
-from .core.math import TidalMath
+# Removed TidalMath - functionality integrated into protocol.py
 
 # Agents
 from .agents.base_agent import BaseAgent, AgentAction, AgentState
@@ -34,7 +34,7 @@ from .analysis.metrics import TidalMetricsCalculator
 __all__ = [
     # Core
     "TidalProtocol", "Asset", "AssetPool", "LiquidityPool",
-    "MoetStablecoin", "TidalMath",
+    "MoetStablecoin",
     
     # Agents
     "BaseAgent", "AgentAction", "AgentState",

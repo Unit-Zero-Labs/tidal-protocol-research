@@ -1,0 +1,14 @@
+{
+  "run_id": "run_004_20250824_185553",
+  "scenario_name": "High_Utilization_Stress",
+  "timestamp": "2025-08-24 18:55:53",
+  "parameters": {
+    "num_monte_carlo_runs": 100,
+    "simulation_steps": 1000,
+    "num_lenders": 5,
+    "num_traders": 3,
+    "num_liquidators": 2
+  },
+  "execution_time": 3.7452478408813477,
+  "status": "completed"
+}

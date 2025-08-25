@@ -1,0 +1,13 @@
+{
+  "scenario_results": {
+    "metrics_history": [
+      {
+        "step": 0,
+        "timestamp": 0,
+        "total_supplied": 320211.7081489505,
+        "total_borrowed": 199000.0,
+        "protocol_treasury": 0.0,
+        "debt_cap": 100000.0,
+        "liquidatable_agents": 0,
+        "asset_prices": {
+          

@@ -25,21 +25,69 @@ class AgentAction(Enum):
 class AgentState:
     """Simplified agent state"""
     
-    def __init__(self, agent_id: str, initial_balance: float = 100_000.0):
+    def __init__(self, agent_id: str, initial_balance: float = 100_000.0, agent_type: str = "base"):
         self.agent_id = agent_id
         
-        # Token balances
-        self.token_balances = {
-            Asset.ETH: initial_balance * 0.3 / 4400.0,    # ~$30k in ETH
-            Asset.BTC: initial_balance * 0.2 / 118_000.0, # ~$20k in BTC  
-            Asset.FLOW: initial_balance * 0.2 / 0.40,     # ~$20k in FLOW
-            Asset.USDC: initial_balance * 0.3,            # ~$30k in USDC
-            Asset.MOET: 0.0
-        }
-        
-        # Protocol positions
-        self.supplied_balances = {asset: 0.0 for asset in Asset if asset != Asset.MOET}
-        self.borrowed_balances = {Asset.MOET: 0.0}  # Only MOET can be borrowed
+        # Initialize realistic positions based on agent type
+        if agent_type == "tidal_lender":
+            # Lenders start with 70% of assets supplied as collateral, 30% borrowed
+            self.token_balances = {
+                Asset.ETH: initial_balance * 0.1 / 4400.0,    # Keep 10% liquid
+                Asset.BTC: initial_balance * 0.05 / 118_000.0, # Keep 5% liquid
+                Asset.FLOW: initial_balance * 0.1 / 0.40,     # Keep 10% liquid
+                Asset.USDC: initial_balance * 0.05,           # Keep 5% liquid
+                Asset.MOET: initial_balance * 0.3             # 30% borrowed MOET
+            }
+            
+            # Most assets are supplied as collateral
+            self.supplied_balances = {
+                Asset.ETH: initial_balance * 0.2 / 4400.0,    # $20k in ETH collateral
+                Asset.BTC: initial_balance * 0.15 / 118_000.0, # $15k in BTC collateral
+                Asset.FLOW: initial_balance * 0.1 / 0.40,     # $10k in FLOW collateral
+                Asset.USDC: initial_balance * 0.25            # $25k in USDC collateral
+            }
+            self.borrowed_balances = {Asset.MOET: initial_balance * 0.3}  # 30% borrowed
+            
+        elif agent_type == "basic_trader":
+            # Traders start with balanced token holdings, minimal borrowing
+            self.token_balances = {
+                Asset.ETH: initial_balance * 0.25 / 4400.0,
+                Asset.BTC: initial_balance * 0.2 / 118_000.0,
+                Asset.FLOW: initial_balance * 0.2 / 0.40,
+                Asset.USDC: initial_balance * 0.25,
+                Asset.MOET: initial_balance * 0.1
+            }
+            self.supplied_balances = {
+                Asset.ETH: initial_balance * 0.05 / 4400.0,   # Small collateral
+                Asset.BTC: initial_balance * 0.05 / 118_000.0,
+                Asset.FLOW: 0.0,
+                Asset.USDC: 0.0
+            }
+            self.borrowed_balances = {Asset.MOET: initial_balance * 0.1}  # 10% borrowed
+            
+        elif agent_type == "liquidator":
+            # Liquidators start with liquid assets ready for liquidations
+            self.token_balances = {
+                Asset.ETH: initial_balance * 0.1 / 4400.0,
+                Asset.BTC: initial_balance * 0.1 / 118_000.0,
+                Asset.FLOW: initial_balance * 0.1 / 0.40,
+                Asset.USDC: initial_balance * 0.2,
+                Asset.MOET: initial_balance * 0.5             # Lots of MOET for liquidations
+            }
+            self.supplied_balances = {asset: 0.0 for asset in Asset if asset != Asset.MOET}
+            self.borrowed_balances = {Asset.MOET: 0.0}
+            
+        else:
+            # Default balanced approach
+            self.token_balances = {
+                Asset.ETH: initial_balance * 0.3 / 4400.0,
+                Asset.BTC: initial_balance * 0.2 / 118_000.0,
+                Asset.FLOW: initial_balance * 0.2 / 0.40,
+                Asset.USDC: initial_balance * 0.3,
+                Asset.MOET: 0.0
+            }
+            self.supplied_balances = {asset: 0.0 for asset in Asset if asset != Asset.MOET}
+            self.borrowed_balances = {Asset.MOET: 0.0}
         
         # Agent metrics
         self.total_value = initial_balance
@@ -84,7 +132,7 @@ class BaseAgent(ABC):
     def __init__(self, agent_id: str, agent_type: str, initial_balance: float = 100_000.0):
         self.agent_id = agent_id
         self.agent_type = agent_type
-        self.state = AgentState(agent_id, initial_balance)
+        self.state = AgentState(agent_id, initial_balance, agent_type)
         
         # Agent parameters (to be set by subclasses)
         self.risk_tolerance = 0.5
