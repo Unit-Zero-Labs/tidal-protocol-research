@@ -466,7 +466,7 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 "risk_profile": agent.risk_profile,
                 "target_hf": agent.state.target_health_factor,
                 "initial_hf": agent.state.initial_health_factor,
-                "cost_of_liquidation": portfolio["cost_of_liquidation"],
+                "cost_of_rebalancing": portfolio["cost_of_rebalancing"],
                 "net_position_value": portfolio["net_position_value"],
                 "yield_token_value": portfolio["yield_token_portfolio"]["total_current_value"],
                 "total_yield_sold": portfolio["total_yield_sold"],
@@ -488,7 +488,7 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         
         # Agent outcomes
         agent_outcomes = []
-        total_cost_of_liquidation = 0.0
+        total_cost_of_rebalancing = 0.0
         survival_by_risk_profile = {"conservative": 0, "moderate": 0, "aggressive": 0}
         
         for agent in self.high_tide_agents:
@@ -503,7 +503,7 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 "target_health_factor": agent.state.target_health_factor,
                 "initial_health_factor": agent.state.initial_health_factor,  # Add this for table
                 "final_health_factor": agent.state.health_factor,
-                "cost_of_liquidation": portfolio["cost_of_liquidation"],
+                "cost_of_rebalancing": portfolio["cost_of_rebalancing"],
                 "net_position_value": portfolio["net_position_value"],
                 "total_yield_earned": portfolio["yield_token_portfolio"]["total_accrued_yield"],
                 "total_yield_sold": portfolio["total_yield_sold"],
@@ -517,7 +517,7 @@ class HighTideSimulationEngine(TidalSimulationEngine):
             }
             
             agent_outcomes.append(outcome)
-            total_cost_of_liquidation += outcome["cost_of_liquidation"]
+            total_cost_of_rebalancing += outcome["cost_of_rebalancing"]
             
             if outcome["survived"]:
                 survival_by_risk_profile[agent.risk_profile] += 1
@@ -541,8 +541,8 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 "survival_by_risk_profile": survival_by_risk_profile
             },
             "cost_analysis": {
-                "total_cost_of_liquidation": total_cost_of_liquidation,
-                "average_cost_per_agent": total_cost_of_liquidation / len(self.high_tide_agents),
+                "total_cost_of_rebalancing": total_cost_of_rebalancing,
+                "average_cost_per_agent": total_cost_of_rebalancing / len(self.high_tide_agents),
                 "cost_by_risk_profile": self._calculate_cost_by_risk_profile(agent_outcomes)
             },
             "yield_token_activity": {
@@ -576,12 +576,12 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         return base_results
         
     def _calculate_cost_by_risk_profile(self, agent_outcomes: List[dict]) -> dict:
-        """Calculate cost of liquidation by risk profile"""
+        """Calculate cost of rebalancing by risk profile"""
         profile_costs = {"conservative": [], "moderate": [], "aggressive": []}
         
         for outcome in agent_outcomes:
             profile = outcome["risk_profile"]
-            profile_costs[profile].append(outcome["cost_of_liquidation"])
+            profile_costs[profile].append(outcome["cost_of_rebalancing"])
             
         result = {}
         for profile, costs in profile_costs.items():

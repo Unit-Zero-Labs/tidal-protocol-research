@@ -110,7 +110,7 @@ def run_high_tide_demo():
             print(f"     • {profile.title()}: {count}/{total} ({rate:.1f}%)")
         
         print(f"\n💰 Cost Analysis:")
-        print(f"   Total Cost of Liquidation: ${cost_analysis.get('total_cost_of_liquidation', 0):,.0f}")
+        print(f"   Total Cost of Rebalancing: ${cost_analysis.get('total_cost_of_rebalancing', 0):,.0f}")
         print(f"   Average Cost per Agent: ${cost_analysis.get('average_cost_per_agent', 0):,.0f}")
         
         cost_by_profile = cost_analysis.get('cost_by_risk_profile', {})

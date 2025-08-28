@@ -11,6 +11,7 @@ from typing import Dict, Tuple, Optional
 from .base_agent import BaseAgent, AgentAction, AgentState
 from ..core.protocol import Asset
 from ..core.yield_tokens import YieldTokenManager
+from ..core.uniswap_v3_math import calculate_rebalancing_cost_with_slippage
 
 
 class HighTideAgentState(AgentState):
@@ -287,12 +288,12 @@ class HighTideAgent(BaseAgent):
             
         return moet_raised
     
-    def calculate_cost_of_liquidation(self, final_btc_price: float, current_minute: int) -> float:
+    def calculate_cost_of_rebalancing(self, final_btc_price: float, current_minute: int) -> float:
         """
-        Calculate cost of liquidation for High Tide strategy
+        Calculate cost of rebalancing for High Tide strategy including Uniswap v3 slippage
         
         Net Position Value = Collateral - (Debt - Yield Token Value)
-        Cost of Liquidation = Final Collateral Value - Final Net Position Value
+        Cost of Rebalancing = Final Collateral Value - Final Net Position Value + Slippage Costs
         """
         # Calculate current position values
         collateral_value = self.state.btc_amount * final_btc_price
@@ -301,11 +302,25 @@ class HighTideAgent(BaseAgent):
         # Net Position Value = Collateral - (Debt - Yield Token Value)
         net_position_value = collateral_value - (self.state.moet_debt - yield_token_value)
         
-        # Cost of Liquidation = Final Collateral Value - Final Net Position Value
-        # Simplified: Cost = Debt - Yield Token Value (net debt remaining)
-        cost_of_liquidation = max(0, self.state.moet_debt - yield_token_value)
+        # Base cost = Debt - Yield Token Value (net debt remaining)
+        base_cost = max(0, self.state.moet_debt - yield_token_value)
         
-        return cost_of_liquidation
+        # Calculate slippage costs for all rebalancing events
+        total_slippage_cost = 0.0
+        for event in self.state.rebalancing_events:
+            moet_amount = event["moet_raised"]
+            if moet_amount > 0:
+                slippage_result = calculate_rebalancing_cost_with_slippage(
+                    moet_amount, 
+                    pool_size_usd=500_000,  # $500K total pool
+                    concentrated_range=0.2  # 20% concentration range
+                )
+                total_slippage_cost += slippage_result["total_swap_cost"]
+        
+        # Total cost includes base cost plus all slippage costs
+        total_cost = base_cost + total_slippage_cost
+        
+        return total_cost
     
     def get_detailed_portfolio_summary(self, asset_prices: Dict[Asset, float], current_minute: int) -> dict:
         """Get comprehensive portfolio summary for High Tide agent"""
@@ -313,7 +328,7 @@ class HighTideAgent(BaseAgent):
         
         # Add High Tide specific metrics
         yield_summary = self.state.yield_token_manager.get_portfolio_summary(current_minute)
-        cost_of_liquidation = self.calculate_cost_of_liquidation(
+        cost_of_rebalancing = self.calculate_cost_of_rebalancing(
             asset_prices.get(Asset.BTC, 100_000.0), 
             current_minute
         )
@@ -331,8 +346,8 @@ class HighTideAgent(BaseAgent):
             "total_yield_sold": self.state.total_yield_sold,
             "rebalancing_events_count": len(self.state.rebalancing_events),
             "emergency_liquidations": self.state.emergency_liquidations,
-            "cost_of_liquidation": cost_of_liquidation,
-            "net_position_value": 100_000.0 - cost_of_liquidation,
+            "cost_of_rebalancing": cost_of_rebalancing,
+            "net_position_value": 100_000.0 - cost_of_rebalancing,
             "automatic_rebalancing": self.state.automatic_rebalancing
         }
         
@@ -374,7 +389,7 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True)
         initial_hf = random.uniform(2.1, 2.4)
         # Conservative: Small buffer (0.05-0.15 below initial)
         target_hf = initial_hf - random.uniform(0.05, 0.15)
-        target_hf = max(target_hf, 1.2)  # Minimum target HF is 1.2
+        target_hf = max(target_hf, 1.1)  # Minimum target HF is 1.1
         
         agent = HighTideAgent(
             f"high_tide_conservative_{agent_id}",
@@ -389,7 +404,7 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True)
         initial_hf = random.uniform(1.5, 1.8)
         # Moderate: Medium buffer (0.15-0.25 below initial)
         target_hf = initial_hf - random.uniform(0.15, 0.25)
-        target_hf = max(target_hf, 1.2)  # Minimum target HF is 1.2
+        target_hf = max(target_hf, 1.1)  # Minimum target HF is 1.1
         
         agent = HighTideAgent(
             f"high_tide_moderate_{agent_id}",
@@ -404,7 +419,7 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True)
         initial_hf = random.uniform(1.3, 1.5)
         # Aggressive: Larger buffer (0.15-0.4 below initial)
         target_hf = initial_hf - random.uniform(0.15, 0.4)
-        target_hf = max(target_hf, 1.2)  # Minimum target HF is 1.2
+        target_hf = max(target_hf, 1.1)  # Minimum target HF is 1.1
         
         agent = HighTideAgent(
             f"high_tide_aggressive_{agent_id}",

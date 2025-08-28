@@ -42,7 +42,7 @@ class AgentSummaryTableGenerator:
         - Final Collateral Value ($)
         - Final Yield Token Value ($)
         - Net Position Value ($)
-        - Cost of Liquidation ($)
+        - Cost of Rebalancing ($)
         - Survival Status
         - Rebalancing Events
         """
@@ -116,7 +116,7 @@ class AgentSummaryTableGenerator:
                 "Final Collateral Value ($)": f"${collateral_value_current:,.0f}",
                 "Final Yield Token Value ($)": f"${outcome['yield_token_value']:,.0f}",
                 "Net Position Value ($)": f"${outcome['net_position_value']:,.0f}",
-                "Cost of Liquidation ($)": f"${outcome['cost_of_liquidation']:,.0f}",
+                "Cost of Rebalancing ($)": f"${outcome['cost_of_rebalancing']:,.0f}",
                 "Survival Status": "✅ Survived" if outcome["survived"] else "❌ Liquidated",
                 "Rebalancing Events": outcome["rebalancing_events"],
                 "Emergency Liquidations": outcome["emergency_liquidations"]
@@ -190,7 +190,7 @@ class AgentSummaryTableGenerator:
                 "total_agents": len(df),
                 "survivors": len(df[df["Survival Status"].str.contains("Survived")]),
                 "survival_rate": len(df[df["Survival Status"].str.contains("Survived")]) / len(df),
-                "avg_cost_of_liquidation": extract_numeric(df["Cost of Liquidation ($)"]).mean(),
+                "avg_cost_of_rebalancing": extract_numeric(df["Cost of Rebalancing ($)"]).mean(),
                 "avg_final_health_factor": df["Final Health Factor"].astype(float).mean(),
                 "total_yield_sold": extract_numeric(df["Yield Tokens Sold ($)"]).sum(),
                 "total_interest_accrued": extract_numeric(df["Total Interest Accrued ($)"]).sum(),
@@ -206,7 +206,7 @@ class AgentSummaryTableGenerator:
                 "count": len(profile_df),
                 "survivors": len(profile_df[profile_df["Survival Status"].str.contains("Survived")]),
                 "survival_rate": len(profile_df[profile_df["Survival Status"].str.contains("Survived")]) / len(profile_df),
-                "avg_cost_of_liquidation": extract_numeric(profile_df["Cost of Liquidation ($)"]).mean(),
+                "avg_cost_of_rebalancing": extract_numeric(profile_df["Cost of Rebalancing ($)"]).mean(),
                 "avg_final_health_factor": profile_df["Final Health Factor"].astype(float).mean(),
                 "avg_yield_sold": extract_numeric(profile_df["Yield Tokens Sold ($)"]).mean(),
                 "avg_interest_accrued": extract_numeric(profile_df["Total Interest Accrued ($)"]).mean(),
@@ -245,7 +245,7 @@ class AgentSummaryTableGenerator:
             overall = stats["overall"]
             print(f"Total Agents: {overall['total_agents']}")
             print(f"Survivors: {overall['survivors']} ({overall['survival_rate']:.1%})")
-            print(f"Average Cost of Liquidation: ${overall['avg_cost_of_liquidation']:,.0f}")
+            print(f"Average Cost of Rebalancing: ${overall['avg_cost_of_rebalancing']:,.0f}")
             print(f"Average Final Health Factor: {overall['avg_final_health_factor']:.2f}")
             print(f"Total Yield Sold: ${overall['total_yield_sold']:,.0f}")
             print(f"Total Interest Accrued: ${overall['total_interest_accrued']:,.0f}")
@@ -258,7 +258,7 @@ class AgentSummaryTableGenerator:
                 print(f"\n{profile}:")
                 print(f"  Count: {data['count']}")
                 print(f"  Survival Rate: {data['survival_rate']:.1%}")
-                print(f"  Avg Cost: ${data['avg_cost_of_liquidation']:,.0f}")
+                print(f"  Avg Cost: ${data['avg_cost_of_rebalancing']:,.0f}")
                 print(f"  Avg Final HF: {data['avg_final_health_factor']:.2f}")
                 print(f"  Avg Yield Sold: ${data['avg_yield_sold']:,.0f}")
                 print(f"  Avg Interest: ${data['avg_interest_accrued']:,.0f}")

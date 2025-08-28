@@ -51,7 +51,7 @@ class ResultsManager:
         """
         with self._lock:
             scenario_dir = self.base_results_dir / scenario_name
-            scenario_dir.mkdir(exist_ok=True)
+            scenario_dir.mkdir(parents=True, exist_ok=True)
             
             # Find next run number
             run_number = self._get_next_run_number(scenario_dir)

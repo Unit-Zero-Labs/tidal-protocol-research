@@ -1,0 +1,17 @@
+{
+  "scenario_type": "Comparison_Analysis",
+  "strategies_compared": [
+    "High_Tide",
+    "AAVE"
+  ],
+  "monte_carlo_runs": 3,
+  "timestamp": "2025-08-28T12:42:14.327065",
+  "parameters": {
+    "btc_decline_duration": 30,
+    "btc_price_range": [
+      75000.0,
+      85000.0
+    ],
+    "yield_apr": 0.1
+  }
+}

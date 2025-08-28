@@ -92,6 +92,11 @@ class HighTideChartGenerator:
                 if chart_path:
                     generated_charts.append(chart_path)
                     
+                # 8. Health Factor Comparison Chart (side-by-side)
+                chart_path = self.create_health_factor_comparison_chart(results, comparison_results, charts_dir)
+                if chart_path:
+                    generated_charts.append(chart_path)
+                    
             print(f"Generated {len(generated_charts)} High Tide charts")
             return generated_charts
             
@@ -295,7 +300,7 @@ class HighTideChartGenerator:
             below_threshold_counts = []
             for entry in agent_health_history:
                 below_count = sum(1 for agent in entry["agents"] 
-                                if agent["health_factor"] < agent["maintenance_hf"])
+                                if agent["health_factor"] < agent.get("target_hf", 1.5))
                 below_threshold_counts.append(below_count)
             
             ax3.plot(minutes, below_threshold_counts, color='red', linewidth=2)
@@ -406,7 +411,7 @@ class HighTideChartGenerator:
             survivors = len([a for a in agent_health_history[-1]["agents"] if a["health_factor"] > 1.0]) if agent_health_history else 0
             survival_rate = (survivors / total_agents * 100) if total_agents > 0 else 0
             
-            total_cost = sum(agent["cost_of_liquidation"] for agent in agent_health_history[-1]["agents"]) if agent_health_history else 0
+            total_cost = sum(agent.get("cost_of_rebalancing", 0) for agent in agent_health_history[-1]["agents"]) if agent_health_history else 0
             avg_cost = total_cost / total_agents if total_agents > 0 else 0
             
             final_btc_price = btc_stats.get("final_price", 0)
@@ -528,11 +533,11 @@ Protocol Revenue: ${cumulative_fees:,.0f}
             profiles = ["conservative", "moderate", "aggressive"]
             colors = {"conservative": "#2E8B57", "moderate": "#FF8C00", "aggressive": "#DC143C"}
             
-            # 1. Cost of liquidation by risk profile
+            # 1. Cost of rebalancing by risk profile
             profile_costs = {profile: [] for profile in profiles}
             for outcome in agent_outcomes:
                 profile = outcome["risk_profile"]
-                profile_costs[profile].append(outcome["cost_of_liquidation"])
+                profile_costs[profile].append(outcome.get("cost_of_rebalancing", outcome.get("cost_of_liquidation", 0)))
             
             profile_names = []
             costs_data = []
@@ -650,6 +655,104 @@ Protocol Revenue: ${cumulative_fees:,.0f}
             print(f"Error creating agent performance summary chart: {e}")
             return None
             
+    def create_health_factor_comparison_chart(
+        self, 
+        high_tide_results: Dict, 
+        aave_results: Dict, 
+        charts_dir: Path
+    ) -> Optional[Path]:
+        """Create side-by-side health factor tracking charts for High Tide vs AAVE"""
+        
+        try:
+            ht_health_history = high_tide_results.get("agent_health_history", [])
+            aave_health_history = aave_results.get("agent_health_history", [])
+            
+            if not ht_health_history or not aave_health_history:
+                print("Missing health factor history data for comparison")
+                return None
+            
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+            
+            # Colors for risk profiles
+            colors = {"conservative": "#2E8B57", "moderate": "#FF8C00", "aggressive": "#DC143C"}
+            
+            # Left subplot: High Tide Health Factors
+            self._plot_health_factors_with_targets(ax1, ht_health_history, colors, "High Tide", show_targets=True)
+            
+            # Right subplot: AAVE Health Factors  
+            self._plot_health_factors_with_targets(ax2, aave_health_history, colors, "AAVE", show_targets=False)
+            
+            plt.tight_layout()
+            
+            chart_path = charts_dir / "health_factor_comparison_side_by_side.png"
+            plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            return chart_path
+            
+        except Exception as e:
+            print(f"Error creating health factor comparison chart: {e}")
+            return None
+    
+    def _plot_health_factors_with_targets(self, ax, health_history, colors, title, show_targets=False):
+        """Plot health factors with optional target lines"""
+        
+        minutes = [entry["minute"] for entry in health_history]
+        
+        # Group agents by ID to track individual health factor trajectories
+        agent_trajectories = {}
+        
+        for entry in health_history:
+            for agent_data in entry["agents"]:
+                agent_id = agent_data["agent_id"]
+                if agent_id not in agent_trajectories:
+                    agent_trajectories[agent_id] = {
+                        "minutes": [],
+                        "health_factors": [],
+                        "target_hf": agent_data.get("target_hf", None),
+                        "initial_hf": agent_data.get("initial_hf", None),
+                        "risk_profile": agent_data["risk_profile"]
+                    }
+                
+                agent_trajectories[agent_id]["minutes"].append(entry["minute"])
+                agent_trajectories[agent_id]["health_factors"].append(agent_data["health_factor"])
+        
+        # Plot individual agent health factor trajectories
+        legend_added = {"conservative": False, "moderate": False, "aggressive": False}
+        
+        for agent_id, trajectory in agent_trajectories.items():
+            profile = trajectory["risk_profile"]
+            color = colors[profile]
+            
+            # Plot health factor trajectory
+            label = f"{profile.title()}" if not legend_added[profile] else ""
+            ax.plot(trajectory["minutes"], trajectory["health_factors"], 
+                   color=color, alpha=0.6, linewidth=1.5, label=label)
+            legend_added[profile] = True
+            
+            # Plot target health factor line for High Tide
+            if show_targets and trajectory["target_hf"] is not None:
+                ax.axhline(y=trajectory["target_hf"], color=color, linestyle=':', 
+                          alpha=0.4, linewidth=1)
+        
+        # Add liquidation threshold line (red dotted)
+        ax.axhline(y=1.0, color='red', linestyle='--', linewidth=2, 
+                  alpha=0.8, label='Liquidation Threshold (HF = 1.0)')
+        
+        # Formatting
+        ax.set_xlabel("Time (minutes)")
+        ax.set_ylabel("Health Factor")
+        ax.set_title(f"{title}: Agent Health Factors Over Time")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(0.5, 3.0)
+        
+        # Add target line explanation for High Tide
+        if show_targets:
+            ax.text(0.02, 0.98, "Dotted lines: Target HF (rebalancing triggers)", 
+                   transform=ax.transAxes, fontsize=10, verticalalignment='top',
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.7))
+
     def _create_strategy_comparison_chart(self, high_tide_results: Dict, aave_results: Dict, charts_dir: Path) -> Optional[Path]:
         """Create High Tide vs Aave strategy comparison chart"""
         
@@ -660,9 +763,9 @@ Protocol Revenue: ${cumulative_fees:,.0f}
             ht_survival = high_tide_results.get("survival_statistics", {}).get("survival_rate", 0) * 100
             ht_avg_cost = high_tide_results.get("cost_analysis", {}).get("average_cost_per_agent", 0)
             
-            # For demo purposes, simulate Aave results (in real implementation, these would come from actual Aave simulation)
-            aave_survival = 45.0  # Typically lower survival rate
-            aave_avg_cost = ht_avg_cost * 1.5  # Typically higher cost
+            # Use actual AAVE results if available
+            aave_survival = aave_results.get("survival_statistics", {}).get("survival_rate", 0.45) * 100
+            aave_avg_cost = aave_results.get("cost_analysis", {}).get("average_cost_per_agent", ht_avg_cost * 1.5)
             
             # 1. Survival rate comparison
             strategies = ["High Tide", "Aave-Style"]
