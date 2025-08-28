@@ -180,9 +180,9 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         self.moet_yield_tracker = LPCurveTracker(yield_pool_size, self.yield_token_concentration, "MOET:Yield_Token", btc_price)
         
         # Initialize concentrated liquidity pools for advanced analysis
-        from ..core.concentrated_liquidity import create_moet_btc_concentrated_pool, create_yield_token_concentrated_pool
-        self.moet_btc_concentrated_pool = create_moet_btc_concentrated_pool(pool_size, btc_price)
-        self.yield_token_concentrated_pool = create_yield_token_concentrated_pool(yield_pool_size, btc_price)
+        from ..core.uniswap_v3_math import create_moet_btc_pool, create_yield_token_pool
+        self.moet_btc_concentrated_pool = create_moet_btc_pool(pool_size, btc_price)
+        self.yield_token_concentrated_pool = create_yield_token_pool(yield_pool_size, btc_price)
 
         # Replace agents with High Tide agents
         self.high_tide_agents = create_high_tide_agents(

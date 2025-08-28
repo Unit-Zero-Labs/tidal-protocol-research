@@ -18,8 +18,8 @@ import seaborn as sns
 from dataclasses import dataclass
 import math
 
-# Import the new concentrated liquidity system
-from ..core.concentrated_liquidity import ConcentratedLiquidityPool, LiquidityBin
+# Import the concentrated liquidity system from uniswap_v3_math
+from ..core.uniswap_v3_math import UniswapV3Pool, LiquidityBin
 
 
 @dataclass
@@ -33,7 +33,7 @@ class PoolSnapshot:
     concentration_range: float
     trade_amount: float = 0.0
     trade_type: str = ""  # "rebalance" or "liquidation"
-    concentrated_pool: Optional[ConcentratedLiquidityPool] = None  # New field for bin data
+    concentrated_pool: Optional[UniswapV3Pool] = None  # New field for bin data
 
 
 class LPCurveTracker:
@@ -46,13 +46,13 @@ class LPCurveTracker:
         self.btc_price = btc_price  # Store BTC price for correct price calculations
         self.snapshots: List[PoolSnapshot] = []
         
-        # Initialize the new concentrated liquidity pool
+        # Initialize the concentrated liquidity pool
         if "MOET:BTC" in pool_name:
-            from ..core.concentrated_liquidity import create_moet_btc_concentrated_pool
-            self.concentrated_pool = create_moet_btc_concentrated_pool(initial_pool_size, btc_price)
+            from ..core.uniswap_v3_math import create_moet_btc_pool
+            self.concentrated_pool = create_moet_btc_pool(initial_pool_size, btc_price)
         else:
-            from ..core.concentrated_liquidity import create_yield_token_concentrated_pool
-            self.concentrated_pool = create_yield_token_concentrated_pool(initial_pool_size, btc_price)
+            from ..core.uniswap_v3_math import create_yield_token_pool
+            self.concentrated_pool = create_yield_token_pool(initial_pool_size, btc_price)
         
         # Calculate correct initial price based on pool type
         if "MOET:BTC" in pool_name:
