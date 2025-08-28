@@ -57,9 +57,8 @@ class LPCurveTracker:
         # Calculate correct initial price based on pool type
         if "MOET:BTC" in pool_name:
             # For MOET:BTC pool, price should be BTC per MOET
-            # With $250k each side: 250k MOET vs 2.5 BTC
-            # Price = BTC reserve / MOET reserve = 2.5 / 250000 = 0.00001 BTC per MOET
-            initial_price = (initial_pool_size / 2) / btc_price / (initial_pool_size / 2)  # BTC per MOET
+            # 1 BTC = 100,000 MOET, so 1 MOET = 0.00001 BTC
+            initial_price = 1.0 / 100000.0  # BTC per MOET = 0.00001
         else:
             # For yield token pool, maintain 1:1 with MOET
             initial_price = 1.0
@@ -316,8 +315,16 @@ Key Insights:
                    transform=ax.transAxes, ha='center', va='center')
             return
         
+        # Only show active bins to reduce clutter
         bin_data = first_snapshot.concentrated_pool.get_bin_data_for_charts()
-        bin_indices = [bin["bin_index"] for bin in bin_data]
+        active_bins = [bin for bin in bin_data if bin["is_active"]]
+        
+        if not active_bins:
+            ax.text(0.5, 0.5, "No active liquidity bins", 
+                   transform=ax.transAxes, ha='center', va='center')
+            return
+        
+        bin_indices = [bin["bin_index"] for bin in active_bins]
         
         # Create bar chart for each snapshot
         bar_width = 0.8 / len(sample_snapshots)
@@ -326,21 +333,23 @@ Key Insights:
         for i, snapshot in enumerate(sample_snapshots):
             if snapshot.concentrated_pool:
                 bin_data = snapshot.concentrated_pool.get_bin_data_for_charts()
-                liquidity_values = [bin["liquidity"] for bin in bin_data]
+                active_bins = [bin for bin in bin_data if bin["is_active"]]
+                liquidity_values = [bin["liquidity"] for bin in active_bins]
                 
-                # Create bars for this snapshot
-                x_positions = [idx + i * bar_width for idx in bin_indices]
-                bars = ax.bar(x_positions, liquidity_values, 
-                            width=bar_width, 
-                            alpha=0.7,
-                            color=colors[i],
-                            label=f"Minute {snapshot.minute}")
-                
-                # Add trade amount annotation if significant
-                if snapshot.trade_amount > 0:
-                    ax.annotate(f"${snapshot.trade_amount/1000:.0f}k", 
-                               xy=(len(bin_indices)//2, max(liquidity_values) * 0.8),
-                               ha='center', fontsize=8, alpha=0.8)
+                if liquidity_values:  # Only create bars if there's data
+                    # Create bars for this snapshot
+                    x_positions = [idx + i * bar_width for idx in range(len(active_bins))]
+                    bars = ax.bar(x_positions, liquidity_values, 
+                                width=bar_width, 
+                                alpha=0.7,
+                                color=colors[i],
+                                label=f"Minute {snapshot.minute}")
+                    
+                    # Add trade amount annotation if significant
+                    if snapshot.trade_amount > 0:
+                        ax.annotate(f"${snapshot.trade_amount/1000:.0f}k", 
+                                   xy=(len(active_bins)//2, max(liquidity_values) * 0.8),
+                                   ha='center', fontsize=8, alpha=0.8)
         
         # Add correct peg line based on pool type
         if "MOET:BTC" in pool_name:
@@ -354,14 +363,21 @@ Key Insights:
                       label="Initial Peg (1:1)")
             ax.set_ylabel("Liquidity per Bin ($)")
         
-        ax.set_xlabel("Liquidity Bin Index")
+        ax.set_xlabel("Active Liquidity Bins (Ordered by Price)")
         ax.set_title("LP Curve Evolution: Discrete Liquidity Bins")
         ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax.grid(True, alpha=0.3)
         
-        # Set x-axis to show bin indices
-        ax.set_xticks(bin_indices[::10])  # Show every 10th bin index
-        ax.set_xticklabels([f"Bin {i}" for i in bin_indices[::10]])
+        # Set x-axis to show active bin positions
+        if len(bin_indices) > 10:
+            # Show every 10th bin if there are many
+            tick_positions = list(range(0, len(bin_indices), max(1, len(bin_indices)//10)))
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels([f"Bin {bin_indices[i]}" for i in tick_positions])
+        else:
+            # Show all bins if there are few
+            ax.set_xticks(range(len(bin_indices)))
+            ax.set_xticklabels([f"Bin {i}" for i in bin_indices])
     
     def _create_reserve_changes_chart(self, ax, snapshots: List[PoolSnapshot]):
         """Create chart showing pool reserve changes over time"""

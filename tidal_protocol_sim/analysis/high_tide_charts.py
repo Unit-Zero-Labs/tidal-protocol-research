@@ -907,7 +907,8 @@ survival rates during market stress.
                     liquidity=snapshot_data["liquidity"],
                     concentration_range=snapshot_data["concentration_range"],
                     trade_amount=snapshot_data.get("trade_amount", 0.0),
-                    trade_type=snapshot_data.get("trade_type", "")
+                    trade_type=snapshot_data.get("trade_type", ""),
+                    concentrated_pool=tracker.concentrated_pool  # Add the concentrated pool reference
                 )
                 tracker.snapshots.append(snapshot)
             
