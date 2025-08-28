@@ -886,10 +886,14 @@ survival rates during market stress.
             initial_snapshot = snapshots_data[0]
             initial_pool_size = (initial_snapshot["moet_reserve"] + initial_snapshot["btc_reserve"])
             
+            # Get BTC price from results or use default
+            btc_price = results.get("btc_initial_price", 100_000.0)
+            
             tracker = LPCurveTracker(
                 initial_pool_size=initial_pool_size,
                 concentration_range=initial_snapshot["concentration_range"],
-                pool_name=pool_name
+                pool_name=pool_name,
+                btc_price=btc_price
             )
             
             # Clear initial snapshot and add all from results

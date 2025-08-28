@@ -14,24 +14,46 @@ from dataclasses import dataclass
 @dataclass
 class UniswapV3Pool:
     """Represents a Uniswap v3 pool state"""
-    token0_reserve: float  # MOET reserve
+    token0_reserve: float  # MOET reserve (in USD value)
     token1_reserve: float  # BTC reserve (in USD value)
     fee_tier: float = 0.003  # 0.3% fee tier
     sqrt_price_x96: Optional[float] = None
     liquidity: Optional[float] = None
     tick_current: Optional[int] = None
+    btc_price: float = 100_000.0  # BTC price in USD for correct price calculation
     
     def __post_init__(self):
         """Initialize derived values"""
         if self.sqrt_price_x96 is None:
-            # Calculate sqrt price from reserves (price = token1/token0)
-            price = self.token1_reserve / self.token0_reserve
+            # Calculate sqrt price from reserves (price = BTC per MOET)
+            # Both reserves are stored in USD
+            if self.token0_reserve > 0:  # MOET reserve > 0
+                btc_tokens = self.token1_reserve / self.btc_price  # Convert USD to BTC tokens
+                moet_tokens = self.token0_reserve  # MOET tokens (1:1 with USD)
+                price = btc_tokens / moet_tokens  # BTC per MOET
+            else:
+                price = 0.00001  # Default: 1 BTC = 100,000 MOET
             self.sqrt_price_x96 = math.sqrt(price) * (2 ** 96)
         
         if self.liquidity is None:
             # Calculate liquidity from reserves
             # L = sqrt(x * y) for uniform distribution
             self.liquidity = math.sqrt(self.token0_reserve * self.token1_reserve)
+    
+    def get_price(self) -> float:
+        """Get current price as BTC per MOET"""
+        # Both reserves are stored in USD
+        # MOET is 1:1 with USD, so $250k = 250,000 MOET
+        # BTC reserve is $250k, which equals 2.5 BTC at $100k/BTC
+        # Price = BTC per MOET = (BTC reserve USD / BTC price) / (MOET reserve USD)
+        # Price = ($250k / $100k) / $250k = 2.5 / 250,000 = 0.00001 BTC per MOET
+        
+        if self.token0_reserve > 0:  # MOET reserve > 0
+            btc_tokens = self.token1_reserve / self.btc_price  # Convert USD to BTC tokens
+            moet_tokens = self.token0_reserve  # MOET tokens (1:1 with USD)
+            return btc_tokens / moet_tokens  # BTC per MOET
+        else:
+            return 0.00001  # Default: 1 BTC = 100,000 MOET
 
 
 class UniswapV3SlippageCalculator:
@@ -70,8 +92,8 @@ class UniswapV3SlippageCalculator:
     def _calculate_moet_to_btc_swap(self, moet_amount: float, concentrated_range: float) -> Dict[str, float]:
         """Calculate MOET -> BTC swap with concentrated liquidity"""
         
-        # Current price (BTC value per MOET) - should be close to 1.0 for MOET:BTC
-        current_price = self.pool.token1_reserve / self.pool.token0_reserve
+        # Current price (BTC per MOET) - use the pool's correct price calculation
+        current_price = self.pool.get_price()
         
         # Amount of MOET going in (after fees)
         moet_after_fees = moet_amount * (1 - self.pool.fee_tier)
@@ -89,8 +111,16 @@ class UniswapV3SlippageCalculator:
         max_btc_out = self.pool.token1_reserve * 0.95  # Leave 5% buffer
         btc_amount_out = max(0, min(btc_amount_out, max_btc_out))
         
-        # Calculate actual new price
-        new_price = new_btc_reserve / new_moet_reserve if new_moet_reserve > 0 else current_price
+        # Calculate actual new price using the pool's method
+        # Temporarily update reserves to calculate new price
+        old_moet = self.pool.token0_reserve
+        old_btc = self.pool.token1_reserve
+        self.pool.token0_reserve = new_moet_reserve
+        self.pool.token1_reserve = new_btc_reserve
+        new_price = self.pool.get_price()
+        # Restore original reserves (will be updated properly by update_pool_state)
+        self.pool.token0_reserve = old_moet
+        self.pool.token1_reserve = old_btc
         
         # Calculate slippage metrics
         expected_btc_out = moet_amount * current_price  # Without slippage
@@ -127,8 +157,10 @@ class UniswapV3SlippageCalculator:
     def _calculate_btc_to_moet_swap(self, btc_amount: float, concentrated_range: float) -> Dict[str, float]:
         """Calculate BTC -> MOET swap with concentrated liquidity"""
         
-        # Current price (MOET per BTC) - should be close to 1.0 for MOET:BTC
-        current_price = self.pool.token0_reserve / self.pool.token1_reserve
+        # Current price (BTC per MOET) - use the pool's correct price calculation
+        current_price_btc_per_moet = self.pool.get_price()
+        # For BTC -> MOET swap, we need MOET per BTC (inverse)
+        current_price_moet_per_btc = 1.0 / current_price_btc_per_moet if current_price_btc_per_moet > 0 else 100000.0
         
         # Amount of BTC going in (after fees)
         btc_after_fees = btc_amount * (1 - self.pool.fee_tier)
@@ -146,16 +178,25 @@ class UniswapV3SlippageCalculator:
         max_moet_out = self.pool.token0_reserve * 0.95  # Leave 5% buffer
         moet_amount_out = max(0, min(moet_amount_out, max_moet_out))
         
-        # Calculate actual new price
-        new_price = new_moet_reserve / new_btc_reserve if new_btc_reserve > 0 else current_price
+        # Calculate actual new price using the pool's method
+        # Temporarily update reserves to calculate new price
+        old_moet = self.pool.token0_reserve
+        old_btc = self.pool.token1_reserve
+        self.pool.token0_reserve = new_moet_reserve
+        self.pool.token1_reserve = new_btc_reserve
+        new_price_btc_per_moet = self.pool.get_price()
+        new_price_moet_per_btc = 1.0 / new_price_btc_per_moet if new_price_btc_per_moet > 0 else 100000.0
+        # Restore original reserves (will be updated properly by update_pool_state)
+        self.pool.token0_reserve = old_moet
+        self.pool.token1_reserve = old_btc
         
         # Calculate slippage metrics
-        expected_moet_out = btc_amount * current_price  # Without slippage
+        expected_moet_out = btc_amount * current_price_moet_per_btc  # Without slippage
         slippage_amount = max(0, expected_moet_out - moet_amount_out)
         slippage_percentage = (slippage_amount / expected_moet_out) * 100 if expected_moet_out > 0 else 0
         
         # Price impact
-        price_impact = ((current_price - new_price) / current_price) * 100 if current_price > 0 else 0
+        price_impact = ((current_price_moet_per_btc - new_price_moet_per_btc) / current_price_moet_per_btc) * 100 if current_price_moet_per_btc > 0 else 0
         
         # Trading fees
         trading_fees = btc_amount * self.pool.fee_tier
@@ -176,8 +217,8 @@ class UniswapV3SlippageCalculator:
             "slippage_percentage": adjusted_slippage_percentage,
             "price_impact_percentage": abs(price_impact),
             "trading_fees": trading_fees,
-            "current_price": current_price,
-            "new_price": new_price,
+            "current_price": current_price_moet_per_btc,
+            "new_price": new_price_moet_per_btc,
             "effective_liquidity": self.pool.liquidity
         }
     
@@ -213,9 +254,9 @@ class UniswapV3SlippageCalculator:
             self.pool.token1_reserve += swap_result["amount_in"]
             self.pool.token0_reserve -= swap_result["amount_out"]
         
-        # Recalculate derived values
+        # Recalculate derived values using the pool's correct price calculation
         if self.pool.token0_reserve > 0 and self.pool.token1_reserve > 0:
-            price = self.pool.token1_reserve / self.pool.token0_reserve
+            price = self.pool.get_price()
             self.pool.sqrt_price_x96 = math.sqrt(price) * (2 ** 96)
             self.pool.liquidity = math.sqrt(self.pool.token0_reserve * self.pool.token1_reserve)
 
@@ -235,14 +276,17 @@ def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0) -> 
     # Split pool 50/50 between MOET and BTC (in USD value)
     usd_per_side = pool_size_usd / 2
     
-    # Calculate actual token amounts
-    moet_reserve = usd_per_side  # MOET is 1:1 with USD, so $250k = 250,000 MOET
-    btc_reserve = usd_per_side / btc_price  # BTC tokens: $250k / $100k = 2.5 BTC
+    # Store both reserves in USD for consistency
+    # MOET is 1:1 with USD, so $250k = 250,000 MOET
+    # BTC reserve is $250k (equivalent to 2.5 BTC at $100k/BTC)
+    moet_reserve_usd = usd_per_side
+    btc_reserve_usd = usd_per_side
     
     return UniswapV3Pool(
-        token0_reserve=moet_reserve,
-        token1_reserve=btc_reserve,
-        fee_tier=0.003  # 0.3% fee tier
+        token0_reserve=moet_reserve_usd,  # MOET reserve in USD
+        token1_reserve=btc_reserve_usd,   # BTC reserve in USD
+        fee_tier=0.003,  # 0.3% fee tier
+        btc_price=btc_price  # Pass BTC price for correct price calculation
     )
 
 
@@ -316,7 +360,7 @@ def calculate_liquidation_cost_with_slippage(
     btc_value_to_liquidate = btc_to_liquidate * btc_price
     
     # Create pool state
-    pool = create_moet_btc_pool(pool_size_usd)
+    pool = create_moet_btc_pool(pool_size_usd, btc_price)
     calculator = UniswapV3SlippageCalculator(pool)
     
     # Calculate swap (BTC -> MOET for debt repayment)

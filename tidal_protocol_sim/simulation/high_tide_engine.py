@@ -173,12 +173,17 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         self.yield_token_concentration = getattr(config, 'yield_token_concentration', 0.05)  # 95% concentration for yield tokens
         
         # Initialize LP curve tracking for both pools
-        self.moet_btc_tracker = LPCurveTracker(pool_size, self.moet_btc_concentration, "MOET:BTC")
+        self.moet_btc_tracker = LPCurveTracker(pool_size, self.moet_btc_concentration, "MOET:BTC", btc_price)
         
         # Initialize yield token pool tracker
         yield_pool_size = getattr(config, 'moet_btc_pool_size', 250_000) * 2  # Total pool size
-        self.moet_yield_tracker = LPCurveTracker(yield_pool_size, self.yield_token_concentration, "MOET:Yield_Token")
+        self.moet_yield_tracker = LPCurveTracker(yield_pool_size, self.yield_token_concentration, "MOET:Yield_Token", btc_price)
         
+        # Initialize concentrated liquidity pools for advanced analysis
+        from ..core.concentrated_liquidity import create_moet_btc_concentrated_pool, create_yield_token_concentrated_pool
+        self.moet_btc_concentrated_pool = create_moet_btc_concentrated_pool(pool_size, btc_price)
+        self.yield_token_concentrated_pool = create_yield_token_concentrated_pool(yield_pool_size, btc_price)
+
         # Replace agents with High Tide agents
         self.high_tide_agents = create_high_tide_agents(
             config.num_high_tide_agents,
@@ -377,7 +382,6 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 pool_state={
                     "token0_reserve": self.slippage_calculator.pool.token0_reserve,
                     "token1_reserve": self.slippage_calculator.pool.token1_reserve,
-                    "price": self.slippage_calculator.pool.token1_reserve / self.slippage_calculator.pool.token0_reserve,
                     "liquidity": self.slippage_calculator.pool.liquidity
                 },
                 minute=minute,
@@ -390,7 +394,6 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 pool_state={
                     "token0_reserve": self.yield_token_pool.moet_reserve,
                     "token1_reserve": self.yield_token_pool.yield_token_reserve,
-                    "price": 1.0,  # Yield tokens maintain ~1:1 with MOET
                     "liquidity": (self.yield_token_pool.moet_reserve + self.yield_token_pool.yield_token_reserve) / 2
                 },
                 minute=minute,
