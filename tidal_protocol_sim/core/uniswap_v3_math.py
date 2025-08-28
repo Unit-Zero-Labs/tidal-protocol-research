@@ -65,7 +65,7 @@ class UniswapV3Pool:
             self._initialize_yield_token_distribution()
     
     def _initialize_moet_btc_distribution(self):
-        """Initialize MOET:BTC liquidity with 80% at peg ±0.99%, 100k at ±1%"""
+        """Initialize MOET:BTC liquidity with 80% FLAT at peg ±0.99%, 100k at ±1%"""
         # Calculate price range for bins
         min_price = self.peg_price * 0.99  # 0.0000099
         max_price = self.peg_price * 1.01  # 0.0000101
@@ -73,41 +73,35 @@ class UniswapV3Pool:
         # Create price points for bins
         prices = np.linspace(min_price, max_price, self.num_bins)
         
-        # First pass: calculate all peak factors for normalization
-        concentrated_bins = []  # Bins within ±0.99%
-        edge_bins = []          # Bins at ±1%
+        # Categorize bins by distance from peg
+        concentrated_bins = []  # Bins within ±0.99% (FLAT 80% distribution)
+        edge_bins = []          # Bins at ±1% (100k total)
         outer_bins = []         # Bins outside concentrated range
-        total_peak_factor = 0.0
         
         for i, price in enumerate(prices):
             distance_from_peg = abs(price - self.peg_price) / self.peg_price
             
             if distance_from_peg <= 0.0099:  # Within ±0.99%
-                peak_factor = math.exp(-(distance_from_peg / 0.005) ** 2)  # Gaussian falloff
-                concentrated_bins.append((i, price, peak_factor))
-                total_peak_factor += peak_factor
-            elif distance_from_peg <= 0.01:  # At ±1%
+                concentrated_bins.append((i, price))
+            elif 0.0099 < distance_from_peg <= 0.0101:  # At ±1% (with small tolerance)
                 edge_bins.append((i, price))
             else:
                 outer_bins.append((i, price))
         
-        # Second pass: distribute liquidity correctly
+        # Distribute liquidity according to requirements
         for i, price in enumerate(prices):
-            bin_liquidity = 0.0
             distance_from_peg = abs(price - self.peg_price) / self.peg_price
             
             if distance_from_peg <= 0.0099:  # Within ±0.99%
-                # Find this bin's peak factor
-                peak_factor = math.exp(-(distance_from_peg / 0.005) ** 2)
-                # Normalize to ensure exactly 80% of total liquidity
-                bin_liquidity = (self.total_liquidity * 0.8 * peak_factor) / total_peak_factor
+                # 80% of total liquidity distributed EQUALLY among concentrated bins
+                bin_liquidity = (self.total_liquidity * 0.8) / len(concentrated_bins)
                 
-            elif distance_from_peg <= 0.01:  # At ±1%
-                # 100k liquidity split between edge bins
+            elif 0.0099 < distance_from_peg <= 0.0101:  # At ±1%
+                # 100k liquidity distributed EQUALLY among edge bins
                 bin_liquidity = 100_000 / len(edge_bins)
                 
             else:
-                # Remaining liquidity (total - 80% - 100k) distributed equally
+                # Remaining liquidity distributed equally among outer bins
                 remaining_liquidity = self.total_liquidity - (self.total_liquidity * 0.8) - 100_000
                 bin_liquidity = remaining_liquidity / len(outer_bins) if len(outer_bins) > 0 else 0
             
@@ -122,7 +116,7 @@ class UniswapV3Pool:
             ))
     
     def _initialize_yield_token_distribution(self):
-        """Initialize MOET:Yield Token liquidity with 95% at peg, remaining in 1bp increments"""
+        """Initialize MOET:Yield Token liquidity with 95% FLAT at peg, remaining in 1bp increments"""
         # Calculate price range for bins (1 basis point = 0.01%)
         min_price = self.peg_price * 0.9999  # 0.9999
         max_price = self.peg_price * 1.0001  # 1.0001
@@ -130,34 +124,29 @@ class UniswapV3Pool:
         # Create price points for bins
         prices = np.linspace(min_price, max_price, self.num_bins)
         
-        # First pass: calculate all peak factors for normalization
-        concentrated_bins = []  # Bins within ±1bp
-        outer_bins = []         # Bins outside concentrated range
-        total_peak_factor = 0.0
+        # Categorize bins by distance from peg
+        peg_bins = []    # Bins exactly at the peg (95% concentration)
+        outer_bins = []  # Bins outside peg (5% distributed)
         
         for i, price in enumerate(prices):
             distance_from_peg = abs(price - self.peg_price) / self.peg_price
             
+            # Very tight concentration: only bins within 0.01% (1 basis point) get the 95%
             if distance_from_peg <= 0.0001:  # Within ±1 basis point
-                peak_factor = math.exp(-(distance_from_peg / 0.00005) ** 2)  # Very tight Gaussian
-                concentrated_bins.append((i, price, peak_factor))
-                total_peak_factor += peak_factor
+                peg_bins.append((i, price))
             else:
                 outer_bins.append((i, price))
         
-        # Second pass: distribute liquidity correctly
+        # Distribute liquidity according to requirements
         for i, price in enumerate(prices):
-            bin_liquidity = 0.0
             distance_from_peg = abs(price - self.peg_price) / self.peg_price
             
             if distance_from_peg <= 0.0001:  # Within ±1 basis point
-                # Find this bin's peak factor
-                peak_factor = math.exp(-(distance_from_peg / 0.00005) ** 2)
-                # Normalize to ensure exactly 95% of total liquidity
-                bin_liquidity = (self.total_liquidity * 0.95 * peak_factor) / total_peak_factor
+                # 95% of total liquidity distributed EQUALLY among peg bins
+                bin_liquidity = (self.total_liquidity * 0.95) / len(peg_bins)
                 
             else:
-                # Remaining 5% distributed equally among outer bins
+                # Remaining 5% distributed equally among outer bins in 1bp increments
                 bin_liquidity = (self.total_liquidity * 0.05) / len(outer_bins) if len(outer_bins) > 0 else 0
             
             # Ensure minimum liquidity

@@ -4,3 +4,5 @@ tidal_protocol_sim/stress_testing/__pycache__/scenarios.cpython-311.pyc
 tidal_protocol_sim/core/__pycache__/protocol.cpython-311.pyc
 
 /tidal_protocol_sim/core/__pycache__/
+tidal_protocol_sim/analysis/__pycache__/lp_curve_analysis.cpython-311.pyc
+tidal_protocol_sim/analysis/__pycache__/high_tide_charts.cpython-311.pyc
