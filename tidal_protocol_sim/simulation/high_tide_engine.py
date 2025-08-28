@@ -161,13 +161,13 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         self.btc_price_manager = BTCPriceDeclineManager(config)
         
         # Initialize Uniswap v3 pool for slippage calculations
-        # Default to $500k:$500k pool with 95% concentration at peg
+        # Default to $500k pool with proper MOET:BTC ratio
         pool_size = getattr(config, 'uniswap_pool_size', 500_000)  # Total pool size
-        self.uniswap_pool = UniswapV3Pool(
-            token0_reserve=pool_size / 2,  # MOET reserve
-            token1_reserve=pool_size / 2,  # BTC reserve (USD value)
-            fee_tier=0.003  # 0.3% fee tier
-        )
+        btc_price = getattr(config, 'btc_initial_price', 100_000.0)  # Get BTC price from config
+        
+        # Import the corrected pool creation function
+        from ..core.uniswap_v3_math import create_moet_btc_pool
+        self.uniswap_pool = create_moet_btc_pool(pool_size, btc_price)
         self.slippage_calculator = UniswapV3SlippageCalculator(self.uniswap_pool)
         self.moet_btc_concentration = getattr(config, 'moet_btc_concentration', 0.20)  # 80% concentration for MOET:BTC
         self.yield_token_concentration = getattr(config, 'yield_token_concentration', 0.05)  # 95% concentration for yield tokens
