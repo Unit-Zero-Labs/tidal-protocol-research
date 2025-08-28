@@ -315,7 +315,8 @@ class HighTideAgent(BaseAgent):
                 slippage_result = calculate_rebalancing_cost_with_slippage(
                     moet_amount, 
                     pool_size_usd=pool_size_usd,  # Use actual pool size
-                    concentrated_range=concentrated_range  # Use actual concentration
+                    concentrated_range=concentrated_range,  # Use actual concentration
+                    btc_price=final_btc_price  # Use current BTC price for correct MOET:BTC ratio
                 )
                 total_slippage_cost += slippage_result["total_swap_cost"]
         

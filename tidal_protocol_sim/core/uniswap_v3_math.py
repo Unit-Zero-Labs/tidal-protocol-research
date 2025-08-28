@@ -220,20 +220,24 @@ class UniswapV3SlippageCalculator:
             self.pool.liquidity = math.sqrt(self.pool.token0_reserve * self.pool.token1_reserve)
 
 
-def create_moet_btc_pool(pool_size_usd: float) -> UniswapV3Pool:
+def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0) -> UniswapV3Pool:
     """
     Create a MOET:BTC Uniswap v3 pool with specified total size
     
     Args:
         pool_size_usd: Total pool size in USD (will be split 50/50)
+        btc_price: Current BTC price in USD (default: $100,000)
         
     Returns:
         UniswapV3Pool instance
     """
     
     # Split pool 50/50 between MOET and BTC (in USD value)
-    moet_reserve = pool_size_usd / 2  # MOET is 1:1 with USD
-    btc_reserve = pool_size_usd / 2   # BTC reserve in USD value
+    usd_per_side = pool_size_usd / 2
+    
+    # Calculate actual token amounts
+    moet_reserve = usd_per_side  # MOET is 1:1 with USD, so $250k = 250,000 MOET
+    btc_reserve = usd_per_side / btc_price  # BTC tokens: $250k / $100k = 2.5 BTC
     
     return UniswapV3Pool(
         token0_reserve=moet_reserve,
@@ -245,7 +249,8 @@ def create_moet_btc_pool(pool_size_usd: float) -> UniswapV3Pool:
 def calculate_rebalancing_cost_with_slippage(
     moet_amount: float,
     pool_size_usd: float = 500_000,
-    concentrated_range: float = 0.2
+    concentrated_range: float = 0.2,
+    btc_price: float = 100_000.0
 ) -> Dict[str, float]:
     """
     Calculate the total cost of rebalancing including Uniswap v3 slippage
@@ -254,13 +259,14 @@ def calculate_rebalancing_cost_with_slippage(
         moet_amount: Amount of MOET to swap for debt repayment
         pool_size_usd: Total MOET:BTC pool size in USD
         concentrated_range: Liquidity concentration range (0.2 = 20%)
+        btc_price: Current BTC price in USD (default: $100,000)
         
     Returns:
         Dict with cost breakdown including slippage
     """
     
-    # Create pool state
-    pool = create_moet_btc_pool(pool_size_usd)
+    # Create pool state with correct MOET:BTC ratio
+    pool = create_moet_btc_pool(pool_size_usd, btc_price)
     calculator = UniswapV3SlippageCalculator(pool)
     
     # Calculate swap (MOET -> BTC to repay debt)
