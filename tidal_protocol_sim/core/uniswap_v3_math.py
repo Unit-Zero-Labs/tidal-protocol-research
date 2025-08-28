@@ -104,7 +104,8 @@ class UniswapV3SlippageCalculator:
         trading_fees = moet_amount * self.pool.fee_tier
         
         # Apply concentration factor to slippage (concentrated liquidity increases slippage)
-        concentration_multiplier = 1.0 + (1.0 / concentrated_range - 1.0) * 0.1  # 10% impact per concentration level
+        # For 95% concentration (0.05 range), this creates realistic stablecoin-like behavior
+        concentration_multiplier = 1.0 + (1.0 / concentrated_range - 1.0) * 0.05  # 5% impact per concentration level
         adjusted_slippage = slippage_amount * concentration_multiplier
         adjusted_slippage_percentage = (adjusted_slippage / expected_btc_out) * 100 if expected_btc_out > 0 else 0
         
@@ -160,7 +161,8 @@ class UniswapV3SlippageCalculator:
         trading_fees = btc_amount * self.pool.fee_tier
         
         # Apply concentration factor to slippage (concentrated liquidity increases slippage)
-        concentration_multiplier = 1.0 + (1.0 / concentrated_range - 1.0) * 0.1  # 10% impact per concentration level
+        # For 95% concentration (0.05 range), this creates realistic stablecoin-like behavior
+        concentration_multiplier = 1.0 + (1.0 / concentrated_range - 1.0) * 0.05  # 5% impact per concentration level
         adjusted_slippage = slippage_amount * concentration_multiplier
         adjusted_slippage_percentage = (adjusted_slippage / expected_moet_out) * 100 if expected_moet_out > 0 else 0
         

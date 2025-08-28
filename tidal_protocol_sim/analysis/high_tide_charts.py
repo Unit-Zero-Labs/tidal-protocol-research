@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 import seaborn as sns
 from ..core.protocol import Asset
+from .lp_curve_analysis import LPCurveAnalyzer, LPCurveTracker, PoolSnapshot
 
 
 class HighTideChartGenerator:
@@ -24,6 +25,7 @@ class HighTideChartGenerator:
     
     def __init__(self):
         self._setup_styling()
+        self.lp_analyzer = LPCurveAnalyzer()
         
     def _setup_styling(self):
         """Setup professional chart styling for High Tide analysis"""
@@ -94,6 +96,19 @@ class HighTideChartGenerator:
                     
                 # 8. Health Factor Comparison Chart (side-by-side)
                 chart_path = self.create_health_factor_comparison_chart(results, comparison_results, charts_dir)
+                if chart_path:
+                    generated_charts.append(chart_path)
+            
+            # 9. LP Curve Evolution Analysis (if LP curve data available)
+            # MOET:BTC pool analysis
+            if "moet_btc_lp_snapshots" in results and results["moet_btc_lp_snapshots"]:
+                chart_path = self._create_lp_curve_evolution_chart(results, charts_dir, "moet_btc")
+                if chart_path:
+                    generated_charts.append(chart_path)
+            
+            # MOET:Yield Token pool analysis
+            if "moet_yield_lp_snapshots" in results and results["moet_yield_lp_snapshots"]:
+                chart_path = self._create_lp_curve_evolution_chart(results, charts_dir, "moet_yield")
                 if chart_path:
                     generated_charts.append(chart_path)
                     
@@ -848,4 +863,58 @@ survival rates during market stress.
             
         except Exception as e:
             print(f"Error creating strategy comparison chart: {e}")
+            return None
+    
+    def _create_lp_curve_evolution_chart(self, results: Dict, charts_dir: Path, pool_type: str) -> Optional[Path]:
+        """Create LP curve evolution chart from simulation results"""
+        
+        try:
+            # Get the appropriate snapshots data
+            if pool_type == "moet_btc":
+                snapshots_data = results.get("moet_btc_lp_snapshots", [])
+                pool_name = "MOET:BTC"
+            elif pool_type == "moet_yield":
+                snapshots_data = results.get("moet_yield_lp_snapshots", [])
+                pool_name = "MOET:Yield_Token"
+            else:
+                return None
+                
+            if not snapshots_data:
+                return None
+            
+            # Create tracker and populate with snapshots
+            initial_snapshot = snapshots_data[0]
+            initial_pool_size = (initial_snapshot["moet_reserve"] + initial_snapshot["btc_reserve"])
+            
+            tracker = LPCurveTracker(
+                initial_pool_size=initial_pool_size,
+                concentration_range=initial_snapshot["concentration_range"],
+                pool_name=pool_name
+            )
+            
+            # Clear initial snapshot and add all from results
+            tracker.snapshots = []
+            for snapshot_data in snapshots_data:
+                snapshot = PoolSnapshot(
+                    minute=snapshot_data["minute"],
+                    moet_reserve=snapshot_data["moet_reserve"],
+                    btc_reserve=snapshot_data["btc_reserve"],
+                    price=snapshot_data["price"],
+                    liquidity=snapshot_data["liquidity"],
+                    concentration_range=snapshot_data["concentration_range"],
+                    trade_amount=snapshot_data.get("trade_amount", 0.0),
+                    trade_type=snapshot_data.get("trade_type", "")
+                )
+                tracker.snapshots.append(snapshot)
+            
+            # Generate LP curve evolution chart
+            chart_path = self.lp_analyzer.create_lp_curve_evolution_chart(tracker, charts_dir)
+            
+            if chart_path:
+                print(f"Generated LP curve evolution chart: {chart_path}")
+                
+            return chart_path
+            
+        except Exception as e:
+            print(f"Error creating LP curve evolution chart: {e}")
             return None

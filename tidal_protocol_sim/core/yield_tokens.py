@@ -166,12 +166,18 @@ class YieldTokenManager:
 
 
 class YieldTokenPool:
-    """Global pool for MOET <-> Yield Token trading"""
+    """
+    Global pool for MOET <-> Yield Token trading
+    
+    This represents the internal protocol pool with tight concentration (95% at peg)
+    since yield tokens are protocol-native assets designed to track MOET closely.
+    """
     
     def __init__(self, initial_moet_reserve: float = 250_000.0):
         self.moet_reserve = initial_moet_reserve
         self.yield_token_reserve = initial_moet_reserve  # Start 1:1
         self.fee_rate = 0.001  # 0.1% trading fee (minimal slippage)
+        self.concentration_range = 0.05  # 95% concentration at peg for protocol assets
         
     def quote_yield_token_purchase(self, moet_amount: float) -> float:
         """Quote how many yield tokens can be purchased with MOET"""

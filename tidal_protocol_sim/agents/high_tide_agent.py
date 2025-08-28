@@ -288,7 +288,9 @@ class HighTideAgent(BaseAgent):
             
         return moet_raised
     
-    def calculate_cost_of_rebalancing(self, final_btc_price: float, current_minute: int) -> float:
+    def calculate_cost_of_rebalancing(self, final_btc_price: float, current_minute: int, 
+                                     pool_size_usd: float = 500_000, 
+                                     concentrated_range: float = 0.2) -> float:
         """
         Calculate cost of rebalancing for High Tide strategy including Uniswap v3 slippage
         
@@ -305,15 +307,15 @@ class HighTideAgent(BaseAgent):
         # Base cost = Debt - Yield Token Value (net debt remaining)
         base_cost = max(0, self.state.moet_debt - yield_token_value)
         
-        # Calculate slippage costs for all rebalancing events
+        # Calculate slippage costs for all rebalancing events using ACTUAL pool parameters
         total_slippage_cost = 0.0
         for event in self.state.rebalancing_events:
             moet_amount = event["moet_raised"]
             if moet_amount > 0:
                 slippage_result = calculate_rebalancing_cost_with_slippage(
                     moet_amount, 
-                    pool_size_usd=500_000,  # $500K total pool
-                    concentrated_range=0.2  # 20% concentration range
+                    pool_size_usd=pool_size_usd,  # Use actual pool size
+                    concentrated_range=concentrated_range  # Use actual concentration
                 )
                 total_slippage_cost += slippage_result["total_swap_cost"]
         
@@ -322,7 +324,9 @@ class HighTideAgent(BaseAgent):
         
         return total_cost
     
-    def get_detailed_portfolio_summary(self, asset_prices: Dict[Asset, float], current_minute: int) -> dict:
+    def get_detailed_portfolio_summary(self, asset_prices: Dict[Asset, float], current_minute: int,
+                                      pool_size_usd: float = 500_000, 
+                                      concentrated_range: float = 0.2) -> dict:
         """Get comprehensive portfolio summary for High Tide agent"""
         base_summary = super().get_portfolio_summary(asset_prices)
         
@@ -330,7 +334,9 @@ class HighTideAgent(BaseAgent):
         yield_summary = self.state.yield_token_manager.get_portfolio_summary(current_minute)
         cost_of_rebalancing = self.calculate_cost_of_rebalancing(
             asset_prices.get(Asset.BTC, 100_000.0), 
-            current_minute
+            current_minute,
+            pool_size_usd,
+            concentrated_range
         )
         
         high_tide_metrics = {
