@@ -24,58 +24,80 @@ from tidal_protocol_sim.analysis.high_tide_charts import HighTideChartGenerator
 
 
 def run_comprehensive_pool_analysis():
-    """Run comprehensive analysis across all pool configurations using simulation data"""
+    """Run streamlined analysis across key pool configurations"""
     
-    print("🎯 COMPREHENSIVE POOL ANALYSIS")
-    print("Using High Tide simulation data for all pool configurations")
+    # --- MONTE CARLO CONFIGURATION ---
+    # Set the number of Monte Carlo runs for each pool configuration.
+    # Change this value to increase the number of simulations.
+    MONTE_CARLO_RUNS = 1
+    # ---------------------------------
+
+    print("🎯 STREAMLINED POOL ANALYSIS")
+    print("Using High Tide simulation data for key pool configurations")
     print("=" * 80)
     
-    # Define pool depth options (expanded set)
+    # Simplified pool depth options - focus on most relevant sizes
     pool_depths = [
-        {"size": 500_000, "label": "$250k:$250k"},
-        {"size": 1_000_000, "label": "$500k:$500k"},
-        {"size": 2_000_000, "label": "$1M:$1M"},
-        {"size": 4_000_000, "label": "$2M:$2M"}
+        {"size": 500_000, "label": "$0.5M Total"},
+        {"size": 1_000_000, "label": "$1M Total"},
+        {"size": 2_000_000, "label": "$2M Total"},
+        {"size": 5_000_000, "label": "$5M Total"},
+        {"size": 10_000_000, "label": "$10M Total"}
     ]
     
     results_matrix = []
     
     print(f"📊 Analysis Configuration:")
-    print(f"   • Pool Depths: {len(pool_depths)} options")
-    print(f"   • Total Permutations: {len(pool_depths) * len(pool_depths)} combinations")
-    print(f"   • MOET:BTC Concentration: 80% (conservative)")
-    print(f"   • MOET:Yield Token Concentration: 95% (tight peg)")
+    print(f"   • Pool Sizes: {len(pool_depths)} options")
+    print(f"   • Monte Carlo Runs per Config: {MONTE_CARLO_RUNS}")
+    print(f"   • Total Configurations: {len(pool_depths)} combinations")
+    print(f"   • MOET:BTC Concentration: 80% (within ±0.99% of peg)")
+    print(f"   • MOET:Yield Token Concentration: 95% (at 1:1 peg)")
     print()
     
-    # Test all pool permutations with ACTUAL simulations
-    for i, (btc_pool_config, yield_pool_config) in enumerate(product(pool_depths, repeat=2)):
-        btc_pool_size = btc_pool_config["size"]
-        yield_pool_size = yield_pool_config["size"]
-        btc_label = btc_pool_config["label"]
-        yield_label = yield_pool_config["label"]
+    # Test key configurations
+    for i, pool_config in enumerate(pool_depths):
+        pool_size = pool_config["size"]
+        pool_label = pool_config["label"]
         
-        print(f"🚀 [{i+1}/16] Running: MOET:BTC {btc_label} + MOET:Yield {yield_label}")
+        print(f"🚀 [{i+1}/{len(pool_depths)}] Running: {pool_label} pools")
         
+        # Store results from all runs for this configuration
+        all_runs_agent_outcomes = []
+        all_runs_rebalancing_events = []
+        all_runs_btc_price_history = []
+        last_run_results = {}
+
         try:
-            # Create High Tide configuration
-            config = HighTideConfig()
-            config.num_high_tide_agents = 25  # Good sample size
-            config.btc_decline_duration = 45  # Long enough for rebalancing
-            config.uniswap_pool_size = btc_pool_size  # MOET:BTC pool
-            config.moet_btc_pool_size = yield_pool_size // 2  # Each side of yield pool
-            config.moet_btc_concentration = 0.20  # 80% concentration for MOET:BTC
-            config.yield_token_concentration = 0.05  # 95% concentration for yield tokens
+            print(f"   Running {MONTE_CARLO_RUNS} Monte Carlo simulations...")
+            for run_num in range(MONTE_CARLO_RUNS):
+                # Create High Tide configuration with fixed parameters
+                config = HighTideConfig()
+                config.num_high_tide_agents = 20  # Sufficient sample size
+                config.btc_decline_duration = 30  # Focused analysis duration
+                config.uniswap_pool_size = pool_size  # MOET:BTC pool
+                config.moet_btc_pool_size = pool_size // 2  # Each side of yield pool
+                config.moet_btc_concentration = 0.20  # 80% concentration (±0.99%)
+                config.yield_token_concentration = 0.05  # 95% concentration (tight peg)
+                
+                # Run ACTUAL High Tide simulation
+                engine = HighTideSimulationEngine(config)
+                results = engine.run_high_tide_simulation()
+                
+                # Collect data from the run
+                all_runs_agent_outcomes.extend(results.get("agent_outcomes", []))
+                all_runs_rebalancing_events.extend(results.get("rebalancing_events", []))
+                all_runs_btc_price_history.append(results.get("btc_price_history", []))
+                last_run_results = results
+
+                if (run_num + 1) % 5 == 0 or (run_num + 1) == MONTE_CARLO_RUNS:
+                    print(f"     Completed run {run_num + 1}/{MONTE_CARLO_RUNS}")
+
+            # --- AGGREGATE RESULTS ACROSS ALL RUNS FOR THIS CONFIGURATION ---
+            agent_outcomes = all_runs_agent_outcomes
+            rebalancing_events = all_runs_rebalancing_events
             
-            # Run ACTUAL High Tide simulation
-            engine = HighTideSimulationEngine(config)
-            results = engine.run_high_tide_simulation()
-            
-            # Extract comprehensive data
-            agent_outcomes = results.get("agent_outcomes", [])
-            rebalancing_events = results.get("rebalancing_events", [])
-            btc_price_history = results.get("btc_price_history", [])
-            
-            # Calculate detailed statistics
+            # Calculate detailed statistics from aggregated data
             rebalancing_amounts = [event.get("moet_raised", 0) for event in rebalancing_events if event.get("moet_raised", 0) > 0]
             agent_costs = [agent.get("cost_of_rebalancing", 0) for agent in agent_outcomes]
             survival_rate = sum(1 for agent in agent_outcomes if agent.get("survived", False)) / len(agent_outcomes) if agent_outcomes else 0
@@ -87,13 +109,21 @@ def run_comprehensive_pool_analysis():
                 if profile in risk_profiles:
                     risk_profiles[profile].append(agent.get("cost_of_rebalancing", 0))
             
+            # Aggregate price history
+            valid_histories = [h for h in all_runs_btc_price_history if h]
+            avg_initial_btc_price = np.mean([h[0] for h in valid_histories]) if valid_histories else 100000
+            avg_final_btc_price = np.mean([h[-1] for h in valid_histories]) if valid_histories else 100000
+            avg_btc_decline_percent = ((avg_initial_btc_price - avg_final_btc_price) / avg_initial_btc_price * 100) if avg_initial_btc_price > 0 else 0
+
             # Store comprehensive results
             result_data = {
-                "btc_pool_label": btc_label,
-                "yield_pool_label": yield_label,
-                "btc_pool_size": btc_pool_size,
-                "yield_pool_size": yield_pool_size,
-                "full_simulation_results": results,
+                "btc_pool_label": pool_label,
+                "yield_pool_label": pool_label,
+                "pool_label": pool_label,
+                "pool_size": pool_size,
+                "btc_pool_size": pool_size,
+                "yield_pool_size": pool_size,
+                "full_simulation_results": last_run_results, # Store last run for detailed chart generation
                 
                 # Agent statistics
                 "total_agents": len(agent_outcomes),
@@ -116,9 +146,9 @@ def run_comprehensive_pool_analysis():
                 "aggressive_avg_cost": np.mean(risk_profiles["aggressive"]) if risk_profiles["aggressive"] else 0,
                 
                 # Price impact
-                "initial_btc_price": btc_price_history[0] if btc_price_history else 100000,
-                "final_btc_price": btc_price_history[-1] if btc_price_history else 100000,
-                "btc_decline_percent": ((btc_price_history[0] - btc_price_history[-1]) / btc_price_history[0] * 100) if btc_price_history else 0,
+                "initial_btc_price": avg_initial_btc_price,
+                "final_btc_price": avg_final_btc_price,
+                "btc_decline_percent": avg_btc_decline_percent,
                 
                 # Raw data for detailed analysis
                 "agent_costs": agent_costs,
@@ -128,10 +158,12 @@ def run_comprehensive_pool_analysis():
             
             results_matrix.append(result_data)
             
-            print(f"   ✅ Complete: {len(agent_outcomes)} agents, {len(rebalancing_events)} events, ${np.mean(agent_costs) if agent_costs else 0:.0f} avg cost")
+            print(f"   ✅ Aggregated results for {pool_label}: {len(agent_outcomes)} total agent scenarios over {MONTE_CARLO_RUNS} runs.")
             
         except Exception as e:
-            print(f"   ❌ Failed: {e}")
+            print(f"   ❌ Failed during simulation for {pool_label}: {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     return results_matrix
@@ -180,163 +212,134 @@ def create_comprehensive_analysis_charts(results_matrix, output_dir: Path):
 
 
 def create_main_analysis_dashboard(df: pd.DataFrame, output_dir: Path) -> Path:
-    """Create the main comprehensive analysis dashboard"""
+    """Create simplified main analysis dashboard"""
     
-    fig = plt.figure(figsize=(24, 18))
+    fig = plt.figure(figsize=(16, 12))
     
-    # 1. Total Average Cost Heatmap (Top Left)
-    ax1 = plt.subplot(3, 4, (1, 2))
+    # 1. Cost vs Pool Size (Top Left)
+    ax1 = plt.subplot(2, 3, 1)
     if not df.empty and "avg_cost_per_agent" in df.columns:
-        heatmap_data = df.pivot(index="yield_pool_label", columns="btc_pool_label", values="avg_cost_per_agent")
-        sns.heatmap(heatmap_data, annot=True, fmt='.0f', cmap='RdYlBu_r', 
-                    cbar_kws={'label': 'Avg Cost Per Agent ($)'}, ax=ax1)
-        ax1.set_title("Average Total Rebalancing Cost Per Agent\n(MOET:BTC + MOET:Yield Token)", fontweight='bold')
-        ax1.set_xlabel("MOET:BTC Pool Size")
-        ax1.set_ylabel("MOET:Yield Token Pool Size")
+        costs = df['avg_cost_per_agent']
+        colors = ['red', 'orange', 'green'] if len(costs) <= 3 else plt.cm.viridis(np.linspace(0, 1, len(costs)))
+        
+        ax1.bar(range(len(costs)), costs, color=colors)
+        ax1.set_xlabel("Pool Configuration")
+        ax1.set_ylabel("Average Cost Per Agent ($)")
+        ax1.set_title("Rebalancing Cost by Pool Size", fontweight='bold')
+        ax1.set_xticks(range(len(df)))
+        ax1.set_xticklabels(df['pool_label'] if 'pool_label' in df.columns else [f"Config {i+1}" for i in range(len(df))], rotation=45)
+        ax1.grid(True, alpha=0.3)
     
-    # 2. Survival Rate Heatmap (Top Right)
-    ax2 = plt.subplot(3, 4, (3, 4))
+    # 2. Survival Rate by Pool Size (Top Middle)
+    ax2 = plt.subplot(2, 3, 2)
     if not df.empty and "survival_rate" in df.columns:
-        survival_heatmap = df.pivot(index="yield_pool_label", columns="btc_pool_label", values="survival_rate")
-        sns.heatmap(survival_heatmap * 100, annot=True, fmt='.1f', cmap='RdYlGn', 
-                    cbar_kws={'label': 'Survival Rate (%)'}, ax=ax2)
-        ax2.set_title("Agent Survival Rate by Pool Configuration", fontweight='bold')
-        ax2.set_xlabel("MOET:BTC Pool Size")
-        ax2.set_ylabel("MOET:Yield Token Pool Size")
+        survival_rates = df['survival_rate'] * 100
+        
+        bars = ax2.bar(range(len(survival_rates)), survival_rates, color='green', alpha=0.7)
+        ax2.set_xlabel("Pool Configuration")
+        ax2.set_ylabel("Survival Rate (%)")
+        ax2.set_title("Agent Survival Rate", fontweight='bold')
+        ax2.set_xticks(range(len(df)))
+        ax2.set_xticklabels(df['pool_label'] if 'pool_label' in df.columns else [f"Config {i+1}" for i in range(len(df))], rotation=45)
+        ax2.set_ylim(0, 100)
+        ax2.grid(True, alpha=0.3)
+        
+        # Add value labels on bars
+        for bar, rate in zip(bars, survival_rates):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
+                    f'{rate:.1f}%', ha='center', va='bottom')
     
-    # 3. Rebalancing Activity Heatmap (Middle Left)
-    ax3 = plt.subplot(3, 4, (5, 6))
+    # 3. Rebalancing Activity (Top Right)
+    ax3 = plt.subplot(2, 3, 3)
     if not df.empty and "total_rebalancing_events" in df.columns:
-        activity_heatmap = df.pivot(index="yield_pool_label", columns="btc_pool_label", values="total_rebalancing_events")
-        sns.heatmap(activity_heatmap, annot=True, fmt='d', cmap='Blues', 
-                    cbar_kws={'label': 'Total Events'}, ax=ax3)
-        ax3.set_title("Total Rebalancing Events", fontweight='bold')
-        ax3.set_xlabel("MOET:BTC Pool Size")
-        ax3.set_ylabel("MOET:Yield Token Pool Size")
+        events = df['total_rebalancing_events']
+        
+        ax3.bar(range(len(events)), events, color='blue', alpha=0.7)
+        ax3.set_xlabel("Pool Configuration")
+        ax3.set_ylabel("Total Rebalancing Events")
+        ax3.set_title("Rebalancing Activity", fontweight='bold')
+        ax3.set_xticks(range(len(df)))
+        ax3.set_xticklabels(df['pool_label'] if 'pool_label' in df.columns else [f"Config {i+1}" for i in range(len(df))], rotation=45)
+        ax3.grid(True, alpha=0.3)
     
-    # 4. Average Rebalancing Amount (Middle Right)
-    ax4 = plt.subplot(3, 4, (7, 8))
+    # 4. Average Rebalancing Amount (Bottom Left)
+    ax4 = plt.subplot(2, 3, 4)
     if not df.empty and "avg_rebalancing_amount" in df.columns:
-        amount_heatmap = df.pivot(index="yield_pool_label", columns="btc_pool_label", values="avg_rebalancing_amount")
-        sns.heatmap(amount_heatmap, annot=True, fmt='.0f', cmap='Purples', 
-                    cbar_kws={'label': 'Avg Amount ($)'}, ax=ax4)
+        amounts = df['avg_rebalancing_amount']
+        
+        ax4.bar(range(len(amounts)), amounts, color='purple', alpha=0.7)
+        ax4.set_xlabel("Pool Configuration")
+        ax4.set_ylabel("Average Amount ($)")
         ax4.set_title("Average Rebalancing Amount", fontweight='bold')
-        ax4.set_xlabel("MOET:BTC Pool Size")
-        ax4.set_ylabel("MOET:Yield Token Pool Size")
+        ax4.set_xticks(range(len(df)))
+        ax4.set_xticklabels(df['pool_label'] if 'pool_label' in df.columns else [f"Config {i+1}" for i in range(len(df))], rotation=45)
+        ax4.grid(True, alpha=0.3)
     
-    # 5. Best vs Worst Configuration Comparison (Bottom Left)
-    ax5 = plt.subplot(3, 4, 9)
-    if not df.empty:
-        best_config = df.loc[df['avg_cost_per_agent'].idxmin()]
-        worst_config = df.loc[df['avg_cost_per_agent'].idxmax()]
-        
-        categories = ['Avg Cost', 'Survival Rate', 'Rebalancing Events']
-        best_values = [best_config['avg_cost_per_agent'], best_config['survival_rate']*100, best_config['total_rebalancing_events']]
-        worst_values = [worst_config['avg_cost_per_agent'], worst_config['survival_rate']*100, worst_config['total_rebalancing_events']]
-        
-        x = np.arange(len(categories))
-        width = 0.35
-        
-        ax5.bar(x - width/2, best_values, width, label=f"Best: BTC {best_config['btc_pool_label']}, Yield {best_config['yield_pool_label']}", color='green', alpha=0.7)
-        ax5.bar(x + width/2, worst_values, width, label=f"Worst: BTC {worst_config['btc_pool_label']}, Yield {worst_config['yield_pool_label']}", color='red', alpha=0.7)
-        
-        ax5.set_xlabel('Metrics')
-        ax5.set_ylabel('Values')
-        ax5.set_title('Best vs Worst Pool Configurations')
-        ax5.set_xticks(x)
-        ax5.set_xticklabels(categories)
-        ax5.legend()
-        ax5.grid(True, alpha=0.3)
-    
-    # 6. Cost Distribution (Bottom Middle)
-    ax6 = plt.subplot(3, 4, 10)
+    # 5. Cost Distribution (Bottom Middle)
+    ax5 = plt.subplot(2, 3, 5)
     all_costs = []
     for result in df.itertuples():
         all_costs.extend(result.agent_costs)
     
     if all_costs:
-        ax6.hist(all_costs, bins=25, alpha=0.7, color='skyblue', edgecolor='black')
-        ax6.axvline(x=np.mean(all_costs), color='red', linestyle='--', 
+        ax5.hist(all_costs, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
+        ax5.axvline(x=np.mean(all_costs), color='red', linestyle='--', 
                    label=f'Mean: ${np.mean(all_costs):.0f}')
-        ax6.axvline(x=np.median(all_costs), color='green', linestyle='--',
+        ax5.axvline(x=np.median(all_costs), color='green', linestyle='--',
                    label=f'Median: ${np.median(all_costs):.0f}')
-        ax6.set_xlabel("Agent Cost ($)")
-        ax6.set_ylabel("Frequency")
-        ax6.set_title("Distribution of Agent Costs")
-        ax6.legend()
-        ax6.grid(True, alpha=0.3)
+        ax5.set_xlabel("Agent Cost ($)")
+        ax5.set_ylabel("Frequency")
+        ax5.set_title("Distribution of Agent Costs")
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
     
-    # 7. Pool Size Efficiency (Bottom Right)
-    ax7 = plt.subplot(3, 4, 11)
-    if not df.empty:
-        # Calculate efficiency as cost per million dollars of liquidity
-        df_temp = df.copy()
-        df_temp['btc_efficiency'] = df_temp['avg_cost_per_agent'] / (df_temp['btc_pool_size'] / 1000000)
-        df_temp['yield_efficiency'] = df_temp['avg_cost_per_agent'] / (df_temp['yield_pool_size'] / 1000000)
-        
-        ax7.scatter(df_temp['btc_pool_size'] / 1000000, df_temp['btc_efficiency'], 
-                    c='red', alpha=0.7, s=80, label='MOET:BTC', marker='o')
-        ax7.scatter(df_temp['yield_pool_size'] / 1000000, df_temp['yield_efficiency'], 
-                    c='blue', alpha=0.7, s=80, label='MOET:Yield Token', marker='s')
-        
-        ax7.set_xlabel("Pool Size ($M)")
-        ax7.set_ylabel("Cost per $1M Liquidity ($)")
-        ax7.set_title("Pool Size Efficiency")
-        ax7.legend()
-        ax7.grid(True, alpha=0.3)
     
-    # 8. Summary Statistics (Bottom Far Right)
-    ax8 = plt.subplot(3, 4, 12)
-    ax8.axis('off')
+    # 6. Summary Statistics (Bottom Right)
+    ax6 = plt.subplot(2, 3, 6)
+    ax6.axis('off')
     
     if not df.empty:
         # Calculate summary statistics
-        total_simulations = len(df)
-        total_agents = df['total_agents'].sum()
-        total_events = df['total_rebalancing_events'].sum()
         best_config = df.loc[df['avg_cost_per_agent'].idxmin()]
         worst_config = df.loc[df['avg_cost_per_agent'].idxmax()]
         
         cost_reduction = ((worst_config['avg_cost_per_agent'] - best_config['avg_cost_per_agent']) / worst_config['avg_cost_per_agent']) * 100
         
         summary_text = f"""
-COMPREHENSIVE ANALYSIS SUMMARY
+POOL ANALYSIS SUMMARY
 
-Simulations Run: {total_simulations}
-Total Agents Tested: {total_agents}
-Total Rebalancing Events: {total_events}
+Configurations Tested: {len(df)}
+Total Agents: {df['total_agents'].sum()}
+Total Rebalancing Events: {df['total_rebalancing_events'].sum()}
 
-OPTIMAL CONFIGURATION:
-MOET:BTC: {best_config['btc_pool_label']}
-MOET:Yield: {best_config['yield_pool_label']}
+BEST CONFIGURATION:
+{best_config['pool_label']}
 Avg Cost: ${best_config['avg_cost_per_agent']:.0f}
 Survival Rate: {best_config['survival_rate']*100:.1f}%
 
 WORST CONFIGURATION:
-MOET:BTC: {worst_config['btc_pool_label']}
-MOET:Yield: {worst_config['yield_pool_label']}
+{worst_config['pool_label']}
 Avg Cost: ${worst_config['avg_cost_per_agent']:.0f}
 Survival Rate: {worst_config['survival_rate']*100:.1f}%
 
 COST REDUCTION: {cost_reduction:.1f}%
 
-KEY INSIGHTS:
-• Larger pools reduce costs significantly
-• Pool depth more important than concentration
-• Real rebalancing amounts: ${df["avg_rebalancing_amount"].mean():.0f} avg
-• Optimal balance between cost and liquidity
+KEY INSIGHT:
+Larger pools reduce rebalancing costs
+while maintaining high survival rates
         """
         
-        ax8.text(0.05, 0.95, summary_text, transform=ax8.transAxes, fontsize=9,
+        ax6.text(0.05, 0.95, summary_text, transform=ax6.transAxes, fontsize=10,
                  verticalalignment='top', fontfamily='monospace',
                  bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgreen", alpha=0.8))
     
-    plt.suptitle("Pool Analysis: High Tide Simulation Data", 
-                 fontsize=20, fontweight='bold', y=0.98)
+    
+    plt.suptitle("Streamlined Pool Analysis: High Tide Rebalancing Performance", 
+                 fontsize=16, fontweight='bold', y=0.95)
     plt.tight_layout()
     
     # Save chart
-    chart_path = output_dir / "comprehensive_pool_analysis_dashboard.png"
+    chart_path = output_dir / "streamlined_pool_analysis_dashboard.png"
     plt.savefig(chart_path, dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -354,10 +357,9 @@ def create_detailed_cost_analysis(df: pd.DataFrame, output_dir: Path) -> List[Pa
     
     # 1. Cost vs Pool Size Scatter
     if not df.empty:
-        ax1.scatter(df['btc_pool_size'] / 1000000, df['avg_cost_per_agent'], 
-                   c='red', alpha=0.7, s=60, label='vs BTC Pool Size')
-        ax1.scatter(df['yield_pool_size'] / 1000000, df['avg_cost_per_agent'], 
-                   c='blue', alpha=0.7, s=60, label='vs Yield Pool Size')
+        pool_sizes = df['pool_size'] / 1000000 if 'pool_size' in df.columns else df['btc_pool_size'] / 1000000
+        ax1.scatter(pool_sizes, df['avg_cost_per_agent'], 
+                   c='red', alpha=0.7, s=80, label='Pool Size vs Cost')
         ax1.set_xlabel("Pool Size ($M)")
         ax1.set_ylabel("Average Cost Per Agent ($)")
         ax1.set_title("Cost vs Pool Size Relationship")
@@ -366,7 +368,7 @@ def create_detailed_cost_analysis(df: pd.DataFrame, output_dir: Path) -> List[Pa
     
     # 2. Cost Distribution by Configuration
     if not df.empty:
-        config_labels = [f"{row.btc_pool_label}\n{row.yield_pool_label}" for row in df.itertuples()]
+        config_labels = df['pool_label'].values if 'pool_label' in df.columns else [f"Config {i+1}" for i in range(len(df))]
         costs = df['avg_cost_per_agent'].values
         
         bars = ax2.bar(range(len(costs)), costs, color=plt.cm.viridis(np.linspace(0, 1, len(costs))))
@@ -446,10 +448,9 @@ def create_rebalancing_activity_analysis(df: pd.DataFrame, output_dir: Path) -> 
     
     # 2. Events vs Pool Size
     if not df.empty:
-        ax2.scatter(df['btc_pool_size'] / 1000000, df['total_rebalancing_events'], 
-                   c='red', alpha=0.7, s=60, label='vs BTC Pool Size')
-        ax2.scatter(df['yield_pool_size'] / 1000000, df['total_rebalancing_events'], 
-                   c='blue', alpha=0.7, s=60, label='vs Yield Pool Size')
+        pool_sizes = df['pool_size'] / 1000000 if 'pool_size' in df.columns else df['btc_pool_size'] / 1000000
+        ax2.scatter(pool_sizes, df['total_rebalancing_events'], 
+                   c='blue', alpha=0.7, s=80, label='Events vs Pool Size')
         ax2.set_xlabel("Pool Size ($M)")
         ax2.set_ylabel("Total Rebalancing Events")
         ax2.set_title("Rebalancing Activity vs Pool Size")
@@ -458,7 +459,7 @@ def create_rebalancing_activity_analysis(df: pd.DataFrame, output_dir: Path) -> 
     
     # 3. Average Amount vs Pool Configuration
     if not df.empty:
-        config_labels = [f"{row.btc_pool_label}\n{row.yield_pool_label}" for row in df.itertuples()]
+        config_labels = df['pool_label'].values if 'pool_label' in df.columns else [f"Config {i+1}" for i in range(len(df))]
         amounts = df['avg_rebalancing_amount'].values
         
         bars = ax3.bar(range(len(amounts)), amounts, color=plt.cm.plasma(np.linspace(0, 1, len(amounts))))
@@ -504,7 +505,7 @@ def create_risk_profile_analysis(df: pd.DataFrame, output_dir: Path) -> List[Pat
         # 1. Cost by Risk Profile Heatmap
         risk_data = df[['conservative_avg_cost', 'moderate_avg_cost', 'aggressive_avg_cost']].values
         risk_labels = ['Conservative', 'Moderate', 'Aggressive']
-        config_labels = [f"{row.btc_pool_label} + {row.yield_pool_label}" for row in df.itertuples()]
+        config_labels = df['pool_label'].values if 'pool_label' in df.columns else [f"Config {i+1}" for i in range(len(df))]
         
         im = ax1.imshow(risk_data.T, cmap='RdYlBu_r', aspect='auto')
         ax1.set_xticks(range(len(config_labels)))
@@ -541,8 +542,9 @@ def create_risk_profile_analysis(df: pd.DataFrame, output_dir: Path) -> List[Pat
                 valid_df = df[df[profile] > 0]
                 if not valid_df.empty:
                     best_idx = valid_df[profile].idxmin()
+                    config_label = valid_df.loc[best_idx, 'pool_label'] if 'pool_label' in valid_df.columns else f"Config {best_idx}"
                     best_configs[profile.replace('_avg_cost', '')] = {
-                        'config': f"{valid_df.loc[best_idx, 'btc_pool_label']} + {valid_df.loc[best_idx, 'yield_pool_label']}",
+                        'config': config_label,
                         'cost': valid_df.loc[best_idx, profile]
                     }
         
@@ -626,12 +628,13 @@ def create_pool_efficiency_analysis(df: pd.DataFrame, output_dir: Path) -> List[
         cbar.set_label("Survival Rate")
         
         # 2. Pool Size Impact Analysis
-        pool_sizes = sorted(df['btc_pool_size'].unique())
-        size_labels = [f"${size//1000}k" for size in pool_sizes]
+        pool_size_col = 'pool_size' if 'pool_size' in df.columns else 'btc_pool_size'
+        pool_sizes = sorted(df[pool_size_col].unique())
+        size_labels = [f"${size//1000000:.1f}M" if size >= 1000000 else f"${size//1000}k" for size in pool_sizes]
         
         avg_costs_by_size = []
         for size in pool_sizes:
-            size_data = df[df['btc_pool_size'] == size]
+            size_data = df[df[pool_size_col] == size]
             avg_costs_by_size.append(size_data['avg_cost_per_agent'].mean())
         
         ax2.plot(size_labels, avg_costs_by_size, marker='o', linewidth=3, markersize=8, color='blue')
@@ -684,17 +687,20 @@ def create_pool_efficiency_analysis(df: pd.DataFrame, output_dir: Path) -> List[
         best_overall = df.loc[df['avg_cost_per_agent'].idxmin()]
         worst_overall = df.loc[df['avg_cost_per_agent'].idxmax()]
         
+        best_label = best_overall.get('pool_label', best_overall.get('btc_pool_label', f"Config {best_overall.name}"))
+        worst_label = worst_overall.get('pool_label', worst_overall.get('btc_pool_label', f"Config {worst_overall.name}"))
+        
         efficiency_text = f"""
 POOL EFFICIENCY SUMMARY
 
 MOST EFFICIENT:
-Configuration: {best_overall['btc_pool_label']} + {best_overall['yield_pool_label']}
+Configuration: {best_label}
 Cost per Agent: ${best_overall['avg_cost_per_agent']:.0f}
 Survival Rate: {best_overall['survival_rate']*100:.1f}%
 Total Liquidity: ${(best_overall['btc_pool_size'] + best_overall['yield_pool_size'])/1000000:.1f}M
 
 LEAST EFFICIENT:
-Configuration: {worst_overall['btc_pool_label']} + {worst_overall['yield_pool_label']}
+Configuration: {worst_label}
 Cost per Agent: ${worst_overall['avg_cost_per_agent']:.0f}
 Survival Rate: {worst_overall['survival_rate']*100:.1f}%
 Total Liquidity: ${(worst_overall['btc_pool_size'] + worst_overall['yield_pool_size'])/1000000:.1f}M
@@ -742,10 +748,14 @@ def create_lp_curve_analysis(results_matrix, output_dir: Path) -> List[Path]:
     chart_generator = HighTideChartGenerator()
     
     try:
+        # Get labels safely
+        best_label = best_config.get('pool_label', best_config.get('btc_pool_label', f"Config_{best_idx}"))
+        worst_label = worst_config.get('pool_label', worst_config.get('btc_pool_label', f"Config_{worst_idx}"))
+        
         # Best configuration charts
         best_charts_dir = output_dir / "best_configuration_charts"
         best_charts = chart_generator.generate_high_tide_charts(
-            scenario_name=f"Best_Config_{best_config['btc_pool_label']}_{best_config['yield_pool_label']}",
+            scenario_name=f"Best_Config_{best_label.replace('$', '').replace(':', '_')}",
             results=best_config["full_simulation_results"],
             charts_dir=best_charts_dir
         )
@@ -754,15 +764,15 @@ def create_lp_curve_analysis(results_matrix, output_dir: Path) -> List[Path]:
         # Worst configuration charts  
         worst_charts_dir = output_dir / "worst_configuration_charts"
         worst_charts = chart_generator.generate_high_tide_charts(
-            scenario_name=f"Worst_Config_{worst_config['btc_pool_label']}_{worst_config['yield_pool_label']}",
+            scenario_name=f"Worst_Config_{worst_label.replace('$', '').replace(':', '_')}",
             results=worst_config["full_simulation_results"],
             charts_dir=worst_charts_dir
         )
         charts.extend(worst_charts)
         
         print(f"📊 Generated LP curve charts:")
-        print(f"   • Best config ({best_config['btc_pool_label']} + {best_config['yield_pool_label']}): {len(best_charts)} charts")
-        print(f"   • Worst config ({worst_config['btc_pool_label']} + {worst_config['yield_pool_label']}): {len(worst_charts)} charts")
+        print(f"   • Best config ({best_label}): {len(best_charts)} charts")
+        print(f"   • Worst config ({worst_label}): {len(worst_charts)} charts")
         
     except Exception as e:
         print(f"⚠️  LP curve chart generation failed: {e}")

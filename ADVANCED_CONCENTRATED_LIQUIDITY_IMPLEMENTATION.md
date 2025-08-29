@@ -2,7 +2,7 @@
 
 ## 🎯 Overview
 
-We have successfully implemented an advanced Uniswap V3-style concentrated liquidity system that replaces the previous continuous liquidity distributions with **discrete liquidity bins**. This system provides:
+We have near successfully implemented an advanced Uniswap V3-style concentrated liquidity system that replaces the previous continuous liquidity distributions with **discrete liquidity bins**. This system provides:
 
 1. **Discrete Liquidity Bins**: Instead of smooth curves, liquidity is now distributed across specific price points
 2. **Correct MOET:BTC Pricing**: Maintains the fixed 1 BTC = 100,000 MOET exchange rate

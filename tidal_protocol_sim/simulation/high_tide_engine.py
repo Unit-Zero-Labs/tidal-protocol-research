@@ -401,9 +401,13 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 trade_type="yield_token_sale"
             )
             
-            # Agent's debt is reduced by the BTC value received (after slippage)
-            # This means slippage directly impacts how much debt can be repaid
-            effective_debt_repayment = btc_received  # BTC received after slippage
+            # Convert BTC received to USD value for debt repayment
+            btc_price = self.state.current_prices[Asset.BTC]
+            btc_value_usd = btc_received * btc_price
+            
+            # Agent's debt is in MOET terms, convert BTC value to MOET for repayment
+            # Since 1 MOET = $1, the BTC USD value directly represents MOET that can be repaid
+            effective_debt_repayment = btc_value_usd  # USD value = MOET value
             
             # Update agent's actual debt based on effective repayment
             debt_repayment = min(effective_debt_repayment, agent.state.moet_debt)
@@ -473,8 +477,12 @@ class HighTideSimulationEngine(TidalSimulationEngine):
             # Update the Uniswap pool state after the swap
             self.slippage_calculator.update_pool_state(swap_result)
             
-            # Effective debt repayment (after slippage)
-            effective_debt_repayment = btc_received
+            # Convert BTC received to USD value for debt repayment
+            btc_price = self.state.current_prices[Asset.BTC]
+            btc_value_usd = btc_received * btc_price
+            
+            # Effective debt repayment in MOET terms
+            effective_debt_repayment = btc_value_usd
             debt_repayment = min(effective_debt_repayment, agent.state.moet_debt)
             agent.state.moet_debt -= debt_repayment
             
@@ -534,8 +542,12 @@ class HighTideSimulationEngine(TidalSimulationEngine):
             # Update the Uniswap pool state after the swap
             self.slippage_calculator.update_pool_state(swap_result)
             
-            # Effective debt repayment (after slippage)
-            effective_debt_repayment = btc_received
+            # Convert BTC received to USD value for debt repayment
+            btc_price = self.state.current_prices[Asset.BTC]
+            btc_value_usd = btc_received * btc_price
+            
+            # Effective debt repayment in MOET terms
+            effective_debt_repayment = btc_value_usd
             debt_repayment = min(effective_debt_repayment, agent.state.moet_debt)
             agent.state.moet_debt -= debt_repayment
             

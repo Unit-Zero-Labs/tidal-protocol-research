@@ -303,81 +303,89 @@ Key Insights:
         return chart_path
     
     def _create_bin_evolution_chart(self, ax, snapshots: List[PoolSnapshot], pool_name: str):
-        """Create bar chart showing liquidity bin evolution over time"""
+        """Create bar chart showing liquidity bin evolution over time with proper concentration visualization"""
         
-        # Sample snapshots to avoid overcrowding
-        sample_snapshots = snapshots[::max(1, len(snapshots)//5)]  # Show 5 snapshots max
+        # Sample snapshots for clear visualization
+        sample_snapshots = snapshots[::max(1, len(snapshots)//6)]  # Show 6 snapshots max
         
-        # Get bin data from the first snapshot to establish structure
         first_snapshot = sample_snapshots[0]
         if not first_snapshot.concentrated_pool:
             ax.text(0.5, 0.5, "No concentrated liquidity data", 
                    transform=ax.transAxes, ha='center', va='center')
             return
         
-        # Only show active bins to reduce clutter
+        # Get all bins (not just active ones) to show the full distribution
         bin_data = first_snapshot.concentrated_pool.get_bin_data_for_charts()
-        active_bins = [bin for bin in bin_data if bin["is_active"]]
         
-        if not active_bins:
-            ax.text(0.5, 0.5, "No active liquidity bins", 
+        if not bin_data:
+            ax.text(0.5, 0.5, "No liquidity bin data", 
                    transform=ax.transAxes, ha='center', va='center')
             return
         
-        bin_indices = [bin["bin_index"] for bin in active_bins]
+        # Sort bins by price to show concentration properly
+        bin_data.sort(key=lambda x: x['price'])
         
-        # Create bar chart for each snapshot
-        bar_width = 0.8 / len(sample_snapshots)
+        # Take a representative sample of bins to avoid overcrowding
+        total_bins = len(bin_data)
+        if total_bins > 50:
+            # Sample every nth bin to get ~30-40 bins for visualization
+            step = max(1, total_bins // 35)
+            sampled_bins = bin_data[::step]
+        else:
+            sampled_bins = bin_data
+        
+        bin_indices = range(len(sampled_bins))
         colors = plt.cm.viridis(np.linspace(0, 1, len(sample_snapshots)))
+        
+        # Create grouped bar chart
+        bar_width = 0.8 / len(sample_snapshots)
         
         for i, snapshot in enumerate(sample_snapshots):
             if snapshot.concentrated_pool:
-                bin_data = snapshot.concentrated_pool.get_bin_data_for_charts()
-                active_bins = [bin for bin in bin_data if bin["is_active"]]
-                liquidity_values = [bin["liquidity"] for bin in active_bins]
+                # Get updated bin data for this snapshot
+                current_bin_data = snapshot.concentrated_pool.get_bin_data_for_charts()
+                current_bin_data.sort(key=lambda x: x['price'])
                 
-                if liquidity_values:  # Only create bars if there's data
-                    # Create bars for this snapshot
-                    x_positions = [idx + i * bar_width for idx in range(len(active_bins))]
-                    bars = ax.bar(x_positions, liquidity_values, 
-                                width=bar_width, 
-                                alpha=0.7,
-                                color=colors[i],
-                                label=f"Minute {snapshot.minute}")
-                    
-                    # Add trade amount annotation if significant
-                    if snapshot.trade_amount > 0:
-                        ax.annotate(f"${snapshot.trade_amount/1000:.0f}k", 
-                                   xy=(len(active_bins)//2, max(liquidity_values) * 0.8),
-                                   ha='center', fontsize=8, alpha=0.8)
+                # Sample the same bins as the reference
+                if total_bins > 50:
+                    sampled_current = current_bin_data[::step]
+                else:
+                    sampled_current = current_bin_data
+                
+                liquidity_values = [bin_data["liquidity"] for bin_data in sampled_current]
+                
+                # Create bars for this snapshot
+                x_positions = [idx + i * bar_width - (len(sample_snapshots) * bar_width / 2) + bar_width/2 
+                             for idx in bin_indices]
+                
+                bars = ax.bar(x_positions, liquidity_values, 
+                            width=bar_width, 
+                            alpha=0.7,
+                            color=colors[i],
+                            label=f"Minute {snapshot.minute}")
         
-        # Add correct peg line based on pool type
-        if "MOET:BTC" in pool_name:
-            correct_peg = 0.00001  # BTC per MOET
-            ax.axhline(y=0, color='red', linestyle='--', alpha=0.7, 
-                      label=f"Correct Peg (1 BTC = 100k MOET)")
-            ax.set_ylabel("Liquidity per Bin ($)")
-        else:
-            correct_peg = 1.0  # 1:1 for yield tokens
-            ax.axhline(y=0, color='red', linestyle='--', alpha=0.7, 
-                      label="Initial Peg (1:1)")
-            ax.set_ylabel("Liquidity per Bin ($)")
-        
+        # Improve the visualization
         ax.set_xlabel("Active Liquidity Bins (Ordered by Price)")
-        ax.set_title("LP Curve Evolution: Discrete Liquidity Bins")
+        ax.set_ylabel("Liquidity per Bin ($)")
+        
+        # Add peg reference line based on pool type
+        if "MOET:BTC" in pool_name:
+            ax.axvline(x=len(sampled_bins)//2, color='red', linestyle='--', alpha=0.7, 
+                      label="Correct Peg (1 BTC = 100k MOET)")
+            ax.set_title("MOET:BTC LP Bins - 80% at Peg ±0.99%, 100k at ±1%")
+        else:
+            ax.axvline(x=len(sampled_bins)//2, color='red', linestyle='--', alpha=0.7, 
+                      label="Perfect Peg (1:1)")
+            ax.set_title("MOET:Yield Token LP Bins - 95% at Peg, 5% in 1bp increments")
+        
         ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax.grid(True, alpha=0.3)
         
-        # Set x-axis to show active bin positions
-        if len(bin_indices) > 10:
-            # Show every 10th bin if there are many
-            tick_positions = list(range(0, len(bin_indices), max(1, len(bin_indices)//10)))
-            ax.set_xticks(tick_positions)
-            ax.set_xticklabels([f"Bin {bin_indices[i]}" for i in tick_positions])
-        else:
-            # Show all bins if there are few
-            ax.set_xticks(range(len(bin_indices)))
-            ax.set_xticklabels([f"Bin {i}" for i in bin_indices])
+        # Improve x-axis labeling
+        num_ticks = min(10, len(sampled_bins))
+        tick_positions = np.linspace(0, len(sampled_bins)-1, num_ticks, dtype=int)
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels([f"Bin {i}" for i in tick_positions], rotation=45)
     
     def _create_reserve_changes_chart(self, ax, snapshots: List[PoolSnapshot]):
         """Create chart showing pool reserve changes over time"""
@@ -469,39 +477,59 @@ Key Insights:
         ax.set_ylim(0, 120)
 
     def _create_bin_comparison_chart(self, ax, tight_final: PoolSnapshot, conservative_final: PoolSnapshot, price_label: str):
-        """Create bin comparison chart for concentration comparison"""
+        """Create bin comparison chart for concentration comparison with proper scaling"""
         
         if not tight_final.concentrated_pool or not conservative_final.concentrated_pool:
             ax.text(0.5, 0.5, "No concentrated liquidity data", 
                    transform=ax.transAxes, ha='center', va='center')
             return
         
-        # Get bin data for both pools
+        # Get bin data for both pools and sort by price
         tight_bins = tight_final.concentrated_pool.get_bin_data_for_charts()
         conservative_bins = conservative_final.concentrated_pool.get_bin_data_for_charts()
         
-        # Create bar chart comparison
-        bin_indices = [bin["bin_index"] for bin in tight_bins]
-        tight_liquidity = [bin["liquidity"] for bin in tight_bins]
-        conservative_liquidity = [bin["liquidity"] for bin in conservative_bins]
+        tight_bins.sort(key=lambda x: x['price'])
+        conservative_bins.sort(key=lambda x: x['price'])
         
-        x = np.arange(len(bin_indices))
+        # Sample bins for visualization (avoid overcrowding)
+        max_bins = 30
+        if len(tight_bins) > max_bins:
+            step = len(tight_bins) // max_bins
+            tight_bins = tight_bins[::step]
+            conservative_bins = conservative_bins[::step]
+        
+        # Extract data for plotting
+        tight_liquidity = [bin_data["liquidity"] for bin_data in tight_bins]
+        conservative_liquidity = [bin_data["liquidity"] for bin_data in conservative_bins]
+        
+        x = np.arange(len(tight_bins))
         width = 0.35
         
-        ax.bar(x - width/2, tight_liquidity, width, label=f"Tight ({tight_final.concentration_range*100:.0f}%)", 
-               alpha=0.7, color='#2E8B57')
-        ax.bar(x + width/2, conservative_liquidity, width, label=f"Conservative ({conservative_final.concentration_range*100:.0f}%)", 
-               alpha=0.7, color='#FF6B35')
+        # Create bars with better styling
+        bars1 = ax.bar(x - width/2, tight_liquidity, width, 
+                      label=f"Tight ({tight_final.concentration_range*100:.0f}%)", 
+                      alpha=0.8, color='#2E8B57')
+        bars2 = ax.bar(x + width/2, conservative_liquidity, width, 
+                      label=f"Conservative ({conservative_final.concentration_range*100:.0f}%)", 
+                      alpha=0.8, color='#FF6B35')
         
-        ax.set_xlabel("Liquidity Bin Index")
+        # Add peg reference
+        peg_position = len(tight_bins) // 2
+        ax.axvline(x=peg_position, color='red', linestyle='--', alpha=0.7, 
+                  label="Peg Position")
+        
+        ax.set_xlabel("Liquidity Bins (Ordered by Price)")
         ax.set_ylabel("Liquidity per Bin ($)")
-        ax.set_title("Final LP Curve Shape Comparison: Discrete Bins")
+        ax.set_title("Final LP Curve Shape Comparison: Concentrated Bins")
         ax.legend()
         ax.grid(True, alpha=0.3)
         
-        # Set x-axis to show bin indices
-        ax.set_xticks(x[::10])  # Show every 10th bin index
-        ax.set_xticklabels([f"Bin {i}" for i in bin_indices[::10]])
+        # Improve x-axis labels
+        num_ticks = min(8, len(tight_bins))
+        if num_ticks > 0:
+            tick_positions = np.linspace(0, len(tight_bins)-1, num_ticks, dtype=int)
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels([f"Bin {i}" for i in tick_positions], rotation=45)
 
 
 def create_pool_dynamics_summary(trackers: Dict[str, LPCurveTracker], charts_dir: Path) -> Path:

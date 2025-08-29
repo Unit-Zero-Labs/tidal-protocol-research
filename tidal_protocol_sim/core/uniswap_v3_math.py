@@ -54,6 +54,13 @@ class UniswapV3Pool:
         self.bins: List[LiquidityBin] = []
         self._initialize_liquidity_distribution()
         
+        # Sort bins by price for proper visualization
+        self.bins.sort(key=lambda b: b.price)
+        
+        # Re-assign bin indices after sorting to maintain order
+        for i, bin in enumerate(self.bins):
+            bin.bin_index = i
+        
         # Calculate legacy fields from bins for backward compatibility
         self._update_legacy_fields()
     
@@ -65,99 +72,142 @@ class UniswapV3Pool:
             self._initialize_yield_token_distribution()
     
     def _initialize_moet_btc_distribution(self):
-        """Initialize MOET:BTC liquidity with 80% FLAT at peg ±0.99%, 100k at ±1%"""
-        # Calculate price range for bins
-        min_price = self.peg_price * 0.99  # 0.0000099
-        max_price = self.peg_price * 1.01  # 0.0000101
+        """Initialize MOET:BTC liquidity distribution:
+        - 80% in bins within ±0.99% of peg (0.00001 BTC per MOET)
+        - 100k liquidity in bins at exactly ±1% from peg
+        - Remaining liquidity distributed in outer bins
+        """
         
-        # Create price points for bins
-        prices = np.linspace(min_price, max_price, self.num_bins)
+        # Create detailed price range around peg
+        peg_price = self.peg_price  # 0.00001 BTC per MOET
         
-        # Categorize bins by distance from peg
-        concentrated_bins = []  # Bins within ±0.99% (FLAT 80% distribution)
-        edge_bins = []          # Bins at ±1% (100k total)
-        outer_bins = []         # Bins outside concentrated range
+        # Define precise ranges
+        concentrated_min = peg_price * 0.9901  # -0.99%
+        concentrated_max = peg_price * 1.0099  # +0.99%
+        edge_low = peg_price * 0.99            # -1.00%
+        edge_high = peg_price * 1.01           # +1.00%
+        outer_min = peg_price * 0.98           # -2% outer range
+        outer_max = peg_price * 1.02           # +2% outer range
         
-        for i, price in enumerate(prices):
-            distance_from_peg = abs(price - self.peg_price) / self.peg_price
-            
-            if distance_from_peg <= 0.0099:  # Within ±0.99%
-                concentrated_bins.append((i, price))
-            elif 0.0099 < distance_from_peg <= 0.0101:  # At ±1% (with small tolerance)
-                edge_bins.append((i, price))
-            else:
-                outer_bins.append((i, price))
+        # Calculate number of bins for each range
+        concentrated_bins = int(self.num_bins * 0.6)  # 60 bins for ±0.99%
+        edge_bins = 4                                  # 2 bins each for ±1%
+        outer_bins = self.num_bins - concentrated_bins - edge_bins
         
-        # Distribute liquidity according to requirements
-        for i, price in enumerate(prices):
-            distance_from_peg = abs(price - self.peg_price) / self.peg_price
-            
-            if distance_from_peg <= 0.0099:  # Within ±0.99%
-                # 80% of total liquidity distributed EQUALLY among concentrated bins
-                bin_liquidity = (self.total_liquidity * 0.8) / len(concentrated_bins)
-                
-            elif 0.0099 < distance_from_peg <= 0.0101:  # At ±1%
-                # 100k liquidity distributed EQUALLY among edge bins
-                bin_liquidity = 100_000 / len(edge_bins)
-                
-            else:
-                # Remaining liquidity distributed equally among outer bins
-                remaining_liquidity = self.total_liquidity - (self.total_liquidity * 0.8) - 100_000
-                bin_liquidity = remaining_liquidity / len(outer_bins) if len(outer_bins) > 0 else 0
-            
-            # Ensure minimum liquidity
-            bin_liquidity = max(bin_liquidity, 1000)  # Minimum $1k per bin
-            
+        # Create concentrated range bins (±0.99%)
+        concentrated_prices = np.linspace(concentrated_min, concentrated_max, concentrated_bins)
+        concentrated_liquidity = (self.total_liquidity * 0.8) / concentrated_bins
+        
+        for i, price in enumerate(concentrated_prices):
             self.bins.append(LiquidityBin(
                 price=price,
-                liquidity=bin_liquidity,
+                liquidity=concentrated_liquidity,
                 bin_index=i,
-                is_active=bin_liquidity > 1000
+                is_active=True
             ))
+        
+        # Create edge bins (exactly ±1%)
+        edge_liquidity = 100_000 / 4  # 25k per bin
+        edge_prices = [edge_low, edge_low * 0.9999, edge_high * 1.0001, edge_high]
+        
+        for i, price in enumerate(edge_prices):
+            self.bins.append(LiquidityBin(
+                price=price,
+                liquidity=edge_liquidity,
+                bin_index=concentrated_bins + i,
+                is_active=True
+            ))
+        
+        # Create outer range bins (remaining liquidity)
+        if outer_bins > 0:
+            remaining_liquidity = self.total_liquidity - (self.total_liquidity * 0.8) - 100_000
+            outer_liquidity_per_bin = max(remaining_liquidity / outer_bins, 1000)
+            
+            # Lower outer range
+            lower_outer_count = outer_bins // 2
+            lower_prices = np.linspace(outer_min, concentrated_min, lower_outer_count)
+            
+            for i, price in enumerate(lower_prices):
+                self.bins.append(LiquidityBin(
+                    price=price,
+                    liquidity=outer_liquidity_per_bin,
+                    bin_index=concentrated_bins + edge_bins + i,
+                    is_active=outer_liquidity_per_bin > 1000
+                ))
+            
+            # Upper outer range
+            upper_outer_count = outer_bins - lower_outer_count
+            upper_prices = np.linspace(concentrated_max, outer_max, upper_outer_count)
+            
+            for i, price in enumerate(upper_prices):
+                self.bins.append(LiquidityBin(
+                    price=price,
+                    liquidity=outer_liquidity_per_bin,
+                    bin_index=concentrated_bins + edge_bins + lower_outer_count + i,
+                    is_active=outer_liquidity_per_bin > 1000
+                ))
     
     def _initialize_yield_token_distribution(self):
-        """Initialize MOET:Yield Token liquidity with 95% FLAT at peg, remaining in 1bp increments"""
-        # Calculate price range for bins (1 basis point = 0.01%)
-        min_price = self.peg_price * 0.9999  # 0.9999
-        max_price = self.peg_price * 1.0001  # 1.0001
+        """Initialize MOET:Yield Token liquidity distribution:
+        - 95% in bins exactly at 1:1 peg
+        - 5% distributed equally in 1 basis point increments off peg
+        """
         
-        # Create price points for bins
-        prices = np.linspace(min_price, max_price, self.num_bins)
+        peg_price = self.peg_price  # 1.0 MOET per Yield Token
         
-        # Categorize bins by distance from peg
-        peg_bins = []    # Bins exactly at the peg (95% concentration)
-        outer_bins = []  # Bins outside peg (5% distributed)
+        # Define tight ranges (1 basis point = 0.01%)
+        peg_tolerance = 0.000001  # Very tight peg bins (0.0001% tolerance)
+        bp_increment = 0.0001     # 1 basis point = 0.01%
         
-        for i, price in enumerate(prices):
-            distance_from_peg = abs(price - self.peg_price) / self.peg_price
-            
-            # Very tight concentration: only bins within 0.01% (1 basis point) get the 95%
-            if distance_from_peg <= 0.0001:  # Within ±1 basis point
-                peg_bins.append((i, price))
-            else:
-                outer_bins.append((i, price))
+        # Calculate bin allocation
+        peg_bins_count = int(self.num_bins * 0.1)    # 10% of bins for tight peg
+        outer_bins_count = self.num_bins - peg_bins_count
         
-        # Distribute liquidity according to requirements
-        for i, price in enumerate(prices):
-            distance_from_peg = abs(price - self.peg_price) / self.peg_price
-            
-            if distance_from_peg <= 0.0001:  # Within ±1 basis point
-                # 95% of total liquidity distributed EQUALLY among peg bins
-                bin_liquidity = (self.total_liquidity * 0.95) / len(peg_bins)
-                
-            else:
-                # Remaining 5% distributed equally among outer bins in 1bp increments
-                bin_liquidity = (self.total_liquidity * 0.05) / len(outer_bins) if len(outer_bins) > 0 else 0
-            
-            # Ensure minimum liquidity
-            bin_liquidity = max(bin_liquidity, 1000)  # Minimum $1k per bin
-            
+        # Create tight peg bins (95% of liquidity)
+        peg_liquidity_per_bin = (self.total_liquidity * 0.95) / peg_bins_count
+        peg_min = peg_price * (1 - peg_tolerance)
+        peg_max = peg_price * (1 + peg_tolerance)
+        peg_prices = np.linspace(peg_min, peg_max, peg_bins_count)
+        
+        for i, price in enumerate(peg_prices):
             self.bins.append(LiquidityBin(
                 price=price,
-                liquidity=bin_liquidity,
+                liquidity=peg_liquidity_per_bin,
                 bin_index=i,
-                is_active=bin_liquidity > 1000
+                is_active=True
             ))
+        
+        # Create outer bins (5% liquidity distributed in 1bp increments)
+        if outer_bins_count > 0:
+            outer_liquidity_per_bin = (self.total_liquidity * 0.05) / outer_bins_count
+            
+            # Lower range (below peg)
+            lower_count = outer_bins_count // 2
+            lower_min = peg_price * (1 - bp_increment * lower_count)
+            lower_max = peg_min
+            lower_prices = np.linspace(lower_min, lower_max, lower_count)
+            
+            for i, price in enumerate(lower_prices):
+                self.bins.append(LiquidityBin(
+                    price=price,
+                    liquidity=outer_liquidity_per_bin,
+                    bin_index=peg_bins_count + i,
+                    is_active=outer_liquidity_per_bin > 1000
+                ))
+            
+            # Upper range (above peg)
+            upper_count = outer_bins_count - lower_count
+            upper_min = peg_max
+            upper_max = peg_price * (1 + bp_increment * upper_count)
+            upper_prices = np.linspace(upper_min, upper_max, upper_count)
+            
+            for i, price in enumerate(upper_prices):
+                self.bins.append(LiquidityBin(
+                    price=price,
+                    liquidity=outer_liquidity_per_bin,
+                    bin_index=peg_bins_count + lower_count + i,
+                    is_active=outer_liquidity_per_bin > 1000
+                ))
     
     def _update_legacy_fields(self):
         """Update legacy fields for backward compatibility"""
@@ -174,8 +224,23 @@ class UniswapV3Pool:
         self.liquidity = math.sqrt(self.token0_reserve * self.token1_reserve)
     
     def get_price(self) -> float:
-        """Get current price from peg price"""
-        return self.peg_price
+        """Get current effective price from active bins"""
+        # Calculate weighted average price from active bins
+        if not self.bins or not any(b.is_active for b in self.bins):
+            return self.peg_price
+            
+        total_liquidity = 0
+        weighted_price = 0
+        
+        for bin in self.bins:
+            if bin.is_active and bin.liquidity > 0:
+                total_liquidity += bin.liquidity
+                weighted_price += bin.price * bin.liquidity
+        
+        if total_liquidity > 0:
+            return weighted_price / total_liquidity
+        else:
+            return self.peg_price
 
 
     def get_liquidity_at_price(self, target_price: float) -> float:
@@ -311,62 +376,55 @@ class UniswapV3SlippageCalculator:
     def _calculate_moet_to_btc_swap_with_bins(self, moet_amount: float) -> Dict[str, float]:
         """Calculate MOET -> BTC swap using discrete liquidity bins"""
         
-        # Current price (BTC per MOET)
+        # Current price (BTC per MOET) - should be 0.00001
         current_price = self.pool.get_price()
         
-        # Amount of MOET going in (after fees) - moet_amount is in USD since 1 MOET = $1
+        # moet_amount is in USD terms, apply fees
         moet_after_fees = moet_amount * (1 - self.pool.fee_tier)
         trading_fees = moet_amount * self.pool.fee_tier
         
         # Calculate swap using discrete bins
-        remaining_moet_usd = moet_after_fees  # This is in USD
+        remaining_moet_value = moet_after_fees  # USD value of MOET to swap
         total_btc_out = 0.0
         bins_consumed = []
         
-        # Sort bins by price (closest to peg first for better execution)
+        # Sort bins by price (closest to peg first)
         sorted_bins = sorted([b for b in self.pool.bins if b.is_active], 
                            key=lambda b: abs(b.price - self.pool.peg_price))
         
         for bin in sorted_bins:
-            if remaining_moet_usd <= 0:
+            if remaining_moet_value <= 0:
                 break
                 
-            # Calculate how much MOET this bin can handle
-            # bin.liquidity is total USD liquidity, half is MOET side
-            bin_capacity_moet_usd = bin.liquidity / 2  # MOET side capacity in USD
-            moet_to_consume_usd = min(remaining_moet_usd, bin_capacity_moet_usd)
+            # Each bin has liquidity split 50/50 between MOET and BTC sides
+            bin_moet_liquidity_usd = bin.liquidity / 2
+            moet_to_consume = min(remaining_moet_value, bin_moet_liquidity_usd)
             
-            # Convert USD to MOET tokens (since 1 MOET = $1)
-            moet_tokens = moet_to_consume_usd / 1.0  # USD to MOET tokens
+            # Convert to actual BTC using bin price
+            # bin.price is BTC per MOET, so MOET_USD * (BTC/MOET) / BTC_PRICE = BTC tokens
+            btc_tokens_from_bin = (moet_to_consume / 1.0) * bin.price  # MOET tokens * BTC per MOET
             
-            # Calculate BTC output from this bin
-            # bin.price is BTC per MOET, so MOET tokens * (BTC/MOET) = BTC
-            btc_from_bin = moet_tokens * bin.price  # MOET * (BTC/MOET) = BTC
-            
-            total_btc_out += btc_from_bin
-            remaining_moet_usd -= moet_to_consume_usd
+            total_btc_out += btc_tokens_from_bin
+            remaining_moet_value -= moet_to_consume
             
             bins_consumed.append({
                 "bin_index": bin.bin_index,
                 "price": bin.price,
-                "moet_consumed": moet_to_consume_usd,  # Store in USD for consistency
-                "btc_output": btc_from_bin
+                "moet_consumed": moet_to_consume,
+                "btc_output": btc_tokens_from_bin
             })
         
-        # Calculate slippage metrics
-        # moet_amount is in USD, convert to MOET tokens then to BTC
+        # Calculate expected output without slippage
         moet_tokens_in = moet_amount / 1.0  # USD to MOET tokens (1 MOET = $1)
-        expected_btc_out = moet_tokens_in * current_price  # MOET tokens * (BTC/MOET) = BTC
+        expected_btc_out = moet_tokens_in * current_price
+        
+        # Calculate slippage
         slippage_amount = max(0, expected_btc_out - total_btc_out)
         slippage_percentage = (slippage_amount / expected_btc_out) * 100 if expected_btc_out > 0 else 0
         
-        # Calculate effective price and price impact
-        # effective_price should be BTC per MOET
+        # Calculate effective price (BTC per MOET)
         effective_price = total_btc_out / moet_tokens_in if moet_tokens_in > 0 else current_price
         price_impact = ((current_price - effective_price) / current_price) * 100 if current_price > 0 else 0
-        
-        # Effective liquidity is the sum of active bin liquidity
-        effective_liquidity = self.pool.get_total_active_liquidity()
         
         return {
             "amount_in": moet_amount,
@@ -380,7 +438,7 @@ class UniswapV3SlippageCalculator:
             "trading_fees": trading_fees,
             "current_price": current_price,
             "new_price": effective_price,
-            "effective_liquidity": effective_liquidity,
+            "effective_liquidity": self.pool.get_total_active_liquidity(),
             "bins_consumed": bins_consumed
         }
     
@@ -478,18 +536,30 @@ class UniswapV3SlippageCalculator:
                 if bin_index < len(self.pool.bins):
                     bin = self.pool.bins[bin_index]
                     
-                    # Reduce bin liquidity based on consumption
-                    # Both moet_consumed and btc_consumed are in USD terms, multiply by 2 since we only used half the bin
+                    # Reduce bin liquidity based on actual consumption
+                    # Since we consumed from one side, reduce total liquidity by 2x the consumed amount
                     if swap_result["token_in"] == "MOET":
                         liquidity_consumed = bin_consumption["moet_consumed"] * 2
                     else:
-                        liquidity_consumed = bin_consumption["btc_consumed"] * 2
+                        liquidity_consumed = bin_consumption.get("btc_consumed", 0) * 2
                     
+                    # Update bin liquidity
                     bin.liquidity = max(0, bin.liquidity - liquidity_consumed)
                     
                     # Deactivate bin if liquidity too low
                     if bin.liquidity < 1000:  # Minimum $1k threshold
                         bin.is_active = False
+        
+        # Update pool's current price based on the swap impact
+        if "new_price" in swap_result and swap_result["new_price"] > 0:
+            # Small price adjustment based on trade impact
+            price_impact = swap_result.get("price_impact_percentage", 0) / 100.0
+            if swap_result["token_in"] == "MOET":
+                # MOET -> BTC swap should increase MOET price slightly (less MOET in pool)
+                self.pool.peg_price *= (1 + price_impact * 0.1)  # Small adjustment
+            else:
+                # BTC -> MOET swap should decrease MOET price slightly (more MOET in pool)
+                self.pool.peg_price *= (1 - price_impact * 0.1)  # Small adjustment
         
         # Update legacy fields for backward compatibility
         self.pool._update_legacy_fields()
