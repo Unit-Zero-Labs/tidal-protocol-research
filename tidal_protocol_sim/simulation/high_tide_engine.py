@@ -27,17 +27,18 @@ class HighTideConfig(SimulationConfig):
         
         # High Tide specific parameters
         self.yield_apr = 0.10  # 10% APR for yield tokens
-        self.moet_btc_pool_size = 250_000  # $250K each side (for yield token pool)
+        self.moet_btc_pool_size = 500_000  # $500K each side (minimum viable configuration)
+        self.moet_yield_pool_size = 250_000  # $250K each side (minimum viable configuration)
         self.btc_decline_duration = 60  # 60 minutes
         self.rebalancing_enabled = True
         self.comparison_mode = True  # Include Aave strategy comparison
         
         # Uniswap v3 Pool Configuration (External MOET:BTC trading)
-        self.uniswap_pool_size = 500_000  # Total pool size ($500k default)
-        self.moet_btc_concentration = 0.20  # 80% concentration for MOET:BTC (more conservative)
+        self.uniswap_pool_size = 500_000  # Total pool size ($500k minimum viable)
+        self.moet_btc_concentration = 0.80  # 80% concentration for MOET:BTC (single peg bin)
         
         # Yield Token Pool Configuration (Internal protocol trading)
-        self.yield_token_concentration = 0.05  # 95% concentration for MOET:Yield Tokens (tight peg)
+        self.yield_token_concentration = 0.95  # 95% concentration for MOET:Yield Tokens (single peg bin)
         
         # Agent configuration for High Tide
         self.num_high_tide_agents = 20  # Base number, can be randomized
@@ -165,24 +166,26 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         pool_size = getattr(config, 'uniswap_pool_size', 500_000)  # Total pool size
         btc_price = getattr(config, 'btc_initial_price', 100_000.0)  # Get BTC price from config
         
+        # Get concentration parameters first
+        self.moet_btc_concentration = getattr(config, 'moet_btc_concentration', 0.80)  # 80% concentration for MOET:BTC
+        self.yield_token_concentration = getattr(config, 'yield_token_concentration', 0.05)  # 95% concentration for yield tokens
+        
         # Import the corrected pool creation function
         from ..core.uniswap_v3_math import create_moet_btc_pool
-        self.uniswap_pool = create_moet_btc_pool(pool_size, btc_price)
+        self.uniswap_pool = create_moet_btc_pool(pool_size, btc_price, self.moet_btc_concentration)
         self.slippage_calculator = UniswapV3SlippageCalculator(self.uniswap_pool)
-        self.moet_btc_concentration = getattr(config, 'moet_btc_concentration', 0.20)  # 80% concentration for MOET:BTC
-        self.yield_token_concentration = getattr(config, 'yield_token_concentration', 0.05)  # 95% concentration for yield tokens
         
         # Initialize LP curve tracking for both pools
         self.moet_btc_tracker = LPCurveTracker(pool_size, self.moet_btc_concentration, "MOET:BTC", btc_price)
         
         # Initialize yield token pool tracker
-        yield_pool_size = getattr(config, 'moet_btc_pool_size', 250_000) * 2  # Total pool size
+        yield_pool_size = getattr(config, 'moet_yield_pool_size', 250_000) * 2  # Total pool size
         self.moet_yield_tracker = LPCurveTracker(yield_pool_size, self.yield_token_concentration, "MOET:Yield_Token", btc_price)
         
         # Initialize concentrated liquidity pools for advanced analysis
         from ..core.uniswap_v3_math import create_moet_btc_pool, create_yield_token_pool
-        self.moet_btc_concentrated_pool = create_moet_btc_pool(pool_size, btc_price)
-        self.yield_token_concentrated_pool = create_yield_token_pool(yield_pool_size, btc_price)
+        self.moet_btc_concentrated_pool = create_moet_btc_pool(pool_size, btc_price, self.moet_btc_concentration)
+        self.yield_token_concentrated_pool = create_yield_token_pool(yield_pool_size, btc_price, self.yield_token_concentration)
 
         # Replace agents with High Tide agents
         self.high_tide_agents = create_high_tide_agents(

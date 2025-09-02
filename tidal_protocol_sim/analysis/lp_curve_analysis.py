@@ -45,14 +45,15 @@ class LPCurveTracker:
         self.pool_name = pool_name  # "MOET:BTC" or "MOET:Yield_Token"
         self.btc_price = btc_price  # Store BTC price for correct price calculations
         self.snapshots: List[PoolSnapshot] = []
+        self.cumulative_trade_volume = 0.0  # Track total trade volume for utilization calculation
         
         # Initialize the concentrated liquidity pool
         if "MOET:BTC" in pool_name:
             from ..core.uniswap_v3_math import create_moet_btc_pool
-            self.concentrated_pool = create_moet_btc_pool(initial_pool_size, btc_price)
+            self.concentrated_pool = create_moet_btc_pool(initial_pool_size, btc_price, concentration_range)
         else:
             from ..core.uniswap_v3_math import create_yield_token_pool
-            self.concentrated_pool = create_yield_token_pool(initial_pool_size, btc_price)
+            self.concentrated_pool = create_yield_token_pool(initial_pool_size, btc_price, concentration_range)
         
         # Calculate correct initial price based on pool type
         if "MOET:BTC" in pool_name:
@@ -100,6 +101,9 @@ class LPCurveTracker:
         
         # Update the concentrated liquidity pool if there was a trade
         if trade_amount > 0 and self.concentrated_pool:
+            # Track cumulative trade volume for utilization calculation
+            self.cumulative_trade_volume += trade_amount
+            
             # Simulate price impact on the concentrated liquidity
             trade_direction = "sell" if trade_type == "rebalance" else "buy"
             impact = self.concentrated_pool.simulate_price_impact(trade_amount, trade_direction)
@@ -325,12 +329,20 @@ Key Insights:
         # Sort bins by price to show concentration properly
         bin_data.sort(key=lambda x: x['price'])
         
-        # Take a representative sample of bins to avoid overcrowding
+        # For proper visualization, show all bins but limit to reasonable number
         total_bins = len(bin_data)
-        if total_bins > 50:
-            # Sample every nth bin to get ~30-40 bins for visualization
-            step = max(1, total_bins // 35)
-            sampled_bins = bin_data[::step]
+        if total_bins > 100:
+            # For very large bin counts, show key bins: peg bin + surrounding bins
+            peg_price = 0.00001 if "MOET:BTC" in pool_name else 1.0
+            
+            # Find peg bin
+            peg_bin = min(bin_data, key=lambda x: abs(x['price'] - peg_price))
+            peg_index = bin_data.index(peg_bin)
+            
+            # Show peg bin + 20 bins on each side
+            start_idx = max(0, peg_index - 20)
+            end_idx = min(len(bin_data), peg_index + 21)
+            sampled_bins = bin_data[start_idx:end_idx]
         else:
             sampled_bins = bin_data
         
@@ -346,9 +358,15 @@ Key Insights:
                 current_bin_data = snapshot.concentrated_pool.get_bin_data_for_charts()
                 current_bin_data.sort(key=lambda x: x['price'])
                 
-                # Sample the same bins as the reference
-                if total_bins > 50:
-                    sampled_current = current_bin_data[::step]
+                # Use the same bin selection as the reference
+                if total_bins > 100:
+                    # Use the same range as the reference bins
+                    peg_price = 0.00001 if "MOET:BTC" in pool_name else 1.0
+                    peg_bin = min(current_bin_data, key=lambda x: abs(x['price'] - peg_price))
+                    peg_index = current_bin_data.index(peg_bin)
+                    start_idx = max(0, peg_index - 20)
+                    end_idx = min(len(current_bin_data), peg_index + 21)
+                    sampled_current = current_bin_data[start_idx:end_idx]
                 else:
                     sampled_current = current_bin_data
                 
@@ -370,13 +388,24 @@ Key Insights:
         
         # Add peg reference line based on pool type
         if "MOET:BTC" in pool_name:
-            ax.axvline(x=len(sampled_bins)//2, color='red', linestyle='--', alpha=0.7, 
+            # Find the bin closest to the peg price (0.00001 BTC per MOET)
+            peg_price = 0.00001
+            peg_bin_index = min(range(len(sampled_bins)), 
+                               key=lambda i: abs(sampled_bins[i]['price'] - peg_price))
+            ax.axvline(x=peg_bin_index, color='red', linestyle='--', alpha=0.7, 
                       label="Correct Peg (1 BTC = 100k MOET)")
-            ax.set_title("MOET:BTC LP Bins - 80% at Peg ±0.99%, 100k at ±1%")
+            concentration_pct = int(sample_snapshots[0].concentrated_pool.concentration * 100)
+            ax.set_title(f"MOET:BTC LP Bins - {concentration_pct}% in Single Peg Bin, $100k in 100bp increments")
         else:
-            ax.axvline(x=len(sampled_bins)//2, color='red', linestyle='--', alpha=0.7, 
+            # Find the bin closest to the peg price (1.0)
+            peg_price = 1.0
+            peg_bin_index = min(range(len(sampled_bins)), 
+                               key=lambda i: abs(sampled_bins[i]['price'] - peg_price))
+            ax.axvline(x=peg_bin_index, color='red', linestyle='--', alpha=0.7, 
                       label="Perfect Peg (1:1)")
-            ax.set_title("MOET:Yield Token LP Bins - 95% at Peg, 5% in 1bp increments")
+            concentration_pct = int(sample_snapshots[0].concentrated_pool.concentration * 100)
+            remaining_pct = 100 - concentration_pct
+            ax.set_title(f"MOET:Yield Token LP Bins - {concentration_pct}% at Peg, {remaining_pct}% in 1bp increments")
         
         ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax.grid(True, alpha=0.3)
@@ -459,10 +488,35 @@ Key Insights:
             if i == 0:
                 utilization_rates.append(0)
             else:
-                # Calculate how much of the concentrated liquidity was actually used
-                price_change = abs(snapshot.price - snapshots[0].price) / snapshots[0].price
-                concentration_usage = min(1.0, price_change / (snapshot.concentration_range / 2))
-                utilization_rates.append(concentration_usage * 100)
+                # Calculate concentration efficiency based on cumulative trade volume
+                # This represents how much of the concentrated liquidity has been utilized
+                if hasattr(snapshots[0], 'concentrated_pool') and snapshots[0].concentrated_pool:
+                    # Get initial concentrated liquidity
+                    initial_concentrated_liquidity = self._get_concentrated_liquidity(snapshots[0].concentrated_pool, pool_name)
+                    
+                    # Calculate cumulative trade volume up to this point
+                    cumulative_volume = 0.0
+                    for j in range(i + 1):  # Include current snapshot
+                        if j < len(snapshots) and hasattr(snapshots[j], 'trade_amount'):
+                            cumulative_volume += snapshots[j].trade_amount
+                    
+                    # Calculate utilization as percentage of concentrated liquidity that has been traded
+                    if initial_concentrated_liquidity > 0:
+                        # Assume that trades consume liquidity from concentrated range first
+                        # Scale factor to make utilization visible (concentrated liquidity is typically much larger than individual trades)
+                        utilization_rate = min(100.0, (cumulative_volume / initial_concentrated_liquidity) * 100 * 2)
+                    else:
+                        utilization_rate = 0.0
+                else:
+                    # Fallback: calculate based on trade activity
+                    if snapshot.trade_amount > 0:
+                        # Estimate utilization based on trade size relative to pool size
+                        pool_size = snapshot.moet_reserve + snapshot.btc_reserve
+                        utilization_rate = min(100.0, (snapshot.trade_amount / pool_size) * 100 * 10)  # Scale factor
+                    else:
+                        utilization_rate = 0.0
+                
+                utilization_rates.append(utilization_rate)
         
         ax.fill_between(minutes, utilization_rates, alpha=0.6, color='#9370DB', 
                         label="Concentration Utilization")
@@ -475,6 +529,32 @@ Key Insights:
         ax.legend()
         ax.grid(True, alpha=0.3)
         ax.set_ylim(0, 120)
+    
+    def _get_concentrated_liquidity(self, pool: UniswapV3Pool, pool_name: str) -> float:
+        """Get total liquidity in the concentrated range for a pool"""
+        if not pool or not pool.bins:
+            return 0.0
+        
+        if "MOET:BTC" in pool_name:
+            # For MOET:BTC, concentrated liquidity is the SINGLE peg bin
+            peg_price = 0.00001  # BTC per MOET
+            # Find the bin at the exact peg price
+            for bin in pool.bins:
+                if bin.is_active and abs(bin.price - peg_price) < 1e-8:  # Very close to exact peg
+                    return bin.liquidity
+            return 0.0
+        else:
+            # For yield tokens, concentrated range is tight peg
+            peg_price = 1.0
+            concentrated_min = peg_price * 0.999999
+            concentrated_max = peg_price * 1.000001
+            
+            concentrated_liquidity = 0.0
+            for bin in pool.bins:
+                if bin.is_active and concentrated_min <= bin.price <= concentrated_max:
+                    concentrated_liquidity += bin.liquidity
+            
+            return concentrated_liquidity
 
     def _create_bin_comparison_chart(self, ax, tight_final: PoolSnapshot, conservative_final: PoolSnapshot, price_label: str):
         """Create bin comparison chart for concentration comparison with proper scaling"""

@@ -51,8 +51,15 @@ class ScenarioChartGenerator:
         
         # Special handling for High Tide scenario
         if scenario_name == "High_Tide_BTC_Decline":
+            # Create pool info for the minimum viable configuration
+            pool_info = {
+                "btc_pool_label": "MOET:BTC ($500k Pool)",
+                "yield_pool_label": "MOET:YT ($250k Pool)",
+                "btc_pool_size": 500_000,
+                "yield_pool_size": 250_000
+            }
             return self.high_tide_generator.generate_high_tide_charts(
-                scenario_name, results, charts_dir
+                scenario_name, results, charts_dir, pool_info=pool_info
             )
         
         try:

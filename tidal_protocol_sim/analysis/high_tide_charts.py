@@ -48,7 +48,8 @@ class HighTideChartGenerator:
         scenario_name: str, 
         results: Dict[str, Any], 
         charts_dir: Path,
-        comparison_results: Optional[Dict[str, Any]] = None
+        comparison_results: Optional[Dict[str, Any]] = None,
+        pool_info: Optional[Dict[str, Any]] = None
     ) -> List[Path]:
         """Generate complete High Tide visualization suite"""
         
@@ -102,13 +103,19 @@ class HighTideChartGenerator:
             # 9. LP Curve Evolution Analysis (if LP curve data available)
             # MOET:BTC pool analysis
             if "moet_btc_lp_snapshots" in results and results["moet_btc_lp_snapshots"]:
-                chart_path = self._create_lp_curve_evolution_chart(results, charts_dir, "moet_btc")
+                chart_path = self._create_lp_curve_evolution_chart(results, charts_dir, "moet_btc", pool_info)
                 if chart_path:
                     generated_charts.append(chart_path)
             
             # MOET:Yield Token pool analysis
             if "moet_yield_lp_snapshots" in results and results["moet_yield_lp_snapshots"]:
-                chart_path = self._create_lp_curve_evolution_chart(results, charts_dir, "moet_yield")
+                chart_path = self._create_lp_curve_evolution_chart(results, charts_dir, "moet_yield", pool_info)
+                if chart_path:
+                    generated_charts.append(chart_path)
+            
+            # 10. Pool Utilization Analysis
+            if "moet_btc_lp_snapshots" in results and results["moet_btc_lp_snapshots"]:
+                chart_path = self._create_pool_utilization_chart(results, charts_dir, pool_info)
                 if chart_path:
                     generated_charts.append(chart_path)
                     
@@ -865,17 +872,23 @@ survival rates during market stress.
             print(f"Error creating strategy comparison chart: {e}")
             return None
     
-    def _create_lp_curve_evolution_chart(self, results: Dict, charts_dir: Path, pool_type: str) -> Optional[Path]:
+    def _create_lp_curve_evolution_chart(self, results: Dict, charts_dir: Path, pool_type: str, pool_info: Optional[Dict] = None) -> Optional[Path]:
         """Create LP curve evolution chart from simulation results"""
         
         try:
             # Get the appropriate snapshots data
             if pool_type == "moet_btc":
                 snapshots_data = results.get("moet_btc_lp_snapshots", [])
-                pool_name = "MOET:BTC"
+                if pool_info and "btc_pool_label" in pool_info:
+                    pool_name = pool_info["btc_pool_label"]
+                else:
+                    pool_name = "MOET:BTC"
             elif pool_type == "moet_yield":
                 snapshots_data = results.get("moet_yield_lp_snapshots", [])
-                pool_name = "MOET:Yield_Token"
+                if pool_info and "yield_pool_label" in pool_info:
+                    pool_name = pool_info["yield_pool_label"]
+                else:
+                    pool_name = "MOET:Yield_Token"
             else:
                 return None
                 
@@ -922,4 +935,94 @@ survival rates during market stress.
             
         except Exception as e:
             print(f"Error creating LP curve evolution chart: {e}")
+            return None
+    
+    def _create_pool_utilization_chart(self, results: Dict, charts_dir: Path, pool_info: Optional[Dict] = None) -> Optional[Path]:
+        """Create pool utilization analysis chart showing concentration utilization over time"""
+        
+        try:
+            # Get LP snapshots for both pools
+            btc_snapshots = results.get("moet_btc_lp_snapshots", [])
+            yt_snapshots = results.get("moet_yield_lp_snapshots", [])
+            
+            if not btc_snapshots and not yt_snapshots:
+                return None
+            
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+            fig.suptitle("Pool Utilization Analysis - Concentration Utilization Over Time", fontsize=16, fontweight='bold')
+            
+            # 1. MOET:BTC Pool Utilization
+            if btc_snapshots:
+                minutes = [s.get("minute", i) for i, s in enumerate(btc_snapshots)]
+                btc_utilization = []
+                
+                # Calculate utilization for each snapshot
+                for snapshot in btc_snapshots:
+                    trade_amount = snapshot.get("trade_amount", 0.0)
+                    moet_reserve = snapshot.get("moet_reserve", 0.0)
+                    btc_reserve = snapshot.get("btc_reserve", 0.0)
+                    pool_size = moet_reserve + btc_reserve
+                    
+                    if pool_size > 0:
+                        # 80% of pool is concentrated
+                        concentrated_liquidity = pool_size * 0.8
+                        # Calculate cumulative utilization
+                        cumulative_trades = sum(btc_snapshots[i].get("trade_amount", 0.0) for i in range(btc_snapshots.index(snapshot) + 1))
+                        utilization = min(100.0, (cumulative_trades / concentrated_liquidity) * 100 * 2)
+                        btc_utilization.append(utilization)
+                    else:
+                        btc_utilization.append(0.0)
+                
+                ax1.plot(minutes, btc_utilization, 'b-', linewidth=2, label='MOET:BTC Utilization')
+                ax1.fill_between(minutes, btc_utilization, alpha=0.3, color='blue')
+                ax1.axhline(y=100, color='red', linestyle='--', alpha=0.7, label='100% Utilization (Exhaustion)')
+                ax1.set_ylabel('Concentration Utilization (%)')
+                ax1.set_title('MOET:BTC Pool - Concentration Utilization Over Time')
+                ax1.legend()
+                ax1.grid(True, alpha=0.3)
+                ax1.set_ylim(0, 120)
+            
+            # 2. MOET:YT Pool Utilization
+            if yt_snapshots:
+                minutes = [s.get("minute", i) for i, s in enumerate(yt_snapshots)]
+                yt_utilization = []
+                
+                # Calculate utilization for each snapshot
+                for snapshot in yt_snapshots:
+                    trade_amount = snapshot.get("trade_amount", 0.0)
+                    moet_reserve = snapshot.get("moet_reserve", 0.0)
+                    btc_reserve = snapshot.get("btc_reserve", 0.0)
+                    pool_size = moet_reserve + btc_reserve
+                    
+                    if pool_size > 0:
+                        # 95% of pool is concentrated
+                        concentrated_liquidity = pool_size * 0.95
+                        # Calculate cumulative utilization
+                        cumulative_trades = sum(yt_snapshots[i].get("trade_amount", 0.0) for i in range(yt_snapshots.index(snapshot) + 1))
+                        utilization = min(100.0, (cumulative_trades / concentrated_liquidity) * 100 * 2)
+                        yt_utilization.append(utilization)
+                    else:
+                        yt_utilization.append(0.0)
+                
+                ax2.plot(minutes, yt_utilization, 'g-', linewidth=2, label='MOET:YT Utilization')
+                ax2.fill_between(minutes, yt_utilization, alpha=0.3, color='green')
+                ax2.axhline(y=100, color='red', linestyle='--', alpha=0.7, label='100% Utilization (Exhaustion)')
+                ax2.set_xlabel('Time (minutes)')
+                ax2.set_ylabel('Concentration Utilization (%)')
+                ax2.set_title('MOET:YT Pool - Concentration Utilization Over Time')
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
+                ax2.set_ylim(0, 120)
+            
+            plt.tight_layout()
+            
+            # Save chart
+            chart_path = charts_dir / "pool_utilization_analysis.png"
+            plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            return chart_path
+            
+        except Exception as e:
+            print(f"Error creating pool utilization chart: {e}")
             return None

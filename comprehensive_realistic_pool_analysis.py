@@ -8,7 +8,7 @@ ACTUAL High Tide simulation data instead of synthetic trade amounts.
 
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -36,31 +36,54 @@ def run_comprehensive_pool_analysis():
     print("Using High Tide simulation data for key pool configurations")
     print("=" * 80)
     
-    # Simplified pool depth options - focus on most relevant sizes
-    pool_depths = [
-        {"size": 500_000, "label": "$0.5M Total"},
-        {"size": 1_000_000, "label": "$1M Total"},
-        {"size": 2_000_000, "label": "$2M Total"},
-        {"size": 5_000_000, "label": "$5M Total"},
-        {"size": 10_000_000, "label": "$10M Total"}
+    # Specific pool configurations as requested
+    moet_btc_pools = [
+        {"size": 250_000, "label": "$250k MOET:BTC"},
+        {"size": 500_000, "label": "$500k MOET:BTC"},
+        {"size": 1_000_000, "label": "$1M MOET:BTC"},
+        {"size": 2_000_000, "label": "$2M MOET:BTC"}
     ]
+    
+    moet_yt_pools = [
+        {"size": 250_000, "label": "$250k MOET:YT"},
+        {"size": 500_000, "label": "$500k MOET:YT"},
+        {"size": 1_000_000, "label": "$1M MOET:YT"},
+        {"size": 2_000_000, "label": "$2M MOET:YT"}
+    ]
+    
+    # Generate all permutations of pool combinations
+    pool_combinations = []
+    for btc_pool in moet_btc_pools:
+        for yt_pool in moet_yt_pools:
+            combination = {
+                "btc_pool": btc_pool,
+                "yt_pool": yt_pool,
+                "label": f"{btc_pool['label']} + {yt_pool['label']}",
+                "total_size": btc_pool["size"] + yt_pool["size"]
+            }
+            pool_combinations.append(combination)
+    
+    # Sort by total size for logical ordering
+    pool_combinations.sort(key=lambda x: x["total_size"])
     
     results_matrix = []
     
     print(f"📊 Analysis Configuration:")
-    print(f"   • Pool Sizes: {len(pool_depths)} options")
+    print(f"   • MOET:BTC Pool Sizes: {len(moet_btc_pools)} options")
+    print(f"   • MOET:YT Pool Sizes: {len(moet_yt_pools)} options")
+    print(f"   • Total Combinations: {len(pool_combinations)} permutations")
     print(f"   • Monte Carlo Runs per Config: {MONTE_CARLO_RUNS}")
-    print(f"   • Total Configurations: {len(pool_depths)} combinations")
-    print(f"   • MOET:BTC Concentration: 80% (within ±0.99% of peg)")
-    print(f"   • MOET:Yield Token Concentration: 95% (at 1:1 peg)")
+    print(f"   • MOET:BTC Concentration: 80% (single peg bin)")
+    print(f"   • MOET:Yield Token Concentration: 95% (single peg bin)")
     print()
     
-    # Test key configurations
-    for i, pool_config in enumerate(pool_depths):
-        pool_size = pool_config["size"]
-        pool_label = pool_config["label"]
+    # Test all pool combinations
+    for i, combination in enumerate(pool_combinations):
+        btc_pool_size = combination["btc_pool"]["size"]
+        yt_pool_size = combination["yt_pool"]["size"]
+        combination_label = combination["label"]
         
-        print(f"🚀 [{i+1}/{len(pool_depths)}] Running: {pool_label} pools")
+        print(f"🚀 [{i+1}/{len(pool_combinations)}] Running: {combination_label}")
         
         # Store results from all runs for this configuration
         all_runs_agent_outcomes = []
@@ -71,14 +94,15 @@ def run_comprehensive_pool_analysis():
         try:
             print(f"   Running {MONTE_CARLO_RUNS} Monte Carlo simulations...")
             for run_num in range(MONTE_CARLO_RUNS):
-                # Create High Tide configuration with fixed parameters
+                # Create High Tide configuration with specific pool sizes
                 config = HighTideConfig()
                 config.num_high_tide_agents = 20  # Sufficient sample size
-                config.btc_decline_duration = 30  # Focused analysis duration
-                config.uniswap_pool_size = pool_size  # MOET:BTC pool
-                config.moet_btc_pool_size = pool_size // 2  # Each side of yield pool
-                config.moet_btc_concentration = 0.20  # 80% concentration (±0.99%)
-                config.yield_token_concentration = 0.05  # 95% concentration (tight peg)
+                config.btc_decline_duration = 60  # Focused analysis duration
+                config.uniswap_pool_size = btc_pool_size  # MOET:BTC pool
+                config.moet_btc_pool_size = btc_pool_size  # MOET:BTC pool size
+                config.moet_yield_pool_size = yt_pool_size  # MOET:YT pool size
+                config.moet_btc_concentration = 0.80  # 80% concentration (single peg bin)
+                config.yield_token_concentration = 0.95  # 95% concentration (single peg bin)
                 
                 # Run ACTUAL High Tide simulation
                 engine = HighTideSimulationEngine(config)
@@ -117,12 +141,12 @@ def run_comprehensive_pool_analysis():
 
             # Store comprehensive results
             result_data = {
-                "btc_pool_label": pool_label,
-                "yield_pool_label": pool_label,
-                "pool_label": pool_label,
-                "pool_size": pool_size,
-                "btc_pool_size": pool_size,
-                "yield_pool_size": pool_size,
+                "btc_pool_label": combination["btc_pool"]["label"],
+                "yield_pool_label": combination["yt_pool"]["label"],
+                "pool_label": combination_label,
+                "pool_size": combination["total_size"],
+                "btc_pool_size": btc_pool_size,
+                "yield_pool_size": yt_pool_size,
                 "full_simulation_results": last_run_results, # Store last run for detailed chart generation
                 
                 # Agent statistics
@@ -158,10 +182,10 @@ def run_comprehensive_pool_analysis():
             
             results_matrix.append(result_data)
             
-            print(f"   ✅ Aggregated results for {pool_label}: {len(agent_outcomes)} total agent scenarios over {MONTE_CARLO_RUNS} runs.")
+            print(f"   ✅ Aggregated results for {combination_label}: {len(agent_outcomes)} total agent scenarios over {MONTE_CARLO_RUNS} runs.")
             
         except Exception as e:
-            print(f"   ❌ Failed during simulation for {pool_label}: {e}")
+            print(f"   ❌ Failed during simulation for {combination_label}: {e}")
             import traceback
             traceback.print_exc()
             continue
@@ -204,7 +228,11 @@ def create_comprehensive_analysis_charts(results_matrix, output_dir: Path):
     efficiency_charts = create_pool_efficiency_analysis(df, output_dir)
     generated_charts.extend(efficiency_charts)
     
-    # 6. LP CURVE EVOLUTION CHARTS (for best and worst configurations)
+    # 6. UTILIZATION SUSTAINABILITY ANALYSIS
+    utilization_charts = create_utilization_sustainability_analysis(results_matrix, output_dir)
+    generated_charts.extend(utilization_charts)
+    
+    # 7. LP CURVE EVOLUTION CHARTS (for best and worst configurations)
     lp_charts = create_lp_curve_analysis(results_matrix, output_dir)
     generated_charts.extend(lp_charts)
     
@@ -728,6 +756,260 @@ OPTIMAL STRATEGY:
     return charts
 
 
+def analyze_concentration_utilization(results_matrix) -> List[Dict]:
+    """Analyze concentration utilization patterns for each configuration"""
+    
+    utilization_data = []
+    
+    for i, result in enumerate(results_matrix):
+        simulation_results = result.get("full_simulation_results", {})
+        
+        # Get LP snapshots for both pools
+        btc_snapshots = simulation_results.get("moet_btc_lp_snapshots", [])
+        yt_snapshots = simulation_results.get("moet_yield_lp_snapshots", [])
+        
+        btc_max_utilization = 0.0
+        yt_max_utilization = 0.0
+        
+        # Analyze MOET:BTC utilization
+        if btc_snapshots:
+            btc_max_utilization = analyze_pool_utilization(btc_snapshots, "MOET:BTC")
+        
+        # Analyze MOET:YT utilization  
+        if yt_snapshots:
+            yt_max_utilization = analyze_pool_utilization(yt_snapshots, "MOET:Yield_Token")
+        
+        utilization_data.append({
+            "config_idx": i,
+            "pool_label": result.get("pool_label", f"Config_{i}"),
+            "btc_max_utilization": btc_max_utilization,
+            "yt_max_utilization": yt_max_utilization,
+            "max_utilization": max(btc_max_utilization, yt_max_utilization),
+            "avg_cost_per_agent": result.get("avg_cost_per_agent", 0),
+            "btc_pool_size": result.get("btc_pool_size", 0),
+            "yield_pool_size": result.get("yield_pool_size", 0)
+        })
+    
+    return utilization_data
+
+def analyze_pool_utilization(snapshots, pool_name: str) -> float:
+    """Analyze utilization pattern for a specific pool by simulating concentration utilization"""
+    
+    if not snapshots:
+        return 0.0
+    
+    # Calculate utilization based on trade volume and pool size
+    total_trade_volume = 0.0
+    pool_size = 0.0
+    
+    for snapshot in snapshots:
+        if isinstance(snapshot, dict):
+            # Get trade amount from snapshot
+            trade_amount = snapshot.get("trade_amount", 0.0)
+            total_trade_volume += trade_amount
+            
+            # Get pool size from reserves
+            if pool_size == 0.0:  # Only calculate once
+                moet_reserve = snapshot.get("moet_reserve", 0.0)
+                btc_reserve = snapshot.get("btc_reserve", 0.0)
+                pool_size = moet_reserve + btc_reserve
+    
+    if pool_size == 0.0:
+        return 0.0
+    
+    # Calculate concentration utilization
+    # For MOET:BTC: 80% of pool is concentrated, so concentrated liquidity = pool_size * 0.8
+    # For MOET:YT: 95% of pool is concentrated, so concentrated liquidity = pool_size * 0.95
+    if "MOET:BTC" in pool_name:
+        concentrated_liquidity = pool_size * 0.8
+    else:
+        concentrated_liquidity = pool_size * 0.95
+    
+    # Utilization = (total trade volume / concentrated liquidity) * 100
+    # Scale factor to make it realistic (trades don't consume 1:1 liquidity)
+    utilization = min(100.0, (total_trade_volume / concentrated_liquidity) * 100 * 2)
+    
+    return utilization
+
+def find_optimal_configurations(results_matrix, utilization_analysis) -> tuple:
+    """Find best and worst configurations based on cost and utilization sustainability"""
+    
+    # Filter configurations that don't exhaust liquidity (utilization < 100%)
+    sustainable_configs = [u for u in utilization_analysis if u["max_utilization"] < 100.0]
+    
+    if not sustainable_configs:
+        print("⚠️  No configurations maintain utilization < 100% - using all configurations")
+        sustainable_configs = utilization_analysis
+    
+    # Among sustainable configurations, find the one with lowest cost
+    if sustainable_configs:
+        best_sustainable = min(sustainable_configs, key=lambda x: x["avg_cost_per_agent"])
+        best_idx = best_sustainable["config_idx"]
+    else:
+        # Fallback to lowest cost overall
+        best_idx = min(range(len(results_matrix)), key=lambda i: results_matrix[i]["avg_cost_per_agent"])
+    
+    # Find worst configuration (highest cost among all)
+    worst_idx = max(range(len(results_matrix)), key=lambda i: results_matrix[i]["avg_cost_per_agent"])
+    
+    return best_idx, worst_idx
+
+def create_utilization_sustainability_analysis(results_matrix, output_dir: Path) -> List[Path]:
+    """Create utilization sustainability analysis charts"""
+    
+    charts = []
+    
+    if not results_matrix:
+        return charts
+    
+    # Analyze concentration utilization
+    utilization_analysis = analyze_concentration_utilization(results_matrix)
+    
+    # Create utilization vs cost scatter plot
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle("Liquidity Pool Utilization Sustainability Analysis", fontsize=16, fontweight='bold')
+    
+    # 1. Cost vs Max Utilization Scatter Plot
+    costs = [u["avg_cost_per_agent"] for u in utilization_analysis]
+    max_utilizations = [u["max_utilization"] for u in utilization_analysis]
+    btc_pool_sizes = [u["btc_pool_size"] for u in utilization_analysis]
+    yt_pool_sizes = [u["yield_pool_size"] for u in utilization_analysis]
+    
+    # Color code by BTC pool size
+    colors = plt.cm.viridis(np.linspace(0, 1, len(set(btc_pool_sizes))))
+    btc_size_to_color = {size: colors[i] for i, size in enumerate(sorted(set(btc_pool_sizes)))}
+    
+    for i, (cost, utilization, btc_size, yt_size) in enumerate(zip(costs, max_utilizations, btc_pool_sizes, yt_pool_sizes)):
+        color = btc_size_to_color[btc_size]
+        ax1.scatter(utilization, cost, c=[color], s=100, alpha=0.7, 
+                   label=f"${btc_size//1000}k BTC" if i == 0 or btc_size != btc_pool_sizes[i-1] else "")
+    
+    ax1.axvline(x=100, color='red', linestyle='--', alpha=0.7, label="100% Utilization (Exhaustion)")
+    ax1.set_xlabel("Maximum Concentration Utilization (%)")
+    ax1.set_ylabel("Average Cost per Agent ($)")
+    ax1.set_title("Cost vs Liquidity Exhaustion Risk")
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Sustainable vs Unsustainable Configurations
+    sustainable_configs = [u for u in utilization_analysis if u["max_utilization"] < 100.0]
+    unsustainable_configs = [u for u in utilization_analysis if u["max_utilization"] >= 100.0]
+    
+    categories = ["Sustainable\n(< 100% utilization)", "Unsustainable\n(≥ 100% utilization)"]
+    counts = [len(sustainable_configs), len(unsustainable_configs)]
+    colors = ['green', 'red']
+    
+    bars = ax2.bar(categories, counts, color=colors, alpha=0.7)
+    ax2.set_ylabel("Number of Configurations")
+    ax2.set_title("Configuration Sustainability Distribution")
+    ax2.grid(True, alpha=0.3)
+    
+    # Add count labels on bars
+    for bar, count in zip(bars, counts):
+        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1, 
+                str(count), ha='center', va='bottom', fontweight='bold')
+    
+    # 3. Pool Size vs Utilization Heatmap
+    btc_sizes = sorted(set(btc_pool_sizes))
+    yt_sizes = sorted(set(yt_pool_sizes))
+    
+    utilization_matrix = np.zeros((len(yt_sizes), len(btc_sizes)))
+    cost_matrix = np.zeros((len(yt_sizes), len(btc_sizes)))
+    
+    for u in utilization_analysis:
+        btc_idx = btc_sizes.index(u["btc_pool_size"])
+        yt_idx = yt_sizes.index(u["yield_pool_size"])
+        utilization_matrix[yt_idx, btc_idx] = u["max_utilization"]
+        cost_matrix[yt_idx, btc_idx] = u["avg_cost_per_agent"]
+    
+    im1 = ax3.imshow(utilization_matrix, cmap='RdYlBu_r', aspect='auto')
+    ax3.set_xticks(range(len(btc_sizes)))
+    ax3.set_xticklabels([f"${s//1000}k" for s in btc_sizes])
+    ax3.set_yticks(range(len(yt_sizes)))
+    ax3.set_yticklabels([f"${s//1000}k" for s in yt_sizes])
+    ax3.set_xlabel("MOET:BTC Pool Size")
+    ax3.set_ylabel("MOET:YT Pool Size")
+    ax3.set_title("Maximum Utilization by Pool Configuration")
+    
+    # Add colorbar
+    cbar1 = plt.colorbar(im1, ax=ax3)
+    cbar1.set_label("Max Utilization (%)")
+    
+    # Add text annotations
+    for i in range(len(yt_sizes)):
+        for j in range(len(btc_sizes)):
+            text = ax3.text(j, i, f"{utilization_matrix[i, j]:.0f}%",
+                           ha="center", va="center", color="black", fontweight='bold')
+    
+    # 4. Cost Matrix Heatmap
+    im2 = ax4.imshow(cost_matrix, cmap='RdYlGn_r', aspect='auto')
+    ax4.set_xticks(range(len(btc_sizes)))
+    ax4.set_xticklabels([f"${s//1000}k" for s in btc_sizes])
+    ax4.set_yticks(range(len(yt_sizes)))
+    ax4.set_yticklabels([f"${s//1000}k" for s in yt_sizes])
+    ax4.set_xlabel("MOET:BTC Pool Size")
+    ax4.set_ylabel("MOET:YT Pool Size")
+    ax4.set_title("Average Cost per Agent by Pool Configuration")
+    
+    # Add colorbar
+    cbar2 = plt.colorbar(im2, ax=ax4)
+    cbar2.set_label("Cost per Agent ($)")
+    
+    # Add text annotations
+    for i in range(len(yt_sizes)):
+        for j in range(len(btc_sizes)):
+            text = ax4.text(j, i, f"${cost_matrix[i, j]:.0f}",
+                           ha="center", va="center", color="black", fontweight='bold')
+    
+    plt.tight_layout()
+    
+    # Save chart
+    chart_path = output_dir / "utilization_sustainability_analysis.png"
+    plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    charts.append(chart_path)
+    
+    # Create detailed utilization report
+    create_utilization_report(utilization_analysis, output_dir)
+    
+    return charts
+
+def create_utilization_report(utilization_analysis, output_dir: Path):
+    """Create detailed utilization analysis report"""
+    
+    report_path = output_dir / "utilization_analysis_report.md"
+    
+    with open(report_path, 'w') as f:
+        f.write("# Liquidity Pool Utilization Analysis Report\n\n")
+        f.write("## Executive Summary\n\n")
+        
+        sustainable_configs = [u for u in utilization_analysis if u["max_utilization"] < 100.0]
+        unsustainable_configs = [u for u in utilization_analysis if u["max_utilization"] >= 100.0]
+        
+        f.write(f"- **Total Configurations**: {len(utilization_analysis)}\n")
+        f.write(f"- **Sustainable Configurations**: {len(sustainable_configs)} ({len(sustainable_configs)/len(utilization_analysis)*100:.1f}%)\n")
+        f.write(f"- **Unsustainable Configurations**: {len(unsustainable_configs)} ({len(unsustainable_configs)/len(utilization_analysis)*100:.1f}%)\n\n")
+        
+        if sustainable_configs:
+            best_sustainable = min(sustainable_configs, key=lambda x: x["avg_cost_per_agent"])
+            f.write(f"## Recommended Configuration\n\n")
+            f.write(f"**{best_sustainable['pool_label']}**\n")
+            f.write(f"- Average Cost per Agent: ${best_sustainable['avg_cost_per_agent']:.0f}\n")
+            f.write(f"- Maximum Utilization: {best_sustainable['max_utilization']:.1f}%\n")
+            f.write(f"- BTC Pool Size: ${best_sustainable['btc_pool_size']:,}\n")
+            f.write(f"- YT Pool Size: ${best_sustainable['yield_pool_size']:,}\n\n")
+        
+        f.write("## Detailed Configuration Analysis\n\n")
+        f.write("| Configuration | BTC Pool | YT Pool | Max Utilization | Avg Cost | Status |\n")
+        f.write("|---------------|----------|---------|-----------------|----------|--------|\n")
+        
+        for u in sorted(utilization_analysis, key=lambda x: x["avg_cost_per_agent"]):
+            status = "✅ Sustainable" if u["max_utilization"] < 100.0 else "❌ Unsustainable"
+            f.write(f"| {u['pool_label']} | ${u['btc_pool_size']//1000}k | ${u['yield_pool_size']//1000}k | {u['max_utilization']:.1f}% | ${u['avg_cost_per_agent']:.0f} | {status} |\n")
+    
+    print(f"📊 Utilization analysis report saved: {report_path}")
+
 def create_lp_curve_analysis(results_matrix, output_dir: Path) -> List[Path]:
     """Create LP curve evolution charts for best and worst configurations"""
     
@@ -736,13 +1018,18 @@ def create_lp_curve_analysis(results_matrix, output_dir: Path) -> List[Path]:
     if not results_matrix:
         return charts
     
-    # Find best and worst configurations
-    costs = [r["avg_cost_per_agent"] for r in results_matrix]
-    best_idx = costs.index(min(costs))
-    worst_idx = costs.index(max(costs))
+    # Analyze concentration utilization for each configuration
+    print("🔍 Analyzing concentration utilization patterns...")
+    utilization_analysis = analyze_concentration_utilization(results_matrix)
+    
+    # Find best and worst configurations based on combined metrics
+    best_idx, worst_idx = find_optimal_configurations(results_matrix, utilization_analysis)
     
     best_config = results_matrix[best_idx]
     worst_config = results_matrix[worst_idx]
+    
+    print(f"✅ Best Configuration: {best_config['pool_label']} (Cost: ${best_config['avg_cost_per_agent']:.0f}, Max Utilization: {utilization_analysis[best_idx]['max_utilization']:.1f}%)")
+    print(f"❌ Worst Configuration: {worst_config['pool_label']} (Cost: ${worst_config['avg_cost_per_agent']:.0f}, Max Utilization: {utilization_analysis[worst_idx]['max_utilization']:.1f}%)")
     
     # Generate LP curve charts for best and worst configurations
     chart_generator = HighTideChartGenerator()
@@ -757,7 +1044,13 @@ def create_lp_curve_analysis(results_matrix, output_dir: Path) -> List[Path]:
         best_charts = chart_generator.generate_high_tide_charts(
             scenario_name=f"Best_Config_{best_label.replace('$', '').replace(':', '_')}",
             results=best_config["full_simulation_results"],
-            charts_dir=best_charts_dir
+            charts_dir=best_charts_dir,
+            pool_info={
+                "btc_pool_label": best_config.get("btc_pool_label", "Unknown"),
+                "yield_pool_label": best_config.get("yield_pool_label", "Unknown"),
+                "btc_pool_size": best_config.get("btc_pool_size", 0),
+                "yield_pool_size": best_config.get("yield_pool_size", 0)
+            }
         )
         charts.extend(best_charts)
         
@@ -766,7 +1059,13 @@ def create_lp_curve_analysis(results_matrix, output_dir: Path) -> List[Path]:
         worst_charts = chart_generator.generate_high_tide_charts(
             scenario_name=f"Worst_Config_{worst_label.replace('$', '').replace(':', '_')}",
             results=worst_config["full_simulation_results"],
-            charts_dir=worst_charts_dir
+            charts_dir=worst_charts_dir,
+            pool_info={
+                "btc_pool_label": worst_config.get("btc_pool_label", "Unknown"),
+                "yield_pool_label": worst_config.get("yield_pool_label", "Unknown"),
+                "btc_pool_size": worst_config.get("btc_pool_size", 0),
+                "yield_pool_size": worst_config.get("yield_pool_size", 0)
+            }
         )
         charts.extend(worst_charts)
         

@@ -32,6 +32,7 @@ class UniswapV3Pool:
     btc_price: float = 100_000.0  # BTC price in USD
     num_bins: int = 100  # Number of discrete liquidity bins
     fee_tier: float = 0.003  # 0.3% fee tier
+    concentration: float = 0.80  # Concentration level (0.80 = 80% at peg)
     
     # Legacy fields for backward compatibility
     token0_reserve: Optional[float] = None  # MOET reserve (calculated from bins)
@@ -72,141 +73,154 @@ class UniswapV3Pool:
             self._initialize_yield_token_distribution()
     
     def _initialize_moet_btc_distribution(self):
-        """Initialize MOET:BTC liquidity distribution:
-        - 80% in bins within ±0.99% of peg (0.00001 BTC per MOET)
-        - 100k liquidity in bins at exactly ±1% from peg
-        - Remaining liquidity distributed in outer bins
+        """Initialize MOET:BTC liquidity distribution with proper Uniswap V3 concentrated liquidity:
+        - 80% of total liquidity in the SINGLE bin at the exact peg price (0.00001 BTC per MOET)
+        - $100k liquidity distributed in 100 basis point increments on each side of the peg
+        - Remaining liquidity in outer bins
         """
         
-        # Create detailed price range around peg
         peg_price = self.peg_price  # 0.00001 BTC per MOET
         
-        # Define precise ranges
-        concentrated_min = peg_price * 0.9901  # -0.99%
-        concentrated_max = peg_price * 1.0099  # +0.99%
-        edge_low = peg_price * 0.99            # -1.00%
-        edge_high = peg_price * 1.01           # +1.00%
-        outer_min = peg_price * 0.98           # -2% outer range
-        outer_max = peg_price * 1.02           # +2% outer range
+        # 1. Create the SINGLE peg bin with 80% of total liquidity
+        peg_liquidity = self.total_liquidity * self.concentration  # 80% of total
+        self.bins.append(LiquidityBin(
+            price=peg_price,
+            liquidity=peg_liquidity,
+            bin_index=0,
+            is_active=True
+        ))
         
-        # Calculate number of bins for each range
-        concentrated_bins = int(self.num_bins * 0.6)  # 60 bins for ±0.99%
-        edge_bins = 4                                  # 2 bins each for ±1%
-        outer_bins = self.num_bins - concentrated_bins - edge_bins
+        # 2. Create bins in 100 basis point increments on each side of the peg
+        # 100 basis points = 1% = 0.01
+        bp_increment = 0.01  # 1%
+        bins_per_side = 10   # 10 bins on each side (10% range each side)
         
-        # Create concentrated range bins (±0.99%)
-        concentrated_prices = np.linspace(concentrated_min, concentrated_max, concentrated_bins)
-        concentrated_liquidity = (self.total_liquidity * 0.8) / concentrated_bins
+        # Calculate liquidity per bin for the $100k total
+        total_side_liquidity = 100_000  # $100k as specified
+        liquidity_per_side_bin = total_side_liquidity / (bins_per_side * 2)  # Split between both sides
         
-        for i, price in enumerate(concentrated_prices):
+        # Lower side bins (below peg)
+        for i in range(1, bins_per_side + 1):
+            price = peg_price * (1 - bp_increment * i)  # Each bin is 1% lower
             self.bins.append(LiquidityBin(
                 price=price,
-                liquidity=concentrated_liquidity,
+                liquidity=liquidity_per_side_bin,
                 bin_index=i,
                 is_active=True
             ))
         
-        # Create edge bins (exactly ±1%)
-        edge_liquidity = 100_000 / 4  # 25k per bin
-        edge_prices = [edge_low, edge_low * 0.9999, edge_high * 1.0001, edge_high]
-        
-        for i, price in enumerate(edge_prices):
+        # Upper side bins (above peg)
+        for i in range(1, bins_per_side + 1):
+            price = peg_price * (1 + bp_increment * i)  # Each bin is 1% higher
             self.bins.append(LiquidityBin(
                 price=price,
-                liquidity=edge_liquidity,
-                bin_index=concentrated_bins + i,
+                liquidity=liquidity_per_side_bin,
+                bin_index=bins_per_side + i,
                 is_active=True
             ))
         
-        # Create outer range bins (remaining liquidity)
-        if outer_bins > 0:
-            remaining_liquidity = self.total_liquidity - (self.total_liquidity * 0.8) - 100_000
-            outer_liquidity_per_bin = max(remaining_liquidity / outer_bins, 1000)
+        # 3. Create outer bins with remaining liquidity
+        remaining_liquidity = self.total_liquidity - peg_liquidity - total_side_liquidity
+        outer_bins_count = self.num_bins - (1 + bins_per_side * 2)  # Remaining bins
+        
+        if outer_bins_count > 0 and remaining_liquidity > 0:
+            outer_liquidity_per_bin = remaining_liquidity / outer_bins_count
             
-            # Lower outer range
-            lower_outer_count = outer_bins // 2
-            lower_prices = np.linspace(outer_min, concentrated_min, lower_outer_count)
-            
-            for i, price in enumerate(lower_prices):
+            # Lower outer range (beyond 10% from peg)
+            lower_outer_count = outer_bins_count // 2
+            for i in range(lower_outer_count):
+                price = peg_price * (1 - bp_increment * (bins_per_side + 1 + i))
                 self.bins.append(LiquidityBin(
                     price=price,
                     liquidity=outer_liquidity_per_bin,
-                    bin_index=concentrated_bins + edge_bins + i,
+                    bin_index=1 + bins_per_side * 2 + i,
                     is_active=outer_liquidity_per_bin > 1000
                 ))
             
-            # Upper outer range
-            upper_outer_count = outer_bins - lower_outer_count
-            upper_prices = np.linspace(concentrated_max, outer_max, upper_outer_count)
-            
-            for i, price in enumerate(upper_prices):
+            # Upper outer range (beyond 10% from peg)
+            upper_outer_count = outer_bins_count - lower_outer_count
+            for i in range(upper_outer_count):
+                price = peg_price * (1 + bp_increment * (bins_per_side + 1 + i))
                 self.bins.append(LiquidityBin(
                     price=price,
                     liquidity=outer_liquidity_per_bin,
-                    bin_index=concentrated_bins + edge_bins + lower_outer_count + i,
+                    bin_index=1 + bins_per_side * 2 + lower_outer_count + i,
                     is_active=outer_liquidity_per_bin > 1000
                 ))
     
     def _initialize_yield_token_distribution(self):
-        """Initialize MOET:Yield Token liquidity distribution:
-        - 95% in bins exactly at 1:1 peg
-        - 5% distributed equally in 1 basis point increments off peg
+        """Initialize MOET:Yield Token liquidity distribution with single peg bin model:
+        - 95% of total liquidity in the SINGLE bin at the exact peg price (1.0)
+        - Remaining 5% distributed in 1 basis point increments on each side of the peg
         """
         
         peg_price = self.peg_price  # 1.0 MOET per Yield Token
         
-        # Define tight ranges (1 basis point = 0.01%)
-        peg_tolerance = 0.000001  # Very tight peg bins (0.0001% tolerance)
-        bp_increment = 0.0001     # 1 basis point = 0.01%
+        # 1. Create the SINGLE peg bin with 95% of total liquidity
+        peg_liquidity = self.total_liquidity * self.concentration  # 95% of total
+        self.bins.append(LiquidityBin(
+            price=peg_price,
+            liquidity=peg_liquidity,
+            bin_index=0,
+            is_active=True
+        ))
         
-        # Calculate bin allocation
-        peg_bins_count = int(self.num_bins * 0.1)    # 10% of bins for tight peg
-        outer_bins_count = self.num_bins - peg_bins_count
+        # 2. Create bins in 1 basis point increments on each side of the peg
+        # 1 basis point = 0.01% = 0.0001
+        bp_increment = 0.0001  # 1 basis point
+        bins_per_side = 50     # 50 bins on each side (5% range each side)
         
-        # Create tight peg bins (95% of liquidity)
-        peg_liquidity_per_bin = (self.total_liquidity * 0.95) / peg_bins_count
-        peg_min = peg_price * (1 - peg_tolerance)
-        peg_max = peg_price * (1 + peg_tolerance)
-        peg_prices = np.linspace(peg_min, peg_max, peg_bins_count)
+        # Calculate liquidity per bin for the remaining 5%
+        remaining_liquidity = self.total_liquidity * (1 - self.concentration)  # 5%
+        liquidity_per_side_bin = remaining_liquidity / (bins_per_side * 2)  # Split between both sides
         
-        for i, price in enumerate(peg_prices):
+        # Lower side bins (below peg)
+        for i in range(1, bins_per_side + 1):
+            price = peg_price * (1 - bp_increment * i)  # Each bin is 1bp lower
             self.bins.append(LiquidityBin(
                 price=price,
-                liquidity=peg_liquidity_per_bin,
+                liquidity=liquidity_per_side_bin,
                 bin_index=i,
                 is_active=True
             ))
         
-        # Create outer bins (5% liquidity distributed in 1bp increments)
+        # Upper side bins (above peg)
+        for i in range(1, bins_per_side + 1):
+            price = peg_price * (1 + bp_increment * i)  # Each bin is 1bp higher
+            self.bins.append(LiquidityBin(
+                price=price,
+                liquidity=liquidity_per_side_bin,
+                bin_index=bins_per_side + i,
+                is_active=True
+            ))
+        
+        # 3. Create outer bins with any remaining liquidity
+        outer_bins_count = self.num_bins - (1 + bins_per_side * 2)  # Remaining bins
+        
         if outer_bins_count > 0:
-            outer_liquidity_per_bin = (self.total_liquidity * 0.05) / outer_bins_count
+            # Any remaining liquidity goes to outer bins
+            outer_liquidity_per_bin = 1000  # Small amount for outer bins
             
-            # Lower range (below peg)
-            lower_count = outer_bins_count // 2
-            lower_min = peg_price * (1 - bp_increment * lower_count)
-            lower_max = peg_min
-            lower_prices = np.linspace(lower_min, lower_max, lower_count)
-            
-            for i, price in enumerate(lower_prices):
+            # Lower outer range (beyond 5% from peg)
+            lower_outer_count = outer_bins_count // 2
+            for i in range(lower_outer_count):
+                price = peg_price * (1 - bp_increment * (bins_per_side + 1 + i))
                 self.bins.append(LiquidityBin(
                     price=price,
                     liquidity=outer_liquidity_per_bin,
-                    bin_index=peg_bins_count + i,
-                    is_active=outer_liquidity_per_bin > 1000
+                    bin_index=1 + bins_per_side * 2 + i,
+                    is_active=True
                 ))
             
-            # Upper range (above peg)
-            upper_count = outer_bins_count - lower_count
-            upper_min = peg_max
-            upper_max = peg_price * (1 + bp_increment * upper_count)
-            upper_prices = np.linspace(upper_min, upper_max, upper_count)
-            
-            for i, price in enumerate(upper_prices):
+            # Upper outer range (beyond 5% from peg)
+            upper_outer_count = outer_bins_count - lower_outer_count
+            for i in range(upper_outer_count):
+                price = peg_price * (1 + bp_increment * (bins_per_side + 1 + i))
                 self.bins.append(LiquidityBin(
                     price=price,
                     liquidity=outer_liquidity_per_bin,
-                    bin_index=peg_bins_count + lower_count + i,
-                    is_active=outer_liquidity_per_bin > 1000
+                    bin_index=1 + bins_per_side * 2 + lower_outer_count + i,
+                    is_active=True
                 ))
     
     def _update_legacy_fields(self):
@@ -565,13 +579,14 @@ class UniswapV3SlippageCalculator:
         self.pool._update_legacy_fields()
 
 
-def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0) -> UniswapV3Pool:
+def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.80) -> UniswapV3Pool:
     """
     Create a MOET:BTC Uniswap v3 pool with discrete liquidity bins
     
     Args:
         pool_size_usd: Total pool size in USD
         btc_price: Current BTC price in USD (default: $100,000)
+        concentration: Liquidity concentration level (0.80 = 80% at peg)
         
     Returns:
         UniswapV3Pool instance with discrete bins
@@ -582,17 +597,19 @@ def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0) -> 
         total_liquidity=pool_size_usd,
         btc_price=btc_price,
         num_bins=100,
-        fee_tier=0.003  # 0.3% fee tier
+        fee_tier=0.003,  # 0.3% fee tier
+        concentration=concentration
     )
 
 
-def create_yield_token_pool(pool_size_usd: float, btc_price: float = 100_000.0) -> UniswapV3Pool:
+def create_yield_token_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.95) -> UniswapV3Pool:
     """
     Create a MOET:Yield Token Uniswap v3 pool with discrete liquidity bins
     
     Args:
         pool_size_usd: Total pool size in USD
         btc_price: Current BTC price in USD (for consistency)
+        concentration: Liquidity concentration level (0.95 = 95% at peg)
         
     Returns:
         UniswapV3Pool instance with discrete bins
@@ -603,7 +620,8 @@ def create_yield_token_pool(pool_size_usd: float, btc_price: float = 100_000.0) 
         total_liquidity=pool_size_usd,
         btc_price=btc_price,
         num_bins=100,
-        fee_tier=0.003  # 0.3% fee tier
+        fee_tier=0.003,  # 0.3% fee tier
+        concentration=concentration
     )
 
 
