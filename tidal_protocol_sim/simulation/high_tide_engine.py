@@ -246,8 +246,8 @@ class HighTideSimulationEngine(TidalSimulationEngine):
             # Process High Tide agent actions
             swap_data = self._process_high_tide_agents(minute)
             
-            # Check for traditional liquidations (fallback)
-            self._check_liquidations()
+            # Check for High Tide liquidations
+            self._check_high_tide_liquidations(minute)
             
             # Record position tracking data
             tracked_agent = self._get_tracked_agent()
@@ -539,6 +539,28 @@ class HighTideSimulationEngine(TidalSimulationEngine):
             if agent.agent_id == self.position_tracker.agent_id:
                 return agent
         return None
+        
+    def _check_high_tide_liquidations(self, minute: int):
+        """Check for High Tide liquidations (HF ≤ 1.0)"""
+        for agent in self.high_tide_agents:
+            if not agent.active:
+                continue
+                
+            # Update health factor
+            agent._update_health_factor(self.state.current_prices)
+            
+            # Check if liquidation is needed (HF ≤ 1.0)
+            if agent.state.health_factor <= 1.0:
+                liquidation_event = agent.execute_high_tide_liquidation(minute, self.state.current_prices)
+                
+                if liquidation_event:
+                    self.liquidation_events.append(liquidation_event)
+                    
+                    print(f"High Tide Liquidation - Agent {agent.agent_id}: "
+                          f"HF {liquidation_event['health_factor_before']:.3f} → {liquidation_event['health_factor_after']:.3f}, "
+                          f"Debt Repaid: ${liquidation_event['debt_repaid_value']:,.0f}, "
+                          f"Collateral Seized: {liquidation_event['btc_seized']:.3f} BTC (${liquidation_event['btc_value_seized']:,.0f}), "
+                          f"Bonus: ${liquidation_event['liquidation_bonus_value']:,.0f}")
         
     def _count_active_agents(self) -> int:
         """Count number of active High Tide agents"""

@@ -16,7 +16,7 @@ from .protocol import Asset
 class YieldToken:
     """Individual yield token with continuous yield accrual"""
     
-    def __init__(self, principal_amount: float, apr: float = 0.10, creation_minute: int = 0):
+    def __init__(self, principal_amount: float, apr: float = 0.05, creation_minute: int = 0):
         self.principal = principal_amount
         self.apr = apr
         self.creation_minute = creation_minute
@@ -27,9 +27,10 @@ class YieldToken:
             return self.principal
             
         minutes_elapsed = current_minute - self.creation_minute
-        # Convert APR to per-minute rate: APR / (365 * 24 * 60)
-        minute_rate = self.apr / 525600
-        return self.principal * (1 + minute_rate * minutes_elapsed)
+        # Convert APR to per-minute rate: (1 + APR)^(1/525600) - 1
+        # For 10% APR over 60 minutes, this should be very small
+        minute_rate = (1 + self.apr) ** (1 / 525600) - 1
+        return self.principal * (1 + minute_rate) ** minutes_elapsed
         
     def get_accrued_yield(self, current_minute: int) -> float:
         """Get yield earned above principal amount"""

@@ -207,6 +207,51 @@ class HighTideAgent(BaseAgent):
         self.state.emergency_liquidations += 1
         return (AgentAction.HOLD, {"emergency": True})
     
+    def execute_high_tide_liquidation(self, current_minute: int, asset_prices: Dict[Asset, float]) -> Optional[Dict]:
+        """Execute High Tide liquidation similar to Aave style"""
+        
+        # Calculate how much debt to repay to bring HF back to 1.1
+        collateral_value = self._calculate_effective_collateral_value(asset_prices)
+        target_debt = collateral_value / 1.1  # Target HF of 1.1
+        current_debt = self.state.moet_debt
+        debt_to_repay = current_debt - target_debt
+        
+        if debt_to_repay <= 0:
+            return None
+        
+        # Calculate BTC to seize (with 8% penalty)
+        btc_price = asset_prices.get(Asset.BTC, 100_000.0)
+        collateral_value_needed = debt_to_repay * 1.08  # 8% liquidation penalty
+        btc_to_seize = collateral_value_needed / btc_price
+        
+        # Check if we have enough BTC collateral
+        available_btc = self.state.supplied_balances.get(Asset.BTC, 0.0)
+        if btc_to_seize > available_btc:
+            btc_to_seize = available_btc
+            debt_to_repay = (btc_to_seize * btc_price) / 1.08
+        
+        # Execute liquidation
+        self.state.moet_debt -= debt_to_repay
+        self.state.supplied_balances[Asset.BTC] -= btc_to_seize
+        
+        # Update health factor
+        self._update_health_factor(asset_prices)
+        
+        # Record liquidation event
+        liquidation_event = {
+            "minute": current_minute,
+            "agent_id": self.agent_id,
+            "health_factor_before": self.state.health_factor,
+            "health_factor_after": self.state.health_factor,
+            "debt_repaid_value": debt_to_repay,
+            "btc_seized": btc_to_seize,
+            "btc_value_seized": btc_to_seize * btc_price,
+            "liquidation_bonus_value": debt_to_repay * 0.08,
+            "liquidation_type": "high_tide_emergency"
+        }
+        
+        return liquidation_event
+    
     def _update_health_factor(self, asset_prices: Dict[Asset, float]):
         """Update health factor for High Tide agent"""
         collateral_value = self._calculate_effective_collateral_value(asset_prices)
