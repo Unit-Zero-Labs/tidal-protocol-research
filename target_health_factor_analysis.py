@@ -901,10 +901,18 @@ def create_agent_data_csv(results_matrix: List[Dict], output_dir: Path) -> Path:
         for agent in all_ht_agents:
             agent_id = agent.get("agent_id", "unknown")
             
-            # Extract collateral and debt information
-            collateral = agent.get("collateral_value", 0)
-            effective_collateral = agent.get("effective_collateral_value", collateral)
-            debt = agent.get("debt_value", 0)
+            # Extract collateral and debt information from actual agent data structure
+            # Get collateral from final agent state (BTC amount * current price)
+            final_debt = agent.get("final_debt", 0)
+            initial_debt = agent.get("initial_debt", 0)
+            
+            # For collateral, we need to calculate from the agent's BTC holdings
+            # This is a simplified calculation - in reality we'd need access to the agent's state
+            # For now, use the net position value as a proxy for collateral value
+            net_position = agent.get("net_position_value", 0)
+            collateral = max(0, net_position + final_debt)  # Collateral = net position + debt
+            effective_collateral = collateral  # Assume no collateral factor for now
+            debt = final_debt
             
             # Extract health factor information
             initial_hf = agent.get("initial_health_factor", 1.0)
@@ -1275,91 +1283,87 @@ def create_target_hf_health_factor_analysis(results_matrix: List[Dict], charts_d
 
 
 def create_target_hf_net_position_analysis(results_matrix: List[Dict], charts_dir: Path) -> Path:
-    """Create Target Health Factor Net Position Analysis dashboard"""
+    """Create Target Health Factor Net Position Analysis dashboard with time series"""
     
     _setup_chart_styling()
     
     try:
-        # Aggregate agent data across all target HF scenarios
-        all_ht_agents = []
+        # Get detailed simulation data for time series
+        detailed_simulation_result = run_detailed_simulation_for_charts()
         
-        for result in results_matrix:
-            raw_data = result.get("raw_data", {})
-            all_ht_agents.extend(raw_data.get("ht_agent_outcomes", []))
+        if not detailed_simulation_result:
+            print("⚠️  No detailed simulation data available for net position analysis")
+            return None
         
-        if not all_ht_agents:
+        agent_health_history = detailed_simulation_result.get("agent_health_history", [])
+        btc_price_history = detailed_simulation_result.get("btc_price_history", [])
+        
+        if not agent_health_history or not btc_price_history:
+            print("⚠️  Missing time series data for net position analysis")
             return None
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12), height_ratios=[2, 1])
         fig.suptitle("Target Health Factor: Net Position Analysis", fontsize=18, fontweight='bold')
         
-        # Group agents by risk profile (using target HF as proxy for risk)
-        risk_profiles = {"conservative": [], "moderate": [], "aggressive": []}
+        # Chart 1: Individual Agent Net Position Over Time
+        minutes = [entry["minute"] for entry in agent_health_history]
         
-        for agent in all_ht_agents:
-            target_hf = agent.get("target_health_factor", 1.1)
-            if target_hf <= 1.05:
-                risk_profiles["aggressive"].append(agent)
-            elif target_hf <= 1.1:
-                risk_profiles["moderate"].append(agent)
-            else:
-                risk_profiles["conservative"].append(agent)
+        # Get unique agent IDs and create colors for each
+        agent_ids = sorted(list(set(agent_data["agent_id"] for entry in agent_health_history for agent_data in entry["agents"])))
+        colors = plt.cm.tab20(np.linspace(0, 1, len(agent_ids)))
         
-        # Colors for risk profiles
-        colors = {"conservative": "#2E8B57", "moderate": "#FF8C00", "aggressive": "#DC143C"}
+        # Plot each agent's net position over time
+        for i, agent_id in enumerate(agent_ids):
+            net_positions = []
+            for entry in agent_health_history:
+                # Find this agent's data in this time step
+                agent_data = None
+                for agent_data_item in entry["agents"]:
+                    if agent_data_item["agent_id"] == agent_id:
+                        agent_data = agent_data_item
+                        break
+                
+                if agent_data:
+                    # Calculate net position: collateral value - debt value
+                    collateral_value = agent_data.get("collateral_value", 0)
+                    debt_value = agent_data.get("debt_value", 0)
+                    net_position = collateral_value - debt_value
+                    net_positions.append(net_position)
+                else:
+                    net_positions.append(None)
+            
+            # Filter out None values and plot
+            valid_minutes = [m for m, np in zip(minutes, net_positions) if np is not None]
+            valid_net_positions = [np for np in net_positions if np is not None]
+            
+            if valid_net_positions:
+                ax1.plot(valid_minutes, valid_net_positions, 
+                        color=colors[i], linewidth=1.5, alpha=0.7,
+                        label=f'Agent {agent_id.split("_")[-1]}' if len(agent_ids) <= 10 else None)
         
-        # Chart 1: Net Position Value by Risk Profile
-        # Since we don't have time series data, we'll show final net position values
-        net_positions = {"conservative": [], "moderate": [], "aggressive": []}
-        
-        for profile, agents in risk_profiles.items():
-            for agent in agents:
-                net_position = agent.get("net_position_value", 0)
-                net_positions[profile].append(net_position)
-        
-        # Create box plots for net position distribution
-        profile_names = []
-        position_data = []
-        for profile in ["conservative", "moderate", "aggressive"]:
-            if net_positions[profile]:
-                profile_names.append(profile.title())
-                position_data.append(net_positions[profile])
-        
-        if position_data:
-            box_plot = ax1.boxplot(position_data, labels=profile_names, patch_artist=True)
-            for patch, profile in zip(box_plot['boxes'], ["conservative", "moderate", "aggressive"][:len(position_data)]):
-                patch.set_facecolor(colors[profile])
-                patch.set_alpha(0.7)
-        
-        ax1.set_ylabel("Net Position Value ($)")
-        ax1.set_title("Net Position Value Distribution by Risk Profile")
+        ax1.set_xlabel('Time (minutes)')
+        ax1.set_ylabel('Net Position Value ($)')
+        ax1.set_title('Individual Agent Net Position Over Time')
+        ax1.axhline(y=0, color='black', linestyle='--', alpha=0.5, label='Break-even')
         ax1.grid(True, alpha=0.3)
-        ax1.axhline(y=0, color='black', linestyle='--', alpha=0.5, label='Break Even')
         
-        # Add legend for risk profiles
-        from matplotlib.patches import Patch
-        legend_elements = [Patch(facecolor=colors["conservative"], label='Conservative'),
-                          Patch(facecolor=colors["moderate"], label='Moderate'),
-                          Patch(facecolor=colors["aggressive"], label='Aggressive')]
-        ax1.legend(handles=legend_elements, loc='upper right')
+        if len(agent_ids) <= 10:
+            ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         
-        # Chart 2: BTC Price Decline (Simulated)
-        # Since we don't have actual BTC price data, we'll create a representative decline
-        minutes = np.arange(0, 61)
-        # Simulate BTC price decline from $100k to ~$79k over 60 minutes
-        btc_prices = 100000 - (21000 * (minutes / 60) ** 1.5)  # Non-linear decline
-        
-        ax2.plot(minutes, btc_prices, color='#FF6B35', linewidth=2, label='BTC Price')
-        ax2.set_xlabel("Time (minutes)")
-        ax2.set_ylabel("BTC Price ($)")
-        ax2.set_title("BTC Price Decline")
-        ax2.legend()
+        # Chart 2: BTC Price Decline
+        ax2.plot(minutes, btc_price_history, color='orange', linewidth=2, label='BTC Price')
+        ax2.set_xlabel('Time (minutes)')
+        ax2.set_ylabel('BTC Price ($)')
+        ax2.set_title('BTC Price Decline')
         ax2.grid(True, alpha=0.3)
         
-        # Add some annotations
-        ax2.annotate('Price Decline\nStarts', xy=(5, 95000), xytext=(15, 90000),
-                    arrowprops=dict(arrowstyle='->', color='red', alpha=0.7),
-                    fontsize=10, ha='center')
+        # Add annotation for price decline start
+        if len(btc_price_history) > 10:
+            ax2.annotate('Price Decline Starts', 
+                        xy=(10, btc_price_history[10]), 
+                        xytext=(20, btc_price_history[10] + 2000),
+                        arrowprops=dict(arrowstyle='->', color='red', alpha=0.7),
+                        fontsize=10, color='red')
         
         plt.tight_layout()
         
