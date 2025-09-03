@@ -357,7 +357,7 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         return success
         
     def _execute_yield_token_sale(self, agent: HighTideAgent, params: dict, minute: int) -> tuple:
-        """Execute yield token sale for rebalancing with Uniswap v3 slippage"""
+        """Execute yield token sale for rebalancing - MOET directly pays down debt"""
         amount_needed = params.get("amount_needed", 0.0)
         
         if amount_needed <= 0:
@@ -367,32 +367,12 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         moet_raised = agent.execute_yield_token_sale(amount_needed, minute, yield_only=False)
         
         if moet_raised > 0:
-            # Apply Uniswap v3 slippage to the MOET -> BTC swap for debt repayment
-            swap_result = self.slippage_calculator.calculate_swap_slippage(
-                moet_raised, "MOET", self.moet_btc_concentration
-            )
+            # CORRECTED: Use MOET directly to pay down debt (no BTC swap needed)
+            # Since debt is in MOET and we received MOET, direct 1:1 repayment
+            debt_repayment = min(moet_raised, agent.state.moet_debt)
+            agent.state.moet_debt -= debt_repayment
             
-            # Agent receives less BTC due to slippage
-            btc_received = swap_result["amount_out"]
-            slippage_cost = swap_result["slippage_amount"]
-            trading_fees = swap_result["trading_fees"]
-            
-            # Update the Uniswap pool state after the swap
-            self.slippage_calculator.update_pool_state(swap_result)
-            
-            # Record MOET:BTC pool state for LP curve analysis
-            self.moet_btc_tracker.record_snapshot(
-                pool_state={
-                    "token0_reserve": self.slippage_calculator.pool.token0_reserve,
-                    "token1_reserve": self.slippage_calculator.pool.token1_reserve,
-                    "liquidity": self.slippage_calculator.pool.liquidity
-                },
-                minute=minute,
-                trade_amount=moet_raised,
-                trade_type="rebalance"
-            )
-            
-            # Record MOET:Yield Token pool activity (simulated based on yield token sale)
+            # Record MOET:Yield Token pool activity (the only pool used for rebalancing)
             self.moet_yield_tracker.record_snapshot(
                 pool_state={
                     "token0_reserve": self.yield_token_pool.moet_reserve,
@@ -404,54 +384,35 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 trade_type="yield_token_sale"
             )
             
-            # Convert BTC received to USD value for debt repayment
-            btc_price = self.state.current_prices[Asset.BTC]
-            btc_value_usd = btc_received * btc_price
-            
-            # Agent's debt is in MOET terms, convert BTC value to MOET for repayment
-            # Since 1 MOET = $1, the BTC USD value directly represents MOET that can be repaid
-            effective_debt_repayment = btc_value_usd  # USD value = MOET value
-            
-            # Update agent's actual debt based on effective repayment
-            debt_repayment = min(effective_debt_repayment, agent.state.moet_debt)
-            agent.state.moet_debt -= debt_repayment
-            
             # Update yield token pool
             self.yield_token_pool.execute_yield_token_sale(moet_raised)
             
-            # Create swap data for tracking (including slippage)
+            # Create swap data for tracking (no BTC swap, no slippage)
             swap_data = {
                 "yt_swapped": amount_needed,
                 "moet_received": moet_raised,
-                "btc_received_after_slippage": btc_received,
-                "slippage_cost": slippage_cost,
-                "trading_fees": trading_fees,
-                "effective_debt_repayment": effective_debt_repayment,
+                "debt_repayment": debt_repayment,
                 "swap_type": "rebalancing"
             }
             
-            # Record rebalancing event (with slippage details)
+            # Record rebalancing event (no BTC swap slippage)
             self.rebalancing_events.append({
                 "minute": minute,
                 "agent_id": agent.agent_id,
                 "moet_raised": moet_raised,
                 "amount_needed": amount_needed,
-                "btc_received": btc_received,
-                "slippage_cost": slippage_cost,
-                "trading_fees": trading_fees,
-                "effective_debt_repayment": effective_debt_repayment,
+                "debt_repayment": debt_repayment,
                 "health_factor_before": agent.state.health_factor,
                 "rebalancing_type": "full_sale"
             })
             
-            # Record trade (with slippage impact)
+            # Record trade (no BTC swap)
             self.yield_token_trades.append({
                 "minute": minute,
                 "agent_id": agent.agent_id,
                 "action": "rebalancing_sale",
                 "moet_amount": moet_raised,
-                "btc_received": btc_received,
-                "slippage_cost": slippage_cost,
+                "debt_repayment": debt_repayment,
                 "agent_health_factor": agent.state.health_factor
             })
             
@@ -460,59 +421,47 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         return False, None
         
     def _execute_yield_only_sale(self, agent: HighTideAgent, params: dict, minute: int) -> tuple:
-        """Execute sale of only accrued yield with Uniswap v3 slippage"""
+        """Execute sale of only accrued yield - MOET directly pays down debt"""
         amount_needed = params.get("amount_needed", 0.0)
         
         # Execute yield-only sale through agent
         moet_raised = agent.execute_yield_token_sale(amount_needed, minute, yield_only=True)
         
         if moet_raised > 0:
-            # Apply Uniswap v3 slippage to the MOET -> BTC swap
-            swap_result = self.slippage_calculator.calculate_swap_slippage(
-                moet_raised, "MOET", self.moet_btc_concentration
-            )
-            
-            # Agent receives less BTC due to slippage
-            btc_received = swap_result["amount_out"]
-            slippage_cost = swap_result["slippage_amount"]
-            trading_fees = swap_result["trading_fees"]
-            
-            # Update the Uniswap pool state after the swap
-            self.slippage_calculator.update_pool_state(swap_result)
-            
-            # Convert BTC received to USD value for debt repayment
-            btc_price = self.state.current_prices[Asset.BTC]
-            btc_value_usd = btc_received * btc_price
-            
-            # Effective debt repayment in MOET terms
-            effective_debt_repayment = btc_value_usd
-            debt_repayment = min(effective_debt_repayment, agent.state.moet_debt)
+            # CORRECTED: Use MOET directly to pay down debt (no BTC swap)
+            debt_repayment = min(moet_raised, agent.state.moet_debt)
             agent.state.moet_debt -= debt_repayment
+            
+            # Record MOET:Yield Token pool activity (the only pool used for rebalancing)
+            self.moet_yield_tracker.record_snapshot(
+                pool_state={
+                    "token0_reserve": self.yield_token_pool.moet_reserve,
+                    "token1_reserve": self.yield_token_pool.yield_token_reserve,
+                    "liquidity": (self.yield_token_pool.moet_reserve + self.yield_token_pool.yield_token_reserve) / 2
+                },
+                minute=minute,
+                trade_amount=moet_raised,
+                trade_type="yield_token_sale"
+            )
             
             # Update yield token pool
             self.yield_token_pool.execute_yield_token_sale(moet_raised)
             
-            # Create swap data for tracking
+            # Create swap data for tracking (no BTC swap)
             swap_data = {
                 "yt_swapped": amount_needed,
                 "moet_received": moet_raised,
-                "btc_received_after_slippage": btc_received,
-                "slippage_cost": slippage_cost,
-                "trading_fees": trading_fees,
-                "effective_debt_repayment": effective_debt_repayment,
+                "debt_repayment": debt_repayment,
                 "swap_type": "yield_only"
             }
             
-            # Record rebalancing event
+            # Record rebalancing event (no BTC swap)
             self.rebalancing_events.append({
                 "minute": minute,
                 "agent_id": agent.agent_id,
                 "moet_raised": moet_raised,
                 "amount_needed": amount_needed,
-                "btc_received": btc_received,
-                "slippage_cost": slippage_cost,
-                "trading_fees": trading_fees,
-                "effective_debt_repayment": effective_debt_repayment,
+                "debt_repayment": debt_repayment,
                 "health_factor_before": agent.state.health_factor,
                 "rebalancing_type": "yield_only"
             })
@@ -522,7 +471,7 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         return False, None
         
     def _execute_emergency_yield_sale(self, agent: HighTideAgent, params: dict, minute: int) -> tuple:
-        """Execute emergency sale of ALL remaining yield tokens with Uniswap v3 slippage"""
+        """Execute emergency sale of ALL remaining yield tokens - MOET directly pays down debt"""
         amount_needed = params.get("amount_needed", 0.0)
         
         if amount_needed <= 0:
@@ -532,64 +481,51 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         moet_raised = agent.execute_yield_token_sale(float('inf'), minute, yield_only=False)
         
         if moet_raised > 0:
-            # Apply Uniswap v3 slippage to the MOET -> BTC swap
-            swap_result = self.slippage_calculator.calculate_swap_slippage(
-                moet_raised, "MOET", self.moet_btc_concentration
-            )
-            
-            # Agent receives less BTC due to slippage
-            btc_received = swap_result["amount_out"]
-            slippage_cost = swap_result["slippage_amount"]
-            trading_fees = swap_result["trading_fees"]
-            
-            # Update the Uniswap pool state after the swap
-            self.slippage_calculator.update_pool_state(swap_result)
-            
-            # Convert BTC received to USD value for debt repayment
-            btc_price = self.state.current_prices[Asset.BTC]
-            btc_value_usd = btc_received * btc_price
-            
-            # Effective debt repayment in MOET terms
-            effective_debt_repayment = btc_value_usd
-            debt_repayment = min(effective_debt_repayment, agent.state.moet_debt)
+            # CORRECTED: Use MOET directly to pay down debt (no BTC swap)
+            debt_repayment = min(moet_raised, agent.state.moet_debt)
             agent.state.moet_debt -= debt_repayment
+            
+            # Record MOET:Yield Token pool activity (the only pool used for rebalancing)
+            self.moet_yield_tracker.record_snapshot(
+                pool_state={
+                    "token0_reserve": self.yield_token_pool.moet_reserve,
+                    "token1_reserve": self.yield_token_pool.yield_token_reserve,
+                    "liquidity": (self.yield_token_pool.moet_reserve + self.yield_token_pool.yield_token_reserve) / 2
+                },
+                minute=minute,
+                trade_amount=moet_raised,
+                trade_type="yield_token_sale"
+            )
             
             # Update yield token pool
             self.yield_token_pool.execute_yield_token_sale(moet_raised)
             
-            # Record emergency rebalancing event
+            # Record emergency rebalancing event (no BTC swap)
             self.rebalancing_events.append({
                 "minute": minute,
                 "agent_id": agent.agent_id,
                 "moet_raised": moet_raised,
                 "amount_needed": amount_needed,
-                "btc_received": btc_received,
-                "slippage_cost": slippage_cost,
-                "trading_fees": trading_fees,
-                "effective_debt_repayment": effective_debt_repayment,
+                "debt_repayment": debt_repayment,
                 "health_factor_before": agent.state.health_factor,
                 "rebalancing_type": "emergency_all_yield"
             })
             
-            # Create swap data for tracking
+            # Create swap data for tracking (no BTC swap)
             swap_data = {
                 "yt_swapped": agent.state.yield_token_manager.calculate_total_value(minute),  # All yield tokens
                 "moet_received": moet_raised,
-                "btc_received_after_slippage": btc_received,
-                "slippage_cost": slippage_cost,
-                "trading_fees": trading_fees,
-                "effective_debt_repayment": effective_debt_repayment,
+                "debt_repayment": debt_repayment,
                 "swap_type": "emergency"
             }
             
-            # Record trade
+            # Record trade (no BTC swap)
             self.yield_token_trades.append({
                 "minute": minute,
                 "agent_id": agent.agent_id,
                 "action": "emergency_liquidation_sale",
                 "moet_amount": moet_raised,
-                "btc_received": btc_received,
-                "slippage_cost": slippage_cost,
+                "debt_repayment": debt_repayment,
                 "agent_health_factor": agent.state.health_factor
             })
             

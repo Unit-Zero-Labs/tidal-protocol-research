@@ -292,10 +292,13 @@ class HighTideAgent(BaseAgent):
                                      pool_size_usd: float = 500_000, 
                                      concentrated_range: float = 0.2) -> float:
         """
-        Calculate cost of rebalancing for High Tide strategy including Uniswap v3 slippage
+        Calculate cost of rebalancing for High Tide strategy
+        
+        CORRECTED: Since rebalancing uses MOET directly to pay debt (no BTC swap),
+        the cost is simply the net debt remaining after yield tokens are considered.
         
         Net Position Value = Collateral - (Debt - Yield Token Value)
-        Cost of Rebalancing = Final Collateral Value - Final Net Position Value + Slippage Costs
+        Cost of Rebalancing = Final Collateral Value - Final Net Position Value
         """
         # Calculate current position values
         collateral_value = self.state.btc_amount * final_btc_price
@@ -304,24 +307,20 @@ class HighTideAgent(BaseAgent):
         # Net Position Value = Collateral - (Debt - Yield Token Value)
         net_position_value = collateral_value - (self.state.moet_debt - yield_token_value)
         
-        # Base cost = Debt - Yield Token Value (net debt remaining)
+        # CORRECTED: Since MOET directly pays debt (no slippage), cost is just net debt remaining
+        # Cost = max(0, Debt - Yield Token Value)
         base_cost = max(0, self.state.moet_debt - yield_token_value)
         
-        # Calculate slippage costs for all rebalancing events using ACTUAL pool parameters
-        total_slippage_cost = 0.0
+        # Only minimal slippage from MOET:YT pool trading (0.1% fee)
+        total_yield_trading_fees = 0.0
         for event in self.state.rebalancing_events:
             moet_amount = event["moet_raised"]
             if moet_amount > 0:
-                slippage_result = calculate_rebalancing_cost_with_slippage(
-                    moet_amount, 
-                    pool_size_usd=pool_size_usd,  # Use actual pool size
-                    concentrated_range=concentrated_range,  # Use actual concentration
-                    btc_price=final_btc_price  # Use current BTC price for correct MOET:BTC ratio
-                )
-                total_slippage_cost += slippage_result["total_swap_cost"]
+                # Only 0.1% trading fee for yield token sales (no BTC swap slippage)
+                total_yield_trading_fees += moet_amount * 0.001
         
-        # Total cost includes base cost plus all slippage costs
-        total_cost = base_cost + total_slippage_cost
+        # Total cost is base cost plus minimal trading fees
+        total_cost = base_cost + total_yield_trading_fees
         
         return total_cost
     

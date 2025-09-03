@@ -20,7 +20,61 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighTideSimulationEngine
+from tidal_protocol_sim.simulation.aave_engine import AaveConfig, AaveSimulationEngine
 from tidal_protocol_sim.analysis.high_tide_charts import HighTideChartGenerator
+
+
+def generate_aave_comparison_analysis(aave_results_list, combination_label, high_tide_data):
+    """Generate comparison analysis between High Tide and Aave results"""
+    if not aave_results_list:
+        return {"error": "No Aave results to compare"}
+    
+    # Aggregate Aave metrics across all runs
+    aave_survival_rates = []
+    aave_costs_per_agent = []
+    aave_liquidation_events = []
+    
+    for aave_result in aave_results_list:
+        survival_stats = aave_result.get("survival_statistics", {})
+        cost_analysis = aave_result.get("cost_analysis", {})
+        
+        aave_survival_rates.append(survival_stats.get("survival_rate", 0.0))
+        aave_costs_per_agent.append(cost_analysis.get("average_cost_per_agent", 0.0))
+        
+        # Count liquidation events
+        liquidation_activity = aave_result.get("liquidation_activity", {})
+        aave_liquidation_events.append(liquidation_activity.get("total_liquidation_events", 0))
+    
+    # Calculate Aave summary statistics
+    import numpy as np
+    aave_summary = {
+        "mean_survival_rate": np.mean(aave_survival_rates),
+        "mean_cost_per_agent": np.mean(aave_costs_per_agent),
+        "mean_liquidation_events": np.mean(aave_liquidation_events),
+        "survival_rate_std": np.std(aave_survival_rates),
+        "cost_per_agent_std": np.std(aave_costs_per_agent)
+    }
+    
+    # Compare with High Tide results
+    ht_survival_rate = high_tide_data.get("overall_survival_rate", 0.0)
+    ht_cost_per_agent = high_tide_data.get("average_cost_per_agent", 0.0)
+    
+    # Calculate improvements
+    survival_improvement = ((ht_survival_rate - aave_summary["mean_survival_rate"]) / aave_summary["mean_survival_rate"] * 100) if aave_summary["mean_survival_rate"] > 0 else 0
+    cost_reduction = ((aave_summary["mean_cost_per_agent"] - ht_cost_per_agent) / aave_summary["mean_cost_per_agent"] * 100) if aave_summary["mean_cost_per_agent"] > 0 else 0
+    
+    return {
+        "combination_label": combination_label,
+        "high_tide_metrics": {
+            "survival_rate": ht_survival_rate,
+            "cost_per_agent": ht_cost_per_agent
+        },
+        "aave_summary": aave_summary,
+        "aave_runs_count": len(aave_results_list),
+        "survival_improvement": survival_improvement,
+        "cost_reduction": cost_reduction,
+        "high_tide_advantage": survival_improvement > 0 and cost_reduction > 0
+    }
 
 
 def run_comprehensive_pool_analysis():
@@ -90,32 +144,52 @@ def run_comprehensive_pool_analysis():
         all_runs_rebalancing_events = []
         all_runs_btc_price_history = []
         last_run_results = {}
+        
+        # Store Aave results for comparison
+        all_aave_results = []
 
         try:
-            print(f"   Running {MONTE_CARLO_RUNS} Monte Carlo simulations...")
+            print(f"   Running {MONTE_CARLO_RUNS} Monte Carlo simulations (High Tide + Aave)...")
             for run_num in range(MONTE_CARLO_RUNS):
                 # Create High Tide configuration with specific pool sizes
-                config = HighTideConfig()
-                config.num_high_tide_agents = 20  # Sufficient sample size
-                config.btc_decline_duration = 60  # Focused analysis duration
-                config.uniswap_pool_size = btc_pool_size  # MOET:BTC pool
-                config.moet_btc_pool_size = btc_pool_size  # MOET:BTC pool size
-                config.moet_yield_pool_size = yt_pool_size  # MOET:YT pool size
-                config.moet_btc_concentration = 0.80  # 80% concentration (single peg bin)
-                config.yield_token_concentration = 0.95  # 95% concentration (single peg bin)
+                ht_config = HighTideConfig()
+                ht_config.num_high_tide_agents = 20  # Sufficient sample size
+                ht_config.btc_decline_duration = 60  # Focused analysis duration
+                ht_config.uniswap_pool_size = btc_pool_size  # MOET:BTC pool
+                ht_config.moet_btc_pool_size = btc_pool_size  # MOET:BTC pool size
+                ht_config.moet_yield_pool_size = yt_pool_size  # MOET:YT pool size
+                ht_config.moet_btc_concentration = 0.80  # 80% concentration (single peg bin)
+                ht_config.yield_token_concentration = 0.95  # 95% concentration (single peg bin)
                 
-                # Run ACTUAL High Tide simulation
-                engine = HighTideSimulationEngine(config)
-                results = engine.run_high_tide_simulation()
+                # Create matching Aave configuration
+                aave_config = AaveConfig()
+                aave_config.num_aave_agents = 20  # Same sample size
+                aave_config.btc_decline_duration = 60
+                aave_config.uniswap_pool_size = btc_pool_size
+                aave_config.moet_btc_pool_size = btc_pool_size
+                aave_config.moet_yield_pool_size = yt_pool_size
+                aave_config.moet_btc_concentration = 0.80
+                aave_config.yield_token_concentration = 0.95
                 
-                # Collect data from the run
-                all_runs_agent_outcomes.extend(results.get("agent_outcomes", []))
-                all_runs_rebalancing_events.extend(results.get("rebalancing_events", []))
-                all_runs_btc_price_history.append(results.get("btc_price_history", []))
-                last_run_results = results
+                # Run High Tide simulation
+                ht_engine = HighTideSimulationEngine(ht_config)
+                ht_results = ht_engine.run_high_tide_simulation()
+                
+                # Run Aave simulation
+                aave_engine = AaveSimulationEngine(aave_config)
+                aave_results = aave_engine.run_aave_simulation()
+                
+                # Collect data from High Tide run
+                all_runs_agent_outcomes.extend(ht_results.get("agent_outcomes", []))
+                all_runs_rebalancing_events.extend(ht_results.get("rebalancing_events", []))
+                all_runs_btc_price_history.append(ht_results.get("btc_price_history", []))
+                last_run_results = ht_results
+                
+                # Store Aave results for comparison
+                all_aave_results.append(aave_results)
 
                 if (run_num + 1) % 5 == 0 or (run_num + 1) == MONTE_CARLO_RUNS:
-                    print(f"     Completed run {run_num + 1}/{MONTE_CARLO_RUNS}")
+                    print(f"     Completed run {run_num + 1}/{MONTE_CARLO_RUNS} (High Tide + Aave)")
 
             # --- AGGREGATE RESULTS ACROSS ALL RUNS FOR THIS CONFIGURATION ---
             agent_outcomes = all_runs_agent_outcomes
@@ -180,9 +254,14 @@ def run_comprehensive_pool_analysis():
                 "agent_outcomes": agent_outcomes
             }
             
+            # Generate Aave comparison analysis
+            aave_comparison = generate_aave_comparison_analysis(all_aave_results, combination_label, result_data)
+            result_data["aave_comparison"] = aave_comparison
+            
             results_matrix.append(result_data)
             
             print(f"   ✅ Aggregated results for {combination_label}: {len(agent_outcomes)} total agent scenarios over {MONTE_CARLO_RUNS} runs.")
+            print(f"   📊 High Tide vs Aave: {aave_comparison['survival_improvement']:.1f}% survival improvement")
             
         except Exception as e:
             print(f"   ❌ Failed during simulation for {combination_label}: {e}")
@@ -1010,6 +1089,120 @@ def create_utilization_report(utilization_analysis, output_dir: Path):
     
     print(f"📊 Utilization analysis report saved: {report_path}")
 
+
+def save_comprehensive_json_results(results_matrix: List, output_dir: Path):
+    """Save comprehensive simulation results to JSON files for chart generation"""
+    import json
+    from datetime import datetime
+    
+    output_dir.mkdir(exist_ok=True)
+    
+    # Prepare comprehensive results structure
+    comprehensive_results = {
+        "analysis_metadata": {
+            "analysis_type": "Comprehensive_Realistic_Pool_Analysis",
+            "timestamp": datetime.now().isoformat(),
+            "total_configurations": len(results_matrix),
+            "monte_carlo_runs_per_config": MONTE_CARLO_RUNS,
+            "btc_decline_scenario": "15-25% decline over 60 minutes",
+            "includes_aave_comparison": True
+        },
+        "pool_configurations": [],
+        "aggregate_analysis": {
+            "best_configuration": None,
+            "worst_configuration": None,
+            "efficiency_summary": None,
+            "utilization_analysis": None
+        },
+        "raw_simulation_data": results_matrix
+    }
+    
+    # Process each configuration
+    for i, result in enumerate(results_matrix):
+        config_summary = {
+            "configuration_id": i,
+            "pool_label": result.get("pool_label", f"Config_{i}"),
+            "pool_parameters": {
+                "btc_pool_size": result.get("btc_pool_size", 0),
+                "yield_pool_size": result.get("yield_pool_size", 0),
+                "btc_pool_label": result.get("btc_pool_label", ""),
+                "yield_pool_label": result.get("yield_pool_label", "")
+            },
+            "high_tide_results": {
+                "survival_rate": result.get("overall_survival_rate", 0.0),
+                "average_cost_per_agent": result.get("avg_cost_per_agent", 0.0),
+                "total_rebalancing_events": len(result.get("rebalancing_events", [])),
+                "emergency_liquidations": sum(outcome.get("emergency_liquidations", 0) for outcome in result.get("agent_outcomes", [])),
+                "agent_count": len(result.get("agent_outcomes", []))
+            },
+            "aave_comparison": result.get("aave_comparison", {}),
+            "detailed_metrics": result
+        }
+        
+        comprehensive_results["pool_configurations"].append(config_summary)
+    
+    # Find best and worst configurations
+    if results_matrix:
+        best_idx = min(range(len(results_matrix)), key=lambda i: results_matrix[i].get("avg_cost_per_agent", float('inf')))
+        worst_idx = max(range(len(results_matrix)), key=lambda i: results_matrix[i].get("avg_cost_per_agent", 0))
+        
+        comprehensive_results["aggregate_analysis"]["best_configuration"] = {
+            "configuration_id": best_idx,
+            "pool_label": results_matrix[best_idx].get("pool_label", f"Config_{best_idx}"),
+            "cost_per_agent": results_matrix[best_idx].get("avg_cost_per_agent", 0),
+            "survival_rate": results_matrix[best_idx].get("overall_survival_rate", 0)
+        }
+        
+        comprehensive_results["aggregate_analysis"]["worst_configuration"] = {
+            "configuration_id": worst_idx,
+            "pool_label": results_matrix[worst_idx].get("pool_label", f"Config_{worst_idx}"),
+            "cost_per_agent": results_matrix[worst_idx].get("avg_cost_per_agent", 0),
+            "survival_rate": results_matrix[worst_idx].get("overall_survival_rate", 0)
+        }
+    
+    # Save main results JSON
+    results_path = output_dir / "comprehensive_analysis_results.json"
+    with open(results_path, 'w', encoding='utf-8') as f:
+        json.dump(comprehensive_results, f, indent=2, default=str)
+    
+    print(f"📁 Comprehensive JSON results saved to: {results_path}")
+    
+    # Save individual configuration JSONs for detailed analysis
+    configs_dir = output_dir / "individual_configurations"
+    configs_dir.mkdir(exist_ok=True)
+    
+    for i, result in enumerate(results_matrix):
+        config_path = configs_dir / f"config_{i}_{result.get('pool_label', 'unknown').replace('$', '').replace(':', '_')}.json"
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2, default=str)
+    
+    print(f"📁 Individual configuration JSONs saved to: {configs_dir}")
+    
+    # Save aggregated summary for quick access
+    summary = {
+        "analysis_summary": {
+            "total_configurations": len(results_matrix),
+            "best_configuration": comprehensive_results["aggregate_analysis"]["best_configuration"],
+            "worst_configuration": comprehensive_results["aggregate_analysis"]["worst_configuration"],
+            "configuration_summaries": [
+                {
+                    "pool_label": config["pool_label"],
+                    "survival_rate": config["high_tide_results"]["survival_rate"],
+                    "cost_per_agent": config["high_tide_results"]["average_cost_per_agent"],
+                    "aave_survival_improvement": config["aave_comparison"].get("survival_improvement", 0)
+                }
+                for config in comprehensive_results["pool_configurations"]
+            ]
+        }
+    }
+    
+    summary_path = output_dir / "analysis_summary.json"
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, default=str)
+    
+    print(f"📊 Analysis summary saved to: {summary_path}")
+
+
 def create_lp_curve_analysis(results_matrix, output_dir: Path) -> List[Path]:
     """Create LP curve evolution charts for best and worst configurations"""
     
@@ -1094,8 +1287,11 @@ def main():
             print("❌ No valid simulation results obtained")
             return False
         
-        # 2. Create all analysis charts
+        # 2. Save comprehensive JSON results
         output_dir = Path("comprehensive_realistic_analysis")
+        save_comprehensive_json_results(results_matrix, output_dir)
+        
+        # 3. Create all analysis charts using JSON data
         generated_charts = create_comprehensive_analysis_charts(results_matrix, output_dir)
         
         print(f"\n" + "=" * 80)
