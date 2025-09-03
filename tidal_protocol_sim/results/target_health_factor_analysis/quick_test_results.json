@@ -1,0 +1,43 @@
+{
+  "test_type": "Quick_Validation_Test",
+  "timestamp": "2025-09-02T21:00:21.501862",
+  "design_fix": "Randomized initial HFs (1.2-1.5) with fixed target HFs",
+  "target_hfs_tested": [
+    1.05,
+    1.1
+  ],
+  "results": [
+    {
+      "target_hf": 1.05,
+      "ht_survival_rate": 1.0,
+      "ht_liquidation_frequency": 0.0,
+      "aave_survival_rate": 1.0,
+      "aave_liquidation_frequency": 0.22000000000000003,
+      "design_validation": {
+        "agents_varied": true,
+        "initial_hf_range": [
+          1.2,
+          1.5
+        ],
+        "fixed_target_hf": 1.05,
+        "liquidation_spread": false
+      }
+    },
+    {
+      "target_hf": 1.1,
+      "ht_survival_rate": 1.0,
+      "ht_liquidation_frequency": 0.0,
+      "aave_survival_rate": 1.0,
+      "aave_liquidation_frequency": 0.5,
+      "design_validation": {
+        "agents_varied": true,
+        "initial_hf_range": [
+          1.2,
+          1.5
+        ],
+        "fixed_target_hf": 1.1,
+        "liquidation_spread": false
+      }
+    }
+  ]
+}

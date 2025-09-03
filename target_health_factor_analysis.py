@@ -34,30 +34,28 @@ def run_target_hf_analysis():
     print("=" * 80)
     print("TARGET HEALTH FACTOR ANALYSIS")
     print("=" * 80)
-    print("Testing target health factors: 1.01, 1.05, 1.1, 1.15")
+    print("Testing target health factors: 1.01, 1.05, 1.075, 1.1, 1.15")
     print("Question: How low can Target HF go before frequent liquidations?")
     print()
     
-    # Target health factors to test
-    target_hfs = [1.01, 1.05, 1.1, 1.15]
-    monte_carlo_runs = 20  # Sufficient for trend analysis
+    # Target health factors to test (discrete testing)
+    target_hfs = [1.01, 1.05, 1.075, 1.1, 1.15]
+    monte_carlo_runs = 20  # Each target HF gets 20 runs with varied agents
     
     results_matrix = []
     
     for target_hf in target_hfs:
         print(f"🎯 Testing Target Health Factor: {target_hf}")
+        print(f"   Agents will have randomized Initial HFs (1.2-1.5) and fixed Target HF: {target_hf}")
         
-        # Test multiple initial health factors with this target
-        initial_hfs = [target_hf + 0.1, target_hf + 0.2, target_hf + 0.3]  # Close ranges
-        
-        for initial_hf in initial_hfs:
-            result = run_target_hf_scenario(initial_hf, target_hf, monte_carlo_runs)
-            result["scenario_params"] = {
-                "initial_hf": initial_hf,
-                "target_hf": target_hf,
-                "hf_buffer": initial_hf - target_hf
-            }
-            results_matrix.append(result)
+        # Single scenario per target HF with varied agent population
+        result = run_target_hf_scenario(target_hf, monte_carlo_runs)
+        result["scenario_params"] = {
+            "target_hf": target_hf,
+            "initial_hf_range": [1.2, 1.5],
+            "variation_type": "randomized_initial_hf"
+        }
+        results_matrix.append(result)
     
     # Generate comprehensive analysis
     analysis_results = analyze_target_hf_results(results_matrix)
@@ -71,27 +69,26 @@ def run_target_hf_analysis():
     return analysis_results
 
 
-def run_target_hf_scenario(initial_hf: float, target_hf: float, monte_carlo_runs: int) -> Dict:
-    """Run scenario testing specific initial and target health factors"""
+def run_target_hf_scenario(target_hf: float, monte_carlo_runs: int) -> Dict:
+    """Run scenario testing a specific target health factor with varied agent population"""
     
-    buffer = initial_hf - target_hf
-    print(f"   Testing Initial HF: {initial_hf:.2f}, Target HF: {target_hf:.2f} (Buffer: {buffer:.2f})")
+    print(f"   Running {monte_carlo_runs} Monte Carlo simulations with Target HF: {target_hf:.3f}")
     
     # Store results from all runs
     ht_runs = []
     aave_runs = []
     
     for run_num in range(monte_carlo_runs):
-        # High Tide simulation with custom agents
+        # High Tide simulation with randomized agents
         ht_config = HighTideConfig()
         ht_config.num_high_tide_agents = 0  # We'll create custom agents
         ht_config.btc_decline_duration = 60
         ht_config.moet_btc_pool_size = 250_000  # Standard pool size
         ht_config.moet_yield_pool_size = 250_000  # Standard YT pool size
         
-        # Create custom High Tide agents with specific HF parameters
+        # Create custom High Tide agents with randomized initial HFs
         custom_ht_agents = create_custom_agents_for_hf_test(
-            initial_hf, target_hf, num_agents=15, agent_type="high_tide"
+            target_hf, num_agents=15, agent_type="high_tide"
         )
         
         ht_engine = HighTideSimulationEngine(ht_config)
@@ -104,16 +101,16 @@ def run_target_hf_scenario(initial_hf: float, target_hf: float, monte_carlo_runs
         ht_results = ht_engine.run_high_tide_simulation()
         ht_runs.append(ht_results)
         
-        # Aave simulation with matching agents
+        # Aave simulation with matching agents (same random seed for consistency)
         aave_config = AaveConfig()
         aave_config.num_aave_agents = 0  # We'll create custom agents
         aave_config.btc_decline_duration = 60
         aave_config.moet_btc_pool_size = 250_000
         aave_config.moet_yield_pool_size = 250_000
         
-        # Create matching Aave agents
+        # Create matching Aave agents with same target HF
         custom_aave_agents = create_custom_agents_for_hf_test(
-            initial_hf, target_hf, num_agents=15, agent_type="aave"
+            target_hf, num_agents=15, agent_type="aave"
         )
         
         aave_engine = AaveSimulationEngine(aave_config)
@@ -127,7 +124,7 @@ def run_target_hf_scenario(initial_hf: float, target_hf: float, monte_carlo_runs
         aave_runs.append(aave_results)
     
     # Aggregate results
-    scenario_analysis = aggregate_hf_scenario_results(ht_runs, aave_runs, initial_hf, target_hf)
+    scenario_analysis = aggregate_hf_scenario_results(ht_runs, aave_runs, target_hf)
     
     print(f"      High Tide: {scenario_analysis['high_tide_summary']['mean_survival_rate']:.1%} survival, "
           f"{scenario_analysis['high_tide_summary']['mean_liquidations']:.1f} liquidations")
@@ -137,23 +134,27 @@ def run_target_hf_scenario(initial_hf: float, target_hf: float, monte_carlo_runs
     return scenario_analysis
 
 
-def create_custom_agents_for_hf_test(initial_hf: float, target_hf: float, num_agents: int, agent_type: str) -> List:
-    """Create custom agents with specific health factor parameters for testing"""
+def create_custom_agents_for_hf_test(target_hf: float, num_agents: int, agent_type: str) -> List:
+    """Create custom agents with randomized initial HFs (1.2-1.5) and fixed target HF for testing"""
+    import random
     from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
     from tidal_protocol_sim.agents.aave_agent import AaveAgent
     
     agents = []
     
     for i in range(num_agents):
+        # Randomize initial health factor between 1.2-1.5 for proper variation
+        initial_hf = random.uniform(1.2, 1.5)
+        
         if agent_type == "high_tide":
             agent = HighTideAgent(
-                f"hf_test_ht_{initial_hf}_{target_hf}_{i}",
+                f"hf_test_ht_{target_hf}_{i}",
                 initial_hf,
                 target_hf
             )
         else:  # aave
             agent = AaveAgent(
-                f"hf_test_aave_{initial_hf}_{target_hf}_{i}",
+                f"hf_test_aave_{target_hf}_{i}",
                 initial_hf,
                 target_hf
             )
@@ -163,8 +164,8 @@ def create_custom_agents_for_hf_test(initial_hf: float, target_hf: float, num_ag
     return agents
 
 
-def aggregate_hf_scenario_results(ht_runs: List, aave_runs: List, initial_hf: float, target_hf: float) -> Dict:
-    """Aggregate results for a specific health factor scenario"""
+def aggregate_hf_scenario_results(ht_runs: List, aave_runs: List, target_hf: float) -> Dict:
+    """Aggregate results for a specific target health factor scenario"""
     
     # Aggregate High Tide metrics
     ht_survival_rates = []
@@ -198,9 +199,8 @@ def aggregate_hf_scenario_results(ht_runs: List, aave_runs: List, initial_hf: fl
     
     # Calculate summary statistics
     return {
-        "initial_hf": initial_hf,
         "target_hf": target_hf,
-        "hf_buffer": initial_hf - target_hf,
+        "initial_hf_range": [1.2, 1.5],  # Agent variation range
         "high_tide_summary": {
             "mean_survival_rate": np.mean(ht_survival_rates),
             "survival_rate_std": np.std(ht_survival_rates),
@@ -240,9 +240,8 @@ def analyze_target_hf_results(results_matrix: List[Dict]) -> Dict:
         comparison = result["comparison"]
         
         df_data.append({
-            "initial_hf": params["initial_hf"],
             "target_hf": params["target_hf"],
-            "hf_buffer": params["hf_buffer"],
+            "initial_hf_range": params.get("initial_hf_range", [1.2, 1.5]),
             "ht_survival_rate": ht_summary["mean_survival_rate"],
             "ht_liquidation_frequency": ht_summary["liquidation_frequency"],
             "ht_rebalancing_events": ht_summary["mean_rebalancing_events"],
@@ -276,7 +275,7 @@ def find_optimal_target_hf(df: pd.DataFrame) -> Dict:
     
     recommendations = {}
     
-    for target_hf in [1.01, 1.05, 1.1, 1.15]:
+    for target_hf in [1.01, 1.05, 1.075, 1.1, 1.15]:
         target_data = df[df["target_hf"] == target_hf]
         
         if len(target_data) > 0:
@@ -406,12 +405,12 @@ def generate_statistical_summary(df: pd.DataFrame) -> Dict:
     return {
         "total_scenarios_tested": len(df),
         "target_hf_range": [df["target_hf"].min(), df["target_hf"].max()],
-        "hf_buffer_range": [df["hf_buffer"].min(), df["hf_buffer"].max()],
+        "initial_hf_range": [1.2, 1.5],  # Fixed range for all scenarios
         "survival_rate_range": [df["ht_survival_rate"].min(), df["ht_survival_rate"].max()],
         "liquidation_frequency_range": [df["ht_liquidation_frequency"].min(), df["ht_liquidation_frequency"].max()],
         "correlation_analysis": {
             "target_hf_vs_liquidations": df["target_hf"].corr(df["ht_liquidation_frequency"]),
-            "hf_buffer_vs_survival": df["hf_buffer"].corr(df["ht_survival_rate"]),
+            "target_hf_vs_survival": df["target_hf"].corr(df["ht_survival_rate"]),
             "rebalancing_vs_survival": df["ht_rebalancing_events"].corr(df["ht_survival_rate"])
         }
     }
@@ -429,7 +428,7 @@ def save_target_hf_results(analysis_results: Dict, results_matrix: List):
         "analysis_metadata": {
             "analysis_type": "Target_Health_Factor_Analysis",
             "timestamp": datetime.now().isoformat(),
-            "target_hfs_tested": [1.01, 1.05, 1.1, 1.15],
+            "target_hfs_tested": [1.01, 1.05, 1.075, 1.1, 1.15],
             "monte_carlo_runs_per_scenario": 20,
             "total_scenarios": len(results_matrix)
         },
@@ -453,9 +452,9 @@ def save_target_hf_results(analysis_results: Dict, results_matrix: List):
         comparison = result["comparison"]
         
         df_data.append({
-            "initial_hf": params["initial_hf"],
             "target_hf": params["target_hf"],
-            "hf_buffer": params["hf_buffer"],
+            "initial_hf_range_min": params.get("initial_hf_range", [1.2, 1.5])[0],
+            "initial_hf_range_max": params.get("initial_hf_range", [1.2, 1.5])[1],
             "ht_survival_rate": ht_summary["mean_survival_rate"],
             "ht_liquidation_frequency": ht_summary["liquidation_frequency"],
             "ht_rebalancing_events": ht_summary["mean_rebalancing_events"],
@@ -506,11 +505,11 @@ def print_target_hf_summary(analysis_results: Dict):
     # Target HF recommendations
     all_recs = optimal_recs.get("all_target_hf_analysis", {})
     print(f"\n📊 TARGET HEALTH FACTOR ANALYSIS:")
-    for target_hf in [1.01, 1.05, 1.1, 1.15]:
+    for target_hf in [1.01, 1.05, 1.075, 1.1, 1.15]:
         rec = all_recs.get(f"target_hf_{target_hf}")
         if rec:
             status = "✅ SAFE" if rec["recommended"] else "⚠️  RISKY"
-            print(f"   {target_hf:.2f}: {rec['risk_level']} - {rec['avg_liquidation_frequency']:.1%} liquidations {status}")
+            print(f"   {target_hf:.3f}: {rec['risk_level']} - {rec['avg_liquidation_frequency']:.1%} liquidations {status}")
     
     # Statistical correlations
     stats = analysis_results.get("statistical_summary", {})
@@ -518,7 +517,7 @@ def print_target_hf_summary(analysis_results: Dict):
     
     print(f"\n🔬 STATISTICAL CORRELATIONS:")
     print(f"   Target HF ↔ Liquidations: {correlations.get('target_hf_vs_liquidations', 0):.3f}")
-    print(f"   HF Buffer ↔ Survival: {correlations.get('hf_buffer_vs_survival', 0):.3f}")
+    print(f"   Target HF ↔ Survival: {correlations.get('target_hf_vs_survival', 0):.3f}")
     print(f"   Rebalancing ↔ Survival: {correlations.get('rebalancing_vs_survival', 0):.3f}")
     
     print("\n" + "=" * 80)
