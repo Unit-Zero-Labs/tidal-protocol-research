@@ -60,7 +60,7 @@ However, overly aggressive thresholds risk:
 ### 2.1 Simulation Architecture
 
 #### 2.1.1 Agent Configuration
-- **Simulation Runs:** 3 Monte Carlo runs per target health factor (9 total scenarios)
+- **Simulation Runs:** Monte Carlo runs per target health factor (9 total scenarios)
 - **Agents per Run:** 15 agents with randomized initial health factors
 - **Initial Health Factor Distribution:** Uniform random (1.2, 1.5)
 - **Target Health Factor:** Fixed per scenario (1.01, 1.025, or 1.05)
