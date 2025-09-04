@@ -1,5 +1,5 @@
-# BTC:MOET Pool Liquidation Capacity Analysis
-## Technical Whitepaper: Deposit Cap Optimization for Concentrated Liquidity DEX
+title: "BTC:MOET Pool Liquidation Capacity Analysis"
+subtitle: "Technical Whitepaper: Deposit Cap Optimization for Concentrated Liquidity DEX"
 
 **Analysis Date:** September 4, 2025  
 **Protocol:** High Tide / Tidal Protocol  
@@ -7,7 +7,7 @@
 
 ---
 
-## Executive Summary
+# Executive Summary
 
 This technical analysis evaluates the maximum deposit cap ratios that can be sustained by a $250K:$250K BTC:MOET concentrated liquidity pool under severe market stress scenarios. Through systematic testing of 15-agent liquidation cascades across three price shock severities (10%, 15%, 25% BTC declines), we determine the liquidation capacity limits before concentrated liquidity exhaustion renders further liquidations impossible.
 
