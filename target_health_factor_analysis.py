@@ -2,7 +2,7 @@
 """
 Target Health Factor Analysis
 
-Tests different target health factors (1.01, 1.05, 1.1, 1.15) to determine
+Tests different target health factors (1.01, 1.025, 1.05) to determine
 how low we can make the rebalancing trigger before agents begin getting liquidated frequently.
 
 This analysis answers the key question: What is the optimal Target Health Factor 
@@ -51,13 +51,13 @@ def run_target_hf_analysis():
     print("=" * 80)
     print("TARGET HEALTH FACTOR ANALYSIS")
     print("=" * 80)
-    print("Testing target health factors: 1.01, 1.05, 1.075, 1.1, 1.15")
+    print("Testing target health factors: 1.01, 1.025, 1.05")
     print("Question: How low can Target HF go before frequent liquidations?")
     print()
     
     # Target health factors to test (discrete testing)
-    target_hfs = [1.01, 1.05, 1.075, 1.1, 1.15]
-    monte_carlo_runs = 5  # Each target HF gets 5 runs with varied agents
+    target_hfs = [1.01, 1.025, 1.05]
+    monte_carlo_runs = 3  # Each target HF gets 3 runs with varied agents
     agents_per_run = 15  # 15 agents per run
     
     results_matrix = []
@@ -117,7 +117,7 @@ def run_target_hf_scenario(target_hf: float, monte_carlo_runs: int) -> Dict:
         ht_config.btc_decline_duration = 60
         ht_config.moet_btc_pool_size = 250_000  # Standard pool size
         ht_config.moet_yield_pool_size = 250_000  # Standard YT pool size
-        ht_config.yield_token_concentration = 0.95  # 95% concentration for yield tokens
+        ht_config.yield_token_concentration = 0.90  # 90% concentration for yield tokens
         
         # Create custom High Tide agents with randomized initial HFs and proper naming
         custom_ht_agents = create_custom_agents_for_hf_test(
@@ -505,8 +505,8 @@ def save_target_hf_results(analysis_results: Dict, results_matrix: List):
         "analysis_metadata": {
             "analysis_type": "Target_Health_Factor_Analysis",
             "timestamp": datetime.now().isoformat(),
-            "target_hfs_tested": [1.01, 1.05, 1.075, 1.1, 1.15],
-            "monte_carlo_runs_per_scenario": 5,
+            "target_hfs_tested": [1.01, 1.025, 1.05],
+            "monte_carlo_runs_per_scenario": 3,
             "agents_per_run": 15,
             "total_scenarios": len(results_matrix)
         },
@@ -637,7 +637,7 @@ def print_target_hf_summary(analysis_results: Dict):
     # Target HF recommendations
     all_recs = optimal_recs.get("all_target_hf_analysis", {})
     print(f"\n📊 TARGET HEALTH FACTOR ANALYSIS:")
-    for target_hf in [1.01, 1.05, 1.075, 1.1, 1.15]:
+    for target_hf in [1.01, 1.025, 1.05]:
         rec = all_recs.get(f"target_hf_{target_hf}")
         if rec:
             status = "✅ SAFE" if rec["recommended"] else "⚠️  RISKY"
@@ -1789,7 +1789,7 @@ def create_target_hf_dashboard(analysis_results: Dict, charts_dir: Path) -> Path
         rebalancing_events = []
         risk_levels = []
         
-        for target_hf in [1.01, 1.05, 1.075, 1.1, 1.15]:
+        for target_hf in [1.01, 1.025, 1.05]:
             rec = all_recs.get(f"target_hf_{target_hf}")
             if rec:
                 target_hfs.append(target_hf)
