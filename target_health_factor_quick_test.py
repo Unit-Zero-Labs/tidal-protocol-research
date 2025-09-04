@@ -27,6 +27,23 @@ sys.path.insert(0, str(project_root))
 
 from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighTideSimulationEngine
 from tidal_protocol_sim.simulation.aave_engine import AaveConfig, AaveSimulationEngine
+from tidal_protocol_sim.core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
+
+
+class BTCOnyProtocol(TidalProtocol):
+    """BTC-only protocol configuration for Target Health Factor analysis"""
+    
+    def _initialize_asset_pools(self):
+        """Initialize only BTC asset pool"""
+        return {
+            Asset.BTC: AssetPool(Asset.BTC, 3_500_000),   # $3.5M initial BTC only
+        }
+    
+    def _initialize_liquidity_pools(self):
+        """Initialize only MOET:BTC trading pair"""
+        return {
+            "MOET_BTC": LiquidityPool(Asset.BTC, 1250000, 10.59),   # ~$1.25M at $118k/BTC
+        }
 
 
 def create_varied_agents_for_target_hf_test(target_hf: float, num_agents: int, agent_type: str) -> List:
@@ -66,12 +83,12 @@ def run_quick_target_hf_test():
     print("TARGET HEALTH FACTOR QUICK TEST")
     print("=" * 60)
     print("Testing design: Randomized Initial HFs (1.2-1.5) with discrete Target HFs")
-    print("Target HFs: 1.05, 1.1, 1.15 (quick validation)")
+    print("Target HFs: 1.01, 1.05 (3 runs each for validation)")
     print()
     
-    # Quick test with just 2 target HFs and fewer runs
-    target_hfs = [1.05, 1.1, 1.15]  # More variation for better charts
-    monte_carlo_runs = 1  # Quick validation
+    # Quick test with 2 target HFs and 3 runs each
+    target_hfs = [1.01, 1.05]  # Test the most aggressive target HFs
+    monte_carlo_runs = 3  # 3 runs per target HF for better validation
     
     results = []
     
@@ -100,6 +117,9 @@ def run_quick_target_hf_test():
             
             ht_engine = HighTideSimulationEngine(ht_config)
             ht_engine.high_tide_agents = custom_ht_agents
+            
+            # Replace protocol with BTC-only version
+            ht_engine.protocol = BTCOnyProtocol()
             
             for agent in custom_ht_agents:
                 ht_engine.agents[agent.agent_id] = agent
@@ -133,19 +153,20 @@ def run_quick_target_hf_test():
         scenario_results = aggregate_quick_test_results(ht_runs, aave_runs, target_hf)
         results.append(scenario_results)
         
-        print(f"   Results: HT {scenario_results['ht_survival_rate']:.1%} survival, "
-              f"Aave {scenario_results['aave_survival_rate']:.1%} survival")
+        print(f"   Results: HT {scenario_results['high_tide_summary']['mean_survival_rate']:.1%} survival, "
+              f"Aave {scenario_results['aave_summary']['mean_survival_rate']:.1%} survival")
         print()
     
     # Save quick test results
-    save_quick_test_results(results)
+    # Save results with JSON output and get run folder
+    run_folder = save_quick_test_results(results)
     
-    # Generate quick test charts
-    output_dir = Path("tidal_protocol_sim/results/target_health_factor_analysis")
-    generated_charts = create_quick_test_charts(results, output_dir)
+    # Generate quick test charts in the run folder
+    generated_charts = create_quick_test_charts(results, run_folder)
     
     print("✅ Quick test completed! Ready for full analysis.")
     print(f"📊 Generated {len(generated_charts)} quick test charts")
+    print(f"📁 All results saved to: {run_folder}")
     return results
 
 
@@ -180,42 +201,155 @@ def aggregate_quick_test_results(ht_runs: List, aave_runs: List, target_hf: floa
     
     return {
         "target_hf": target_hf,
-        "ht_survival_rate": np.mean(ht_survival_rates),
-        "ht_liquidation_frequency": np.mean(ht_liquidations) / 10,  # Per agent
-        "aave_survival_rate": np.mean(aave_survival_rates),
-        "aave_liquidation_frequency": np.mean(aave_liquidations) / 10,  # Per agent
-        "raw_data": {
-            "ht_agent_outcomes": ht_agent_outcomes,
-            "aave_agent_outcomes": aave_agent_outcomes
-        },
-        "design_validation": {
-            "agents_varied": True,
+        "scenario_params": {
+            "target_hf": target_hf,
             "initial_hf_range": [1.2, 1.5],
-            "fixed_target_hf": target_hf,
+            "variation_type": "randomized_initial_hf"
+        },
+        "high_tide_summary": {
+            "mean_survival_rate": np.mean(ht_survival_rates),
+            "mean_liquidations": np.mean(ht_liquidations),
+            "liquidation_frequency": np.mean(ht_liquidations) / 10  # 10 agents per run
+        },
+        "aave_summary": {
+            "mean_survival_rate": np.mean(aave_survival_rates),
+            "mean_liquidations": np.mean(aave_liquidations),
+            "liquidation_frequency": np.mean(aave_liquidations) / 10  # 10 agents per run
+        },
+        "comparison": {
+            "survival_improvement": ((np.mean(ht_survival_rates) - np.mean(aave_survival_rates)) / np.mean(aave_survival_rates) * 100) if np.mean(aave_survival_rates) > 0 else 0,
+            "liquidation_reduction": ((np.mean(aave_liquidations) - np.mean(ht_liquidations)) / np.mean(aave_liquidations) * 100) if np.mean(aave_liquidations) > 0 else 0
+        },
+        "ht_agent_outcomes": ht_agent_outcomes,
+        "aave_agent_outcomes": aave_agent_outcomes,
+        "detailed_simulation_data": {
+            "ht_runs": ht_runs,  # Store the raw runs for clean processing
+            "aave_runs": aave_runs
+        },
+        "validation_checks": {
+            "ht_has_variation": len(set(ht_survival_rates)) > 1,  # Different survival outcomes
+            "aave_has_variation": len(set(aave_survival_rates)) > 1,  # Different survival outcomes
             "liquidation_spread": len(set(ht_liquidations + aave_liquidations)) > 1  # Different liquidation outcomes
         }
     }
 
 
-def save_quick_test_results(results: List[Dict]):
-    """Save quick test results"""
+def build_clean_simulation_data(ht_runs: List[Dict], target_hf: float) -> List[Dict]:
+    """Build clean, navigable simulation data structure"""
+    clean_runs = []
     
-    output_dir = Path("tidal_protocol_sim/results/target_health_factor_analysis")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    for run_idx, run in enumerate(ht_runs):
+        # Filter out non-test agents from agent_health_factors
+        agent_health_factors = run.get("agent_health_factors", {})
+        filtered_health_factors = {
+            agent_id: hf for agent_id, hf in agent_health_factors.items()
+            if agent_id.startswith(f"quick_test_ht_{target_hf}_")
+        }
+        
+        # Filter agent_actions_history to only include test agents
+        agent_actions = run.get("agent_actions_history", [])
+        filtered_actions = [
+            action for action in agent_actions
+            if action.get("agent_id", "").startswith(f"quick_test_ht_{target_hf}_")
+        ]
+        
+        # Filter agent_health_history to only include test agents
+        agent_health_history = run.get("agent_health_history", [])
+        filtered_health_history = []
+        for minute_data in agent_health_history:
+            filtered_agents = [
+                agent for agent in minute_data.get("agents", [])
+                if agent.get("agent_id", "").startswith(f"quick_test_ht_{target_hf}_")
+            ]
+            if filtered_agents:  # Only include minutes that have test agents
+                filtered_health_history.append({
+                    "minute": minute_data.get("minute"),
+                    "agents": filtered_agents
+                })
+        
+        clean_run = {
+            "run_id": f"run_{run_idx+1:03d}_target_hf_{target_hf}",
+            "timestamp": datetime.now().isoformat(),
+            "btc_price_history": run.get("btc_price_history", []),
+            "agent_health_history": filtered_health_history,
+            "agent_actions_history": filtered_actions,
+            "rebalancing_events": run.get("rebalancing_events", []),
+            "agent_outcomes": run.get("agent_outcomes", []),
+            "summary_stats": {
+                "total_agents": len(filtered_health_factors),
+                "survived_agents": sum(1 for outcome in run.get("agent_outcomes", []) if outcome.get("survived", True)),
+                "total_rebalancing_events": len(run.get("rebalancing_events", [])),
+                "total_slippage_costs": sum(outcome.get("total_slippage_costs", 0) for outcome in run.get("agent_outcomes", [])),
+                "final_btc_price": run.get("btc_price_history", [100000])[-1] if isinstance(run.get("btc_price_history", [100000])[-1], (int, float)) else run.get("btc_price_history", [100000])[-1].get("btc_price", 100000) if run.get("btc_price_history") else 100000,
+                "btc_price_decline_percent": ((100000 - (run.get("btc_price_history", [100000])[-1] if isinstance(run.get("btc_price_history", [100000])[-1], (int, float)) else run.get("btc_price_history", [100000])[-1].get("btc_price", 100000) if run.get("btc_price_history") else 100000)) / 100000) * 100
+            }
+        }
+        clean_runs.append(clean_run)
+    
+    return clean_runs
+
+
+def save_quick_test_results(results: List[Dict]):
+    """Save quick test results with numbered run folder"""
+    
+    # Create base results directory
+    base_results_path = Path("tidal_protocol_sim/results/target_health_factor_analysis")
+    base_results_path.mkdir(parents=True, exist_ok=True)
+    
+    # Find next available run number
+    run_number = 1
+    while True:
+        run_folder = base_results_path / f"run_{run_number:03d}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        if not run_folder.exists():
+            break
+        run_number += 1
+    
+    # Create run-specific directory
+    run_folder.mkdir(parents=True, exist_ok=True)
+    
+    # Build clean, navigable results structure (same as main analysis)
+    clean_scenario_results = []
+    for result in results:
+        target_hf = result["target_hf"]
+        
+        # Extract the ht_runs from detailed_simulation_data if it exists
+        ht_runs = []
+        if "detailed_simulation_data" in result and "ht_runs" in result["detailed_simulation_data"]:
+            ht_runs = result["detailed_simulation_data"]["ht_runs"]
+        
+        clean_runs = build_clean_simulation_data(ht_runs, target_hf)
+        
+        clean_scenario = {
+            "target_hf": target_hf,
+            "scenario_params": result.get("scenario_params", {}),
+            "high_tide_summary": result.get("high_tide_summary", {}),
+            "aave_summary": result.get("aave_summary", {}),
+            "comparison": result.get("comparison", {}),
+            "ht_agent_outcomes": result.get("ht_agent_outcomes", []),
+            "aave_agent_outcomes": result.get("aave_agent_outcomes", []),
+            "simulation_runs": clean_runs
+        }
+        clean_scenario_results.append(clean_scenario)
     
     quick_test_results = {
-        "test_type": "Quick_Validation_Test",
-        "timestamp": datetime.now().isoformat(),
-        "design_fix": "Randomized initial HFs (1.2-1.5) with fixed target HFs",
-        "target_hfs_tested": [r["target_hf"] for r in results],
-        "results": results
+        "analysis_metadata": {
+            "analysis_type": "Quick_Validation_Test",
+            "timestamp": datetime.now().isoformat(),
+            "target_hfs_tested": [r["target_hf"] for r in results],
+            "monte_carlo_runs_per_scenario": 3,
+            "agents_per_run": 10,
+            "total_scenarios": len(results),
+            "design_fix": "Randomized initial HFs (1.2-1.5) with fixed target HFs"
+        },
+        "detailed_scenario_results": clean_scenario_results
     }
     
-    results_path = output_dir / "quick_test_results.json"
+    results_path = run_folder / "quick_test_results.json"
     with open(results_path, 'w', encoding='utf-8') as f:
         json.dump(quick_test_results, f, indent=2, default=str)
     
-    print(f"📁 Quick test results saved to: {results_path}")
+    print(f"📁 Quick test results saved to: {run_folder}")
+    return run_folder
 
 
 def create_quick_test_charts(results: List[Dict], output_dir: Path) -> List[Path]:
@@ -292,6 +426,7 @@ def run_detailed_simulation_for_charts() -> Dict:
         ht_config.btc_decline_duration = 60
         ht_config.moet_btc_pool_size = 250_000
         ht_config.moet_yield_pool_size = 250_000
+        ht_config.yield_token_concentration = 0.95  # 95% concentration for yield tokens
         
         # Create varied High Tide agents with a moderate target HF
         target_hf = 1.1  # Use a moderate target HF for good rebalancing activity
@@ -340,10 +475,10 @@ def create_quick_test_validation_chart(results: List[Dict], charts_dir: Path) ->
         
         # Extract data
         target_hfs = [r["target_hf"] for r in results]
-        ht_survival_rates = [r["ht_survival_rate"] for r in results]
-        aave_survival_rates = [r["aave_survival_rate"] for r in results]
-        ht_liquidation_freqs = [r["ht_liquidation_frequency"] for r in results]
-        aave_liquidation_freqs = [r["aave_liquidation_frequency"] for r in results]
+        ht_survival_rates = [r["high_tide_summary"]["mean_survival_rate"] for r in results]
+        aave_survival_rates = [r["aave_summary"]["mean_survival_rate"] for r in results]
+        ht_liquidation_freqs = [r["high_tide_summary"]["liquidation_frequency"] for r in results]
+        aave_liquidation_freqs = [r["aave_summary"]["liquidation_frequency"] for r in results]
         
         # Create comprehensive comparison dashboard
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
@@ -488,8 +623,8 @@ def create_basic_quick_test_charts(results: List[Dict], charts_dir: Path) -> Lis
         fig, ax = plt.subplots(1, 1, figsize=(12, 8))
         
         target_hfs = [r["target_hf"] for r in results]
-        ht_survival_rates = [r["ht_survival_rate"] for r in results]
-        aave_survival_rates = [r["aave_survival_rate"] for r in results]
+        ht_survival_rates = [r["high_tide_summary"]["mean_survival_rate"] for r in results]
+        aave_survival_rates = [r["aave_summary"]["mean_survival_rate"] for r in results]
         
         x_pos = np.arange(len(target_hfs))
         width = 0.35

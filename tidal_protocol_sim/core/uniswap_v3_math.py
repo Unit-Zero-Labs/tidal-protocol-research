@@ -365,7 +365,7 @@ class UniswapV3SlippageCalculator:
     def calculate_swap_slippage(
         self, 
         amount_in: float, 
-        token_in: str,  # "MOET" or "BTC"
+        token_in: str,  # "MOET", "BTC", or "Yield_Token"
         concentrated_range: float = 0.2  # Legacy parameter, now uses actual bins
     ) -> Dict[str, float]:
         """
@@ -373,7 +373,7 @@ class UniswapV3SlippageCalculator:
         
         Args:
             amount_in: Amount of input token to swap
-            token_in: Which token is being swapped in ("MOET" or "BTC")
+            token_in: Which token is being swapped in ("MOET", "BTC", or "Yield_Token")
             concentrated_range: Legacy parameter for backward compatibility
             
         Returns:
@@ -381,11 +381,16 @@ class UniswapV3SlippageCalculator:
         """
         
         if token_in == "MOET":
-            return self._calculate_moet_to_btc_swap_with_bins(amount_in)
+            if "Yield_Token" in self.pool.pool_name:
+                return self._calculate_moet_to_yield_token_swap_with_bins(amount_in)
+            else:
+                return self._calculate_moet_to_btc_swap_with_bins(amount_in)
         elif token_in == "BTC":
             return self._calculate_btc_to_moet_swap_with_bins(amount_in)
+        elif token_in == "Yield_Token":
+            return self._calculate_yield_token_to_moet_swap_with_bins(amount_in)
         else:
-            raise ValueError("token_in must be 'MOET' or 'BTC'")
+            raise ValueError("token_in must be 'MOET', 'BTC', or 'Yield_Token'")
     
     def _calculate_moet_to_btc_swap_with_bins(self, moet_amount: float) -> Dict[str, float]:
         """Calculate MOET -> BTC swap using discrete liquidity bins"""
@@ -577,6 +582,98 @@ class UniswapV3SlippageCalculator:
         
         # Update legacy fields for backward compatibility
         self.pool._update_legacy_fields()
+
+    def _calculate_moet_to_yield_token_swap_with_bins(self, moet_amount: float) -> Dict[str, float]:
+        """Calculate MOET -> Yield Token swap using discrete liquidity bins"""
+        
+        # Current price (Yield Token per MOET) - should be 1.0
+        current_price = self.pool.get_price()
+        
+        # Calculate total liquidity available in active bins
+        total_liquidity = sum(bin.liquidity for bin in self.pool.bins if bin.is_active)
+        
+        if total_liquidity <= 0:
+            return {
+                "amount_in": moet_amount,
+                "amount_out": 0.0,
+                "slippage_percent": 100.0,
+                "slippage_amount": moet_amount,
+                "trading_fees": moet_amount * self.pool.fee_tier,
+                "price_impact": 100.0
+            }
+        
+        # Calculate price impact based on trade size vs liquidity
+        # For yield tokens, we use a more conservative calculation since they're protocol-native
+        price_impact = (moet_amount / total_liquidity) * 0.5  # 50% of the ratio as price impact
+        
+        # Calculate output with price impact
+        effective_price = current_price * (1 - price_impact)
+        yield_tokens_out = moet_amount * effective_price
+        
+        # Apply trading fees
+        trading_fees = moet_amount * self.pool.fee_tier
+        net_moet_amount = moet_amount - trading_fees
+        yield_tokens_out = net_moet_amount * effective_price
+        
+        # Calculate slippage
+        expected_output = moet_amount * current_price
+        slippage_amount = expected_output - yield_tokens_out
+        slippage_percent = (slippage_amount / expected_output * 100) if expected_output > 0 else 0
+        
+        return {
+            "amount_in": moet_amount,
+            "amount_out": yield_tokens_out,
+            "slippage_percent": slippage_percent,
+            "slippage_amount": slippage_amount,
+            "trading_fees": trading_fees,
+            "price_impact": price_impact * 100
+        }
+
+    def _calculate_yield_token_to_moet_swap_with_bins(self, yield_token_amount: float) -> Dict[str, float]:
+        """Calculate Yield Token -> MOET swap using discrete liquidity bins"""
+        
+        # Current price (MOET per Yield Token) - should be 1.0
+        current_price = 1.0 / self.pool.get_price()  # Invert for MOET per Yield Token
+        
+        # Calculate total liquidity available in active bins
+        total_liquidity = sum(bin.liquidity for bin in self.pool.bins if bin.is_active)
+        
+        if total_liquidity <= 0:
+            return {
+                "amount_in": yield_token_amount,
+                "amount_out": 0.0,
+                "slippage_percent": 100.0,
+                "slippage_amount": yield_token_amount,
+                "trading_fees": yield_token_amount * self.pool.fee_tier,
+                "price_impact": 100.0
+            }
+        
+        # Calculate price impact based on trade size vs liquidity
+        # For yield tokens, we use a more conservative calculation since they're protocol-native
+        price_impact = (yield_token_amount / total_liquidity) * 0.5  # 50% of the ratio as price impact
+        
+        # Calculate output with price impact
+        effective_price = current_price * (1 - price_impact)
+        moet_out = yield_token_amount * effective_price
+        
+        # Apply trading fees
+        trading_fees = yield_token_amount * self.pool.fee_tier
+        net_yield_token_amount = yield_token_amount - trading_fees
+        moet_out = net_yield_token_amount * effective_price
+        
+        # Calculate slippage
+        expected_output = yield_token_amount * current_price
+        slippage_amount = expected_output - moet_out
+        slippage_percent = (slippage_amount / expected_output * 100) if expected_output > 0 else 0
+        
+        return {
+            "amount_in": yield_token_amount,
+            "amount_out": moet_out,
+            "slippage_percent": slippage_percent,
+            "slippage_amount": slippage_amount,
+            "trading_fees": trading_fees,
+            "price_impact": price_impact * 100
+        }
 
 
 def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.80) -> UniswapV3Pool:

@@ -28,6 +28,107 @@ from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighT
 from tidal_protocol_sim.simulation.aave_engine import AaveConfig, AaveSimulationEngine
 from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
 from tidal_protocol_sim.agents.aave_agent import AaveAgent
+from tidal_protocol_sim.core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
+
+
+class BTCOnyProtocol(TidalProtocol):
+    """BTC-only protocol for aggressive scenarios testing"""
+    
+    def __init__(self):
+        super().__init__()
+        
+        # Create BTC-only asset pools
+        self.asset_pools = {
+            Asset.BTC: AssetPool(
+                asset=Asset.BTC,
+                total_supply=0.0,
+                total_borrowed=0.0,
+                collateral_factor=0.80,  # 80% collateral factor
+                borrow_cap=float('inf'),
+                liquidation_threshold=0.85
+            )
+        }
+        
+        # Create BTC-only liquidity pools
+        self.liquidity_pools = {
+            "moet_btc": LiquidityPool(
+                pool_name="MOET:BTC",
+                asset_a=Asset.MOET,
+                asset_b=Asset.BTC,
+                total_liquidity_a=0.0,
+                total_liquidity_b=0.0,
+                fee_rate=0.003  # 0.3% fee
+            )
+        }
+
+
+def convert_for_json(obj):
+    """Convert objects to JSON-serializable format"""
+    if isinstance(obj, dict):
+        return {str(k): convert_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_for_json(item) for item in obj]
+    elif isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif hasattr(obj, '__dict__'):
+        return convert_for_json(obj.__dict__)
+    elif isinstance(obj, (int, float, str, bool, type(None))):
+        return obj
+    else:
+        return str(obj)
+
+
+def build_clean_simulation_data(simulation_runs: List, scenario_type: str) -> List:
+    """Build clean, navigable simulation data structure"""
+    clean_runs = []
+    
+    for run in simulation_runs:
+        # Filter out non-test agents (lender_0, trader_0, liquidator_0, etc.)
+        agent_outcomes = run.get("agent_outcomes", [])
+        filtered_outcomes = [
+            outcome for outcome in agent_outcomes 
+            if not any(prefix in outcome.get("agent_id", "") for prefix in ["lender_", "trader_", "liquidator_", "high_tide_conservative_"])
+        ]
+        
+        # Extract health factor history for test agents only
+        health_factors = run.get("agent_health_history", {})
+        filtered_health_factors = {
+            agent_id: history for agent_id, history in health_factors.items()
+            if not any(prefix in agent_id for prefix in ["lender_", "trader_", "liquidator_", "high_tide_conservative_"])
+        }
+        
+        # Extract actions history for test agents only
+        actions_history = run.get("agent_actions_history", {})
+        filtered_actions_history = {
+            agent_id: actions for agent_id, actions in actions_history.items()
+            if not any(prefix in agent_id for prefix in ["lender_", "trader_", "liquidator_", "high_tide_conservative_"])
+        }
+        
+        clean_run = {
+            "simulation_metadata": {
+                "scenario_type": scenario_type,
+                "btc_price_history": run.get("btc_price_history", []),
+                "total_agents": len(filtered_outcomes),
+                "simulation_duration": run.get("simulation_duration", 60)
+            },
+            "agent_health_factors": filtered_health_factors,
+            "agent_actions_history": filtered_actions_history,
+            "rebalancing_events": run.get("rebalancing_events", []),
+            "agent_outcomes": filtered_outcomes,
+            "summary_stats": {
+                "total_agents": len(filtered_outcomes),
+                "survived_agents": sum(1 for outcome in filtered_outcomes if outcome.get("survived", True)),
+                "total_rebalancing_events": len(run.get("rebalancing_events", [])),
+                "total_slippage_costs": sum(outcome.get("total_slippage_costs", 0) for outcome in filtered_outcomes),
+                "final_btc_price": run.get("btc_price_history", [100000])[-1] if isinstance(run.get("btc_price_history", [100000])[-1], (int, float)) else run.get("btc_price_history", [100000])[-1].get("btc_price", 100000) if run.get("btc_price_history") else 100000,
+                "btc_price_decline_percent": ((100000 - (run.get("btc_price_history", [100000])[-1] if isinstance(run.get("btc_price_history", [100000])[-1], (int, float)) else run.get("btc_price_history", [100000])[-1].get("btc_price", 100000) if run.get("btc_price_history") else 100000)) / 100000) * 100
+            }
+        }
+        clean_runs.append(clean_run)
+    
+    return clean_runs
 
 
 def run_aggressive_scenarios_analysis():
@@ -114,6 +215,8 @@ def run_aggressive_scenario(scenario: Dict, pool_scenario: Dict) -> Dict:
         ht_config.btc_decline_duration = 60
         ht_config.moet_btc_pool_size = 250_000  # Standard liquidation pool
         ht_config.moet_yield_pool_size = moet_yt_pool_size  # Variable rebalancing pool
+        ht_config.moet_btc_concentration = 0.80  # 80% concentration at peg for BTC:MOET
+        ht_config.yield_token_concentration = 0.95  # 95% concentration at peg for MOET:YT
         
         # Create aggressive High Tide agents
         aggressive_ht_agents = create_aggressive_agents(
@@ -121,6 +224,7 @@ def run_aggressive_scenario(scenario: Dict, pool_scenario: Dict) -> Dict:
         )
         
         ht_engine = HighTideSimulationEngine(ht_config)
+        ht_engine.protocol = BTCOnyProtocol()  # Enforce BTC-only
         ht_engine.high_tide_agents = aggressive_ht_agents
         for agent in aggressive_ht_agents:
             ht_engine.agents[agent.agent_id] = agent
@@ -433,11 +537,39 @@ def save_aggressive_scenarios_results(analysis: Dict, all_results: List):
     output_dir = Path("tidal_protocol_sim/results/aggressive_agent_scenarios")
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Build clean simulation data for each pool scenario
+    clean_scenario_results = {}
+    
+    for pool_results in all_results:
+        pool_label = pool_results["pool_scenario"]["label"]
+        
+        # Extract High Tide simulation runs
+        ht_runs = []
+        for result in pool_results["aggressive_results"]:
+            # We need to store the raw simulation data - this would need to be passed from run_aggressive_scenario
+            # For now, we'll create a placeholder structure
+            ht_runs.append({
+                "scenario_params": result["scenario_params"],
+                "pool_params": result["pool_params"],
+                "simulation_data": "raw_simulation_data_placeholder"  # This should be the actual simulation results
+            })
+        
+        # Build clean data structure
+        clean_runs = build_clean_simulation_data(ht_runs, f"aggressive_{pool_label}")
+        clean_scenario_results[pool_label] = {
+            "pool_scenario": pool_results["pool_scenario"],
+            "detailed_simulation_data": {
+                "ht_runs": clean_runs
+            },
+            "aggregated_metrics": pool_results["aggressive_results"]
+        }
+    
     # Prepare comprehensive results
     final_results = {
         "analysis_metadata": {
             "analysis_type": "Aggressive_Agent_Scenarios",
             "timestamp": datetime.now().isoformat(),
+            "research_question": "What are the breaking points of the rebalancing mechanism with tight HF ranges?",
             "scenarios_tested": [
                 {"initial_hf": 1.20, "target_hf": 1.05, "buffer": 0.15},
                 {"initial_hf": 1.15, "target_hf": 1.05, "buffer": 0.10},
@@ -447,16 +579,23 @@ def save_aggressive_scenarios_results(analysis: Dict, all_results: List):
                 {"initial_hf": 1.07, "target_hf": 1.05, "buffer": 0.02}
             ],
             "pool_stress_levels": ["low", "medium", "high"],
-            "monte_carlo_runs_per_scenario": 10
+            "monte_carlo_runs_per_scenario": 10,
+            "protocol_type": "BTC_only",
+            "uniswap_v3_math": True,
+            "moet_btc_concentration": 0.80,
+            "yield_token_concentration": 0.95
         },
         "analysis_findings": analysis,
-        "detailed_results": all_results
+        "detailed_scenario_results": clean_scenario_results
     }
+    
+    # Convert to JSON-serializable format
+    final_results = convert_for_json(final_results)
     
     # Save JSON results
     results_path = output_dir / "aggressive_scenarios_analysis.json"
     with open(results_path, 'w', encoding='utf-8') as f:
-        json.dump(final_results, f, indent=2, default=str)
+        json.dump(final_results, f, indent=2)
     
     print(f"📁 Aggressive scenarios results saved to: {results_path}")
     

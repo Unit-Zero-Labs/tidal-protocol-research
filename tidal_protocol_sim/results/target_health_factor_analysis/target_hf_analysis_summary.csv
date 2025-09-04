@@ -1,0 +1,6 @@
+target_hf,initial_hf_range_min,initial_hf_range_max,ht_survival_rate,ht_liquidation_frequency,ht_rebalancing_events
+1.01,1.2,1.5,1.0,0.0,3.4
+1.05,1.2,1.5,1.0,0.0,8.0
+1.075,1.2,1.5,1.0,0.0,9.4
+1.1,1.2,1.5,1.0,0.0,11.2
+1.15,1.2,1.5,1.0,0.0,16.0

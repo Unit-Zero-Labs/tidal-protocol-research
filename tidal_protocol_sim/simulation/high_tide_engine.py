@@ -183,9 +183,12 @@ class HighTideSimulationEngine(TidalSimulationEngine):
         self.moet_yield_tracker = LPCurveTracker(yield_pool_size, self.yield_token_concentration, "MOET:Yield_Token", btc_price)
         
         # Initialize concentrated liquidity pools for advanced analysis
-        from ..core.uniswap_v3_math import create_moet_btc_pool, create_yield_token_pool
+        from ..core.uniswap_v3_math import create_yield_token_pool
         self.moet_btc_concentrated_pool = create_moet_btc_pool(pool_size, btc_price, self.moet_btc_concentration)
         self.yield_token_concentrated_pool = create_yield_token_pool(yield_pool_size, btc_price, self.yield_token_concentration)
+        
+        # Create separate slippage calculator for yield token pool
+        self.yield_token_slippage_calculator = UniswapV3SlippageCalculator(self.yield_token_concentrated_pool)
 
         # Replace agents with High Tide agents
         self.high_tide_agents = create_high_tide_agents(
@@ -387,15 +390,31 @@ class HighTideSimulationEngine(TidalSimulationEngine):
             # Update yield token pool
             self.yield_token_pool.execute_yield_token_sale(moet_raised)
             
-            # Create swap data for tracking (no BTC swap, no slippage)
+            # Calculate slippage cost for the Yield Token -> MOET swap using proper Uniswap V3 math
+            slippage_result = self.yield_token_slippage_calculator.calculate_swap_slippage(
+                amount_needed, "Yield_Token"
+            )
+            
+            # Update pool state after the simulated swap
+            self.yield_token_slippage_calculator.update_pool_state(slippage_result)
+            
+            # Calculate total slippage cost
+            slippage_cost = slippage_result["slippage_amount"] + slippage_result["trading_fees"]
+            
+            # Create swap data for tracking with slippage
             swap_data = {
                 "yt_swapped": amount_needed,
                 "moet_received": moet_raised,
                 "debt_repayment": debt_repayment,
-                "swap_type": "rebalancing"
+                "swap_type": "rebalancing",
+                "slippage_cost": slippage_cost,
+                "slippage_percentage": slippage_result["slippage_percent"],
+                "price_impact": slippage_result["price_impact"],
+                "moet_received_actual": slippage_result["amount_out"],
+                "expected_moet": amount_needed  # Should be 1:1 for yield tokens
             }
             
-            # Record rebalancing event (no BTC swap slippage)
+            # Record rebalancing event with slippage details
             self.rebalancing_events.append({
                 "minute": minute,
                 "agent_id": agent.agent_id,
@@ -403,17 +422,25 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 "amount_needed": amount_needed,
                 "debt_repayment": debt_repayment,
                 "health_factor_before": agent.state.health_factor,
-                "rebalancing_type": "full_sale"
+                "rebalancing_type": "full_sale",
+                "slippage_cost": slippage_cost,
+                "slippage_percentage": slippage_result["slippage_percent"],
+                "price_impact": slippage_result["price_impact"],
+                "moet_received_actual": slippage_result["amount_out"],
+                "expected_moet": amount_needed
             })
             
-            # Record trade (no BTC swap)
+            # Record trade with slippage details
             self.yield_token_trades.append({
                 "minute": minute,
                 "agent_id": agent.agent_id,
                 "action": "rebalancing_sale",
                 "moet_amount": moet_raised,
                 "debt_repayment": debt_repayment,
-                "agent_health_factor": agent.state.health_factor
+                "agent_health_factor": agent.state.health_factor,
+                "slippage_cost": slippage_cost,
+                "slippage_percentage": slippage_result["slippage_percent"],
+                "price_impact": slippage_result["price_impact"]
             })
             
             return True, swap_data
@@ -447,15 +474,31 @@ class HighTideSimulationEngine(TidalSimulationEngine):
             # Update yield token pool
             self.yield_token_pool.execute_yield_token_sale(moet_raised)
             
-            # Create swap data for tracking (no BTC swap)
+            # Calculate slippage cost for the Yield Token -> MOET swap using proper Uniswap V3 math
+            slippage_result = self.yield_token_slippage_calculator.calculate_swap_slippage(
+                amount_needed, "Yield_Token"
+            )
+            
+            # Update pool state after the simulated swap
+            self.yield_token_slippage_calculator.update_pool_state(slippage_result)
+            
+            # Calculate total slippage cost
+            slippage_cost = slippage_result["slippage_amount"] + slippage_result["trading_fees"]
+            
+            # Create swap data for tracking with slippage
             swap_data = {
                 "yt_swapped": amount_needed,
                 "moet_received": moet_raised,
                 "debt_repayment": debt_repayment,
-                "swap_type": "yield_only"
+                "swap_type": "yield_only",
+                "slippage_cost": slippage_cost,
+                "slippage_percentage": slippage_result["slippage_percent"],
+                "price_impact": slippage_result["price_impact"],
+                "moet_received_actual": slippage_result["amount_out"],
+                "expected_moet": amount_needed  # Should be 1:1 for yield tokens
             }
             
-            # Record rebalancing event (no BTC swap)
+            # Record rebalancing event with slippage details
             self.rebalancing_events.append({
                 "minute": minute,
                 "agent_id": agent.agent_id,
@@ -463,7 +506,12 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 "amount_needed": amount_needed,
                 "debt_repayment": debt_repayment,
                 "health_factor_before": agent.state.health_factor,
-                "rebalancing_type": "yield_only"
+                "rebalancing_type": "yield_only",
+                "slippage_cost": slippage_cost,
+                "slippage_percentage": slippage_result["slippage_percent"],
+                "price_impact": slippage_result["price_impact"],
+                "moet_received_actual": slippage_result["amount_out"],
+                "expected_moet": amount_needed
             })
             
             return True, swap_data
@@ -617,6 +665,13 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 concentrated_range=self.moet_btc_concentration
             )
             
+            # Calculate total slippage costs for this agent
+            agent_slippage_costs = sum(
+                event.get("slippage_cost", 0) 
+                for event in self.rebalancing_events 
+                if event.get("agent_id") == agent.agent_id
+            )
+            
             outcome = {
                 "agent_id": agent.agent_id,
                 "risk_profile": agent.risk_profile,
@@ -633,7 +688,8 @@ class HighTideSimulationEngine(TidalSimulationEngine):
                 "yield_token_value": portfolio["yield_token_portfolio"]["total_current_value"],
                 "initial_debt": portfolio["initial_moet_debt"],
                 "final_debt": portfolio["current_moet_debt"],
-                "interest_accrued": portfolio["total_interest_accrued"]
+                "interest_accrued": portfolio["total_interest_accrued"],
+                "total_slippage_costs": agent_slippage_costs  # Add total slippage costs
             }
             
             agent_outcomes.append(outcome)

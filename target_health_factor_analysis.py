@@ -25,9 +25,24 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighTideSimulationEngine
-from tidal_protocol_sim.simulation.aave_engine import AaveConfig, AaveSimulationEngine
 from tidal_protocol_sim.agents.high_tide_agent import create_high_tide_agents
-from tidal_protocol_sim.agents.aave_agent import create_aave_agents
+from tidal_protocol_sim.core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
+
+
+class BTCOnyProtocol(TidalProtocol):
+    """BTC-only protocol configuration for Target Health Factor analysis"""
+    
+    def _initialize_asset_pools(self):
+        """Initialize only BTC asset pool"""
+        return {
+            Asset.BTC: AssetPool(Asset.BTC, 3_500_000),   # $3.5M initial BTC only
+        }
+    
+    def _initialize_liquidity_pools(self):
+        """Initialize only MOET:BTC trading pair"""
+        return {
+            "MOET_BTC": LiquidityPool(Asset.BTC, 1250000, 10.59),   # ~$1.25M at $118k/BTC
+        }
 
 
 def run_target_hf_analysis():
@@ -42,7 +57,8 @@ def run_target_hf_analysis():
     
     # Target health factors to test (discrete testing)
     target_hfs = [1.01, 1.05, 1.075, 1.1, 1.15]
-    monte_carlo_runs = 20  # Each target HF gets 20 runs with varied agents
+    monte_carlo_runs = 5  # Each target HF gets 5 runs with varied agents
+    agents_per_run = 15  # 15 agents per run
     
     results_matrix = []
     
@@ -88,9 +104,11 @@ def run_target_hf_scenario(target_hf: float, monte_carlo_runs: int) -> Dict:
     
     print(f"   Running {monte_carlo_runs} Monte Carlo simulations with Target HF: {target_hf:.3f}")
     
+    # Define agents per run
+    agents_per_run = 15  # 15 agents per run
+    
     # Store results from all runs
     ht_runs = []
-    aave_runs = []
     
     for run_num in range(monte_carlo_runs):
         # High Tide simulation with randomized agents
@@ -99,14 +117,18 @@ def run_target_hf_scenario(target_hf: float, monte_carlo_runs: int) -> Dict:
         ht_config.btc_decline_duration = 60
         ht_config.moet_btc_pool_size = 250_000  # Standard pool size
         ht_config.moet_yield_pool_size = 250_000  # Standard YT pool size
+        ht_config.yield_token_concentration = 0.95  # 95% concentration for yield tokens
         
-        # Create custom High Tide agents with randomized initial HFs
+        # Create custom High Tide agents with randomized initial HFs and proper naming
         custom_ht_agents = create_custom_agents_for_hf_test(
-            target_hf, num_agents=15, agent_type="high_tide"
+            target_hf, num_agents=agents_per_run, run_num=run_num, agent_type="high_tide"
         )
         
         ht_engine = HighTideSimulationEngine(ht_config)
         ht_engine.high_tide_agents = custom_ht_agents
+        
+        # Replace protocol with BTC-only version
+        ht_engine.protocol = BTCOnyProtocol()
         
         # Add agents to engine's agent dict
         for agent in custom_ht_agents:
@@ -114,45 +136,20 @@ def run_target_hf_scenario(target_hf: float, monte_carlo_runs: int) -> Dict:
         
         ht_results = ht_engine.run_high_tide_simulation()
         ht_runs.append(ht_results)
-        
-        # Aave simulation with matching agents (same random seed for consistency)
-        aave_config = AaveConfig()
-        aave_config.num_aave_agents = 0  # We'll create custom agents
-        aave_config.btc_decline_duration = 60
-        aave_config.moet_btc_pool_size = 250_000
-        aave_config.moet_yield_pool_size = 250_000
-        
-        # Create matching Aave agents with same target HF
-        custom_aave_agents = create_custom_agents_for_hf_test(
-            target_hf, num_agents=15, agent_type="aave"
-        )
-        
-        aave_engine = AaveSimulationEngine(aave_config)
-        aave_engine.aave_agents = custom_aave_agents
-        
-        # Add agents to engine's agent dict
-        for agent in custom_aave_agents:
-            aave_engine.agents[agent.agent_id] = agent
-        
-        aave_results = aave_engine.run_aave_simulation()
-        aave_runs.append(aave_results)
     
-    # Aggregate results
-    scenario_analysis = aggregate_hf_scenario_results(ht_runs, aave_runs, target_hf)
+    # Aggregate results (High Tide only)
+    scenario_analysis = aggregate_hf_scenario_results(ht_runs, target_hf, agents_per_run)
     
     print(f"      High Tide: {scenario_analysis['high_tide_summary']['mean_survival_rate']:.1%} survival, "
           f"{scenario_analysis['high_tide_summary']['mean_liquidations']:.1f} liquidations")
-    print(f"      Aave:      {scenario_analysis['aave_summary']['mean_survival_rate']:.1%} survival, "
-          f"{scenario_analysis['aave_summary']['mean_liquidations']:.1f} liquidations")
     
     return scenario_analysis
 
 
-def create_custom_agents_for_hf_test(target_hf: float, num_agents: int, agent_type: str) -> List:
+def create_custom_agents_for_hf_test(target_hf: float, num_agents: int, run_num: int, agent_type: str) -> List:
     """Create custom agents with randomized initial HFs (1.2-1.5) and fixed target HF for testing"""
     import random
     from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
-    from tidal_protocol_sim.agents.aave_agent import AaveAgent
     
     agents = []
     
@@ -160,25 +157,21 @@ def create_custom_agents_for_hf_test(target_hf: float, num_agents: int, agent_ty
         # Randomize initial health factor between 1.2-1.5 for proper variation
         initial_hf = random.uniform(1.2, 1.5)
         
-        if agent_type == "high_tide":
-            agent = HighTideAgent(
-                f"hf_test_ht_{target_hf}_{i}",
-                initial_hf,
-                target_hf
-            )
-        else:  # aave
-            agent = AaveAgent(
-                f"hf_test_aave_{target_hf}_{i}",
-                initial_hf,
-                target_hf
-            )
+        # Create agent with proper naming convention: hf_test_ht_{target_hf}_run{run_num}_agent{i}
+        agent_id = f"hf_test_ht_{target_hf}_run{run_num}_agent{i}"
+        
+        agent = HighTideAgent(
+            agent_id,
+            initial_hf,
+            target_hf
+        )
         
         agents.append(agent)
     
     return agents
 
 
-def aggregate_hf_scenario_results(ht_runs: List, aave_runs: List, target_hf: float) -> Dict:
+def aggregate_hf_scenario_results(ht_runs: List, target_hf: float, agents_per_run: int) -> Dict:
     """Aggregate results for a specific target health factor scenario"""
     
     # Aggregate High Tide metrics from actual simulation results
@@ -203,24 +196,8 @@ def aggregate_hf_scenario_results(ht_runs: List, aave_runs: List, target_hf: flo
         rebalancing_activity = run.get("yield_token_activity", {})
         ht_rebalancing_events.append(rebalancing_activity.get("rebalancing_events", 0))
     
-    # Aggregate Aave metrics from actual simulation results
-    aave_survival_rates = []
-    aave_liquidations = []
-    aave_agent_outcomes = []
     
-    for run in aave_runs:
-        survival_stats = run.get("survival_statistics", {})
-        aave_survival_rates.append(survival_stats.get("survival_rate", 0.0))
-        
-        # Count liquidations from agent outcomes
-        agent_outcomes = run.get("agent_outcomes", [])
-        total_liquidations = sum(1 for outcome in agent_outcomes if not outcome.get("survived", True))
-        aave_liquidations.append(total_liquidations)
-        
-        # Store individual agent outcomes for detailed analysis
-        aave_agent_outcomes.extend(agent_outcomes)
-    
-    # Calculate summary statistics
+    # Calculate summary statistics - clean and focused
     return {
         "target_hf": target_hf,
         "initial_hf_range": [1.2, 1.5],  # Agent variation range
@@ -229,26 +206,11 @@ def aggregate_hf_scenario_results(ht_runs: List, aave_runs: List, target_hf: flo
             "survival_rate_std": np.std(ht_survival_rates),
             "mean_liquidations": np.mean(ht_liquidations),
             "mean_rebalancing_events": np.mean(ht_rebalancing_events),
-            "liquidation_frequency": np.mean(ht_liquidations) / 15  # Per agent
+            "liquidation_frequency": np.mean(ht_liquidations) / agents_per_run  # Per agent
         },
-        "aave_summary": {
-            "mean_survival_rate": np.mean(aave_survival_rates),
-            "survival_rate_std": np.std(aave_survival_rates),
-            "mean_liquidations": np.mean(aave_liquidations),
-            "liquidation_frequency": np.mean(aave_liquidations) / 15  # Per agent
-        },
-        "comparison": {
-            "survival_improvement": ((np.mean(ht_survival_rates) - np.mean(aave_survival_rates)) / np.mean(aave_survival_rates) * 100) if np.mean(aave_survival_rates) > 0 else 0,
-            "liquidation_reduction": ((np.mean(aave_liquidations) - np.mean(ht_liquidations)) / np.mean(aave_liquidations) * 100) if np.mean(aave_liquidations) > 0 else 0
-        },
-        "raw_data": {
-            "ht_survival_rates": ht_survival_rates,
-            "aave_survival_rates": aave_survival_rates,
-            "ht_liquidations": ht_liquidations,
-            "aave_liquidations": aave_liquidations,
-            "ht_rebalancing_events": ht_rebalancing_events,
-            "ht_agent_outcomes": ht_agent_outcomes,
-            "aave_agent_outcomes": aave_agent_outcomes
+        "ht_agent_outcomes": ht_agent_outcomes,  # Just the essential agent outcomes
+        "detailed_simulation_data": {
+            "ht_runs": ht_runs  # Store the raw runs for clean processing
         }
     }
 
@@ -261,19 +223,13 @@ def analyze_target_hf_results(results_matrix: List[Dict]) -> Dict:
     for result in results_matrix:
         params = result["scenario_params"]
         ht_summary = result["high_tide_summary"]
-        aave_summary = result["aave_summary"]
-        comparison = result["comparison"]
         
         df_data.append({
             "target_hf": params["target_hf"],
             "initial_hf_range": params.get("initial_hf_range", [1.2, 1.5]),
             "ht_survival_rate": ht_summary["mean_survival_rate"],
             "ht_liquidation_frequency": ht_summary["liquidation_frequency"],
-            "ht_rebalancing_events": ht_summary["mean_rebalancing_events"],
-            "aave_survival_rate": aave_summary["mean_survival_rate"],
-            "aave_liquidation_frequency": aave_summary["liquidation_frequency"],
-            "survival_improvement": comparison["survival_improvement"],
-            "liquidation_reduction": comparison["liquidation_reduction"]
+            "ht_rebalancing_events": ht_summary["mean_rebalancing_events"]
         })
     
     df = pd.DataFrame(df_data)
@@ -281,7 +237,7 @@ def analyze_target_hf_results(results_matrix: List[Dict]) -> Dict:
     # Find optimal target health factors using actual data
     analysis = {
         "optimal_recommendations": find_optimal_target_hf_from_data(results_matrix),
-        "liquidation_threshold_analysis": analyze_liquidation_thresholds_from_data(results_matrix),
+        "liquidation_threshold_analysis": analyze_liquidation_thresholds_from_data(results_matrix, 15),
         "rebalancing_efficiency": analyze_rebalancing_efficiency_from_data(results_matrix),
         "risk_vs_efficiency": analyze_risk_efficiency_tradeoff_from_data(results_matrix),
         "statistical_summary": generate_statistical_summary_from_data(results_matrix),
@@ -339,7 +295,7 @@ def find_optimal_target_hf_from_data(results_matrix: List[Dict]) -> Dict:
     }
 
 
-def analyze_liquidation_thresholds_from_data(results_matrix: List[Dict]) -> Dict:
+def analyze_liquidation_thresholds_from_data(results_matrix: List[Dict], agents_per_run: int) -> Dict:
     """Analyze liquidation frequency patterns across target health factors using actual data"""
     
     liquidation_analysis = {}
@@ -347,14 +303,33 @@ def analyze_liquidation_thresholds_from_data(results_matrix: List[Dict]) -> Dict
     for result in results_matrix:
         target_hf = result["target_hf"]
         ht_summary = result["high_tide_summary"]
-        raw_data = result["raw_data"]
+        
+        # Extract liquidation data from detailed simulation data
+        ht_runs = result.get("detailed_simulation_data", {}).get("ht_runs", [])
+        ht_liquidations = []
+        
+        for run in ht_runs:
+            # Count liquidations from agent outcomes
+            agent_outcomes = run.get("agent_outcomes", [])
+            total_liquidations = sum(1 for outcome in agent_outcomes if not outcome.get("survived", True))
+            ht_liquidations.append(total_liquidations)
+        
+        # Calculate statistics
+        if ht_liquidations:
+            min_liquidation_frequency = min(ht_liquidations) / agents_per_run
+            max_liquidation_frequency = max(ht_liquidations) / agents_per_run
+            std_liquidation_frequency = np.std([l/agents_per_run for l in ht_liquidations])
+        else:
+            min_liquidation_frequency = 0
+            max_liquidation_frequency = 0
+            std_liquidation_frequency = 0
         
         liquidation_analysis[f"target_hf_{target_hf}"] = {
             "target_hf": target_hf,
-            "min_liquidation_frequency": min(raw_data["ht_liquidations"]) / 15,  # Per agent
-            "max_liquidation_frequency": max(raw_data["ht_liquidations"]) / 15,  # Per agent
+            "min_liquidation_frequency": min_liquidation_frequency,
+            "max_liquidation_frequency": max_liquidation_frequency,
             "mean_liquidation_frequency": ht_summary["liquidation_frequency"],
-            "std_liquidation_frequency": np.std([l/15 for l in raw_data["ht_liquidations"]]),
+            "std_liquidation_frequency": std_liquidation_frequency,
             "liquidation_frequency_by_buffer": []
         }
     
@@ -442,6 +417,61 @@ def generate_statistical_summary_from_data(results_matrix: List[Dict]) -> Dict:
     }
 
 
+def build_clean_simulation_data(ht_runs: List[Dict], target_hf: float) -> List[Dict]:
+    """Build clean, navigable simulation data structure"""
+    clean_runs = []
+    
+    for run_idx, run in enumerate(ht_runs):
+        # Filter out non-test agents from agent_health_factors
+        agent_health_factors = run.get("agent_health_factors", {})
+        filtered_health_factors = {
+            agent_id: hf for agent_id, hf in agent_health_factors.items()
+            if agent_id.startswith(f"hf_test_ht_{target_hf}_")
+        }
+        
+        # Filter agent_actions_history to only include test agents
+        agent_actions = run.get("agent_actions_history", [])
+        filtered_actions = [
+            action for action in agent_actions
+            if action.get("agent_id", "").startswith(f"hf_test_ht_{target_hf}_")
+        ]
+        
+        # Filter agent_health_history to only include test agents
+        agent_health_history = run.get("agent_health_history", [])
+        filtered_health_history = []
+        for minute_data in agent_health_history:
+            filtered_agents = [
+                agent for agent in minute_data.get("agents", [])
+                if agent.get("agent_id", "").startswith(f"hf_test_ht_{target_hf}_")
+            ]
+            if filtered_agents:  # Only include minutes that have test agents
+                filtered_health_history.append({
+                    "minute": minute_data.get("minute"),
+                    "agents": filtered_agents
+                })
+        
+        clean_run = {
+            "run_id": f"run_{run_idx+1:03d}_target_hf_{target_hf}",
+            "timestamp": datetime.now().isoformat(),
+            "btc_price_history": run.get("btc_price_history", []),
+            "agent_health_history": filtered_health_history,
+            "agent_actions_history": filtered_actions,
+            "rebalancing_events": run.get("rebalancing_events", []),
+            "agent_outcomes": run.get("agent_outcomes", []),
+            "summary_stats": {
+                "total_agents": len(filtered_health_factors),
+                "survived_agents": sum(1 for outcome in run.get("agent_outcomes", []) if outcome.get("survived", True)),
+                "total_rebalancing_events": len(run.get("rebalancing_events", [])),
+                "total_slippage_costs": sum(outcome.get("total_slippage_costs", 0) for outcome in run.get("agent_outcomes", [])),
+                "final_btc_price": run.get("btc_price_history", [100000])[-1] if run.get("btc_price_history") else 100000,
+                "btc_price_decline_percent": ((100000 - (run.get("btc_price_history", [100000])[-1] if run.get("btc_price_history") else 100000)) / 100000) * 100
+            }
+        }
+        clean_runs.append(clean_run)
+    
+    return clean_runs
+
+
 def save_target_hf_results(analysis_results: Dict, results_matrix: List):
     """Save Target Health Factor analysis results to JSON file"""
     
@@ -449,23 +479,105 @@ def save_target_hf_results(analysis_results: Dict, results_matrix: List):
     output_dir = Path("tidal_protocol_sim/results/target_health_factor_analysis")
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Prepare comprehensive results
+    # Build clean, navigable results structure
+    clean_scenario_results = []
+    for result in results_matrix:
+        target_hf = result["target_hf"]
+        
+        # Extract the ht_runs from detailed_simulation_data if it exists
+        ht_runs = []
+        if "detailed_simulation_data" in result and "ht_runs" in result["detailed_simulation_data"]:
+            ht_runs = result["detailed_simulation_data"]["ht_runs"]
+        
+        clean_runs = build_clean_simulation_data(ht_runs, target_hf)
+        
+        clean_scenario = {
+            "target_hf": target_hf,
+            "scenario_params": result.get("scenario_params", {}),
+            "high_tide_summary": result.get("high_tide_summary", {}),
+            "ht_agent_outcomes": result.get("ht_agent_outcomes", []),
+            "simulation_runs": clean_runs
+        }
+        clean_scenario_results.append(clean_scenario)
+    
+    # Prepare comprehensive results with clean structure
     final_results = {
         "analysis_metadata": {
             "analysis_type": "Target_Health_Factor_Analysis",
             "timestamp": datetime.now().isoformat(),
             "target_hfs_tested": [1.01, 1.05, 1.075, 1.1, 1.15],
-            "monte_carlo_runs_per_scenario": 20,
+            "monte_carlo_runs_per_scenario": 5,
+            "agents_per_run": 15,
             "total_scenarios": len(results_matrix)
         },
         "key_findings": analysis_results,
-        "detailed_scenario_results": results_matrix
+        "detailed_scenario_results": clean_scenario_results
     }
     
     # Save JSON results
     results_path = output_dir / "target_hf_analysis_results.json"
+    def convert_for_json(obj):
+        """Recursively convert objects to JSON-serializable format"""
+        if isinstance(obj, dict):
+            # Convert dictionary keys that might be enums
+            converted_dict = {}
+            for key, value in obj.items():
+                # Convert enum keys to strings
+                if hasattr(key, 'name'):
+                    converted_key = key.name
+                else:
+                    converted_key = str(key)
+                # Recursively convert values
+                converted_dict[converted_key] = convert_for_json(value)
+            return converted_dict
+        elif isinstance(obj, list):
+            # Convert list elements
+            return [convert_for_json(item) for item in obj]
+        elif hasattr(obj, 'name'):  # Handle enums
+            return obj.name
+        elif isinstance(obj, bool):  # Handle Python boolean values
+            return bool(obj)
+        elif hasattr(obj, 'dtype') and 'bool' in str(obj.dtype):  # Handle numpy boolean arrays/scalars
+            if hasattr(obj, 'shape') and len(obj.shape) > 0:  # It's an array
+                return obj.tolist()  # Convert array to list
+            else:  # It's a scalar
+                return bool(obj)
+        elif str(type(obj)).startswith('<class \'numpy.'):  # Handle any numpy type
+            if hasattr(obj, 'shape') and len(obj.shape) > 0:  # It's an array
+                return obj.tolist()  # Convert array to list
+            else:  # It's a scalar
+                try:
+                    return bool(obj)
+                except:
+                    return str(obj)
+        elif hasattr(obj, '__dict__'):  # Handle objects with __dict__
+            return str(obj)
+        else:
+            return obj
+    
+    # Convert the entire results structure
+    json_safe_results = convert_for_json(final_results)
+    
     with open(results_path, 'w', encoding='utf-8') as f:
-        json.dump(final_results, f, indent=2, default=str)
+        try:
+            json.dump(json_safe_results, f, indent=2)
+        except TypeError as e:
+            if 'not JSON serializable' in str(e):
+                print(f"⚠️  JSON serialization warning: {e}")
+                print("   Converting problematic objects to strings...")
+                # Fallback: convert everything to string representation
+                def force_convert(obj):
+                    if isinstance(obj, dict):
+                        return {str(k): force_convert(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [force_convert(item) for item in obj]
+                    else:
+                        return str(obj)
+                
+                json_safe_results = force_convert(final_results)
+                json.dump(json_safe_results, f, indent=2)
+            else:
+                raise
     
     print(f"📁 Target HF analysis results saved to: {results_path}")
     
@@ -474,8 +586,6 @@ def save_target_hf_results(analysis_results: Dict, results_matrix: List):
     for result in results_matrix:
         params = result["scenario_params"]
         ht_summary = result["high_tide_summary"]
-        aave_summary = result["aave_summary"]
-        comparison = result["comparison"]
         
         df_data.append({
             "target_hf": params["target_hf"],
@@ -483,11 +593,7 @@ def save_target_hf_results(analysis_results: Dict, results_matrix: List):
             "initial_hf_range_max": params.get("initial_hf_range", [1.2, 1.5])[1],
             "ht_survival_rate": ht_summary["mean_survival_rate"],
             "ht_liquidation_frequency": ht_summary["liquidation_frequency"],
-            "ht_rebalancing_events": ht_summary["mean_rebalancing_events"],
-            "aave_survival_rate": aave_summary["mean_survival_rate"],
-            "aave_liquidation_frequency": aave_summary["liquidation_frequency"],
-            "survival_improvement": comparison["survival_improvement"],
-            "liquidation_reduction": comparison["liquidation_reduction"]
+            "ht_rebalancing_events": ht_summary["mean_rebalancing_events"]
         })
     
     df = pd.DataFrame(df_data)
@@ -647,7 +753,7 @@ def run_detailed_simulation_for_charts() -> Dict:
         # Create varied High Tide agents with a moderate target HF
         target_hf = 1.1  # Use a moderate target HF for good rebalancing activity
         custom_ht_agents = create_custom_agents_for_hf_test(
-            target_hf, num_agents=10, agent_type="high_tide"
+            target_hf, num_agents=10, run_num=0, agent_type="high_tide"
         )
         
         # Run the simulation
@@ -888,9 +994,21 @@ def create_agent_data_csv(results_matrix: List[Dict], output_dir: Path) -> Path:
         # Aggregate all agent outcomes across all target HF scenarios
         all_ht_agents = []
         
+        # Extract final BTC price from simulation results
+        final_btc_price = 82_546.0  # Default fallback
         for result in results_matrix:
-            raw_data = result.get("raw_data", {})
-            all_ht_agents.extend(raw_data.get("ht_agent_outcomes", []))
+            # Get agent outcomes from the correct structure
+            all_ht_agents.extend(result.get("ht_agent_outcomes", []))
+            
+            # Try to extract BTC price from simulation results
+            ht_runs = result.get("detailed_simulation_data", {}).get("ht_runs", [])
+            for run in ht_runs:
+                btc_price_history = run.get("btc_price_history", [])
+                if btc_price_history:
+                    final_btc_price = btc_price_history[-1]  # Last price in history
+                    break
+            if final_btc_price != 82_546.0:  # If we found a price, break outer loop
+                break
         
         if not all_ht_agents:
             print("⚠️  No agent data found for CSV generation")
@@ -901,18 +1019,30 @@ def create_agent_data_csv(results_matrix: List[Dict], output_dir: Path) -> Path:
         for agent in all_ht_agents:
             agent_id = agent.get("agent_id", "unknown")
             
-            # Extract collateral and debt information from actual agent data structure
-            # Get collateral from final agent state (BTC amount * current price)
-            final_debt = agent.get("final_debt", 0)
-            initial_debt = agent.get("initial_debt", 0)
+            # CORRECTED: Calculate actual collateral values
+            # Each agent deposits exactly 1 BTC
+            btc_amount = 1.0  # Always 1 BTC
+            btc_price = 100_000.0  # Initial BTC price
+            btc_collateral_factor = 0.80  # BTC collateral factor
             
-            # For collateral, we need to calculate from the agent's BTC holdings
-            # This is a simplified calculation - in reality we'd need access to the agent's state
-            # For now, use the net position value as a proxy for collateral value
-            net_position = agent.get("net_position_value", 0)
-            collateral = max(0, net_position + final_debt)  # Collateral = net position + debt
-            effective_collateral = collateral  # Assume no collateral factor for now
-            debt = final_debt
+            # Calculate actual collateral values
+            initial_collateral = btc_amount * btc_price  # $100,000 (full BTC value)
+            initial_effective_collateral = initial_collateral * btc_collateral_factor  # $80,000 (borrowing capacity)
+            
+            # Get debt information
+            initial_debt = agent.get("initial_debt", 0)
+            final_debt = agent.get("final_debt", 0)
+            
+            # Get yield token information
+            yield_portfolio = agent.get("yield_token_portfolio", {})
+            initial_yield_token_value = yield_portfolio.get("total_principal", initial_debt)  # Initial YT value = initial debt
+            yield_tokens_sold = agent.get("total_yield_sold", 0)
+            
+            # Get slippage costs from rebalancing
+            slippage_costs = agent.get("total_slippage_costs", 0)
+            
+            # Calculate final effective collateral using extracted BTC price
+            final_effective_collateral = btc_amount * final_btc_price * btc_collateral_factor  # Final borrowing capacity
             
             # Extract health factor information
             initial_hf = agent.get("initial_health_factor", 1.0)
@@ -924,13 +1054,18 @@ def create_agent_data_csv(results_matrix: List[Dict], output_dir: Path) -> Path:
             
             csv_data.append({
                 "Agent Name": agent_id,
-                "Collateral": f"${collateral:,.2f}",
-                "Effective Collateral": f"${effective_collateral:,.2f}",
-                "Debt": f"${debt:,.2f}",
+                "Initial Collateral": f"${initial_collateral:,.2f}",
+                "Initial Effective Collateral": f"${initial_effective_collateral:,.2f}",
+                "Initial Debt": f"${initial_debt:,.2f}",
+                "Initial Yield Token Value": f"${initial_yield_token_value:,.2f}",
                 "Initial Health Factor": f"{initial_hf:.3f}",
-                "Target Health Factor": f"{target_hf:.3f}",
                 "# of Rebalances": rebalancing_events,
-                "End Health Factor": f"{final_hf:.3f}"
+                "Final BTC Price": f"${final_btc_price:,.2f}",
+                "Final Effective Collateral": f"${final_effective_collateral:,.2f}",
+                "Yield Tokens Sold": f"${yield_tokens_sold:,.2f}",
+                "Slippage Costs": f"${slippage_costs:,.2f}",
+                "Final Debt": f"${final_debt:,.2f}",
+                "Final Health Factor": f"{final_hf:.3f}"
             })
         
         # Create DataFrame and save to CSV
@@ -976,9 +1111,9 @@ def create_target_hf_agent_performance_summary(results_matrix: List[Dict], chart
         all_aave_agents = []
         
         for result in results_matrix:
-            raw_data = result.get("raw_data", {})
-            all_ht_agents.extend(raw_data.get("ht_agent_outcomes", []))
-            all_aave_agents.extend(raw_data.get("aave_agent_outcomes", []))
+            all_ht_agents.extend(result.get("ht_agent_outcomes", []))
+            # Note: This analysis is High Tide only, no Aave agents
+            # all_aave_agents.extend(result.get("aave_agent_outcomes", []))
         
         if not all_ht_agents:
             return None
@@ -1016,7 +1151,7 @@ def create_target_hf_agent_performance_summary(results_matrix: List[Dict], chart
                 costs_data.append(profile_costs[profile])
         
         if costs_data:
-            box_plot = ax1.boxplot(costs_data, labels=profile_names, patch_artist=True)
+            box_plot = ax1.boxplot(costs_data, tick_labels=profile_names, patch_artist=True)
             for patch, profile in zip(box_plot['boxes'], ["conservative", "moderate", "aggressive"][:len(costs_data)]):
                 patch.set_facecolor(colors[profile])
                 patch.set_alpha(0.7)
@@ -1125,8 +1260,7 @@ def create_target_hf_health_factor_analysis(results_matrix: List[Dict], charts_d
         # Get sample simulation data for health factor analysis
         sample_result = None
         for result in results_matrix:
-            raw_data = result.get("raw_data", {})
-            if raw_data.get("ht_agent_outcomes"):
+            if result.get("ht_agent_outcomes"):
                 sample_result = result
                 break
         
@@ -1142,8 +1276,7 @@ def create_target_hf_health_factor_analysis(results_matrix: List[Dict], charts_d
         risk_profiles = {"conservative": [], "moderate": [], "aggressive": []}
         
         for result in results_matrix:
-            raw_data = result.get("raw_data", {})
-            for agent in raw_data.get("ht_agent_outcomes", []):
+            for agent in result.get("ht_agent_outcomes", []):
                 target_hf = agent.get("target_health_factor", 1.1)
                 if target_hf <= 1.05:
                     risk_profiles["aggressive"].append(agent)
@@ -1163,6 +1296,7 @@ def create_target_hf_health_factor_analysis(results_matrix: List[Dict], charts_d
         
         for profile in ["conservative", "moderate", "aggressive"]:
             if risk_profiles[profile]:
+                # Use actual health factor values from agent outcomes
                 avg_initial = np.mean([agent.get("initial_health_factor", 1.2) for agent in risk_profiles[profile]])
                 avg_final = np.mean([agent.get("final_health_factor", 1.0) for agent in risk_profiles[profile]])
                 initial_hfs.append(avg_initial)
@@ -1190,8 +1324,7 @@ def create_target_hf_health_factor_analysis(results_matrix: List[Dict], charts_d
         all_final_hfs = []
         
         for result in results_matrix:
-            raw_data = result.get("raw_data", {})
-            for agent in raw_data.get("ht_agent_outcomes", []):
+            for agent in result.get("ht_agent_outcomes", []):
                 all_initial_hfs.append(agent.get("initial_health_factor", 1.2))
                 all_final_hfs.append(agent.get("final_health_factor", 1.0))
         
@@ -1235,8 +1368,7 @@ def create_target_hf_health_factor_analysis(results_matrix: List[Dict], charts_d
         profile_colors = []
         
         for result in results_matrix:
-            raw_data = result.get("raw_data", {})
-            for agent in raw_data.get("ht_agent_outcomes", []):
+            for agent in result.get("ht_agent_outcomes", []):
                 target_hf = agent.get("target_health_factor", 1.1)
                 final_hf = agent.get("final_health_factor", 1.0)
                 target_hfs.append(target_hf)
