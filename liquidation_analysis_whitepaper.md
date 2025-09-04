@@ -12,10 +12,10 @@ subtitle: "Technical Whitepaper: Deposit Cap Optimization for Concentrated Liqui
 This technical analysis evaluates the maximum deposit cap ratios that can be sustained by a $250K:$250K BTC:MOET concentrated liquidity pool under severe market stress scenarios. Through systematic testing of 15-agent liquidation cascades across three price shock severities (10%, 15%, 25% BTC declines), we determine the liquidation capacity limits before concentrated liquidity exhaustion renders further liquidations impossible.
 
 **Key Findings:**
-- The $500K total BTC:MOET pool can handle deposit cap ratios up to **5:1** ($2.5M deposits) without liquidity exhaustion
-- Maximum concentration utilization reaches **25.7%** under worst-case scenarios (5:1 ratio, 25% shock)
+* The $500K total BTC:MOET pool can handle deposit cap ratios up to **5:1** ($2.5M deposits) without liquidity exhaustion
+* Maximum concentration utilization reaches **25.7%** under worst-case scenarios (5:1 ratio, 25% shock)
 * **100% liquidation success rate** achieved across all tested configurations
-- Liquidation volumes scale linearly with deposit cap ratios while maintaining efficiency
+* Liquidation volumes scale linearly with deposit cap ratios while maintaining efficiency
 
 **Recommendation:** Current pool configuration is **over-capitalized** for tested scenarios. Higher deposit cap ratios (6:1+) or larger shock scenarios (30%+) should be tested to identify actual breaking points.
 
@@ -28,17 +28,17 @@ This technical analysis evaluates the maximum deposit cap ratios that can be sus
 High Tide Protocol represents an automated yield aggregation layer built atop the Tidal Protocol lending engine. Unlike traditional lending protocols that rely on forced liquidations as the primary risk management mechanism, Tidal Protocol implements **active position management** through automated rebalancing operations that proactively defend user health factors during market downturns.
 
 The protocol architecture consists of two primary liquidity pools:
-1. **BTC:MOET Pool** - External liquidation pool for emergency debt resolution
-2. **MOET:Yield Token Pool** - Internal rebalancing pool for position maintenance
+1. **BTC:MOET Pool** * External liquidation pool for emergency debt resolution
+2. **MOET:Yield Token Pool** * Internal rebalancing pool for position maintenance
 
 ### 1.2 Research Question
 
 **Primary Objective:** Determine the maximum deposit cap ratio (total deposits : DEX liquidity) that can be sustained by the BTC:MOET liquidation pool under severe market stress without exhausting concentrated liquidity.
 
 **Secondary Objectives:**
-- Quantify concentration utilization patterns across different stress scenarios
-- Evaluate liquidation slippage costs and efficiency metrics
-- Establish risk-capacity trade-offs for deposit cap configuration
+* Quantify concentration utilization patterns across different stress scenarios
+* Evaluate liquidation slippage costs and efficiency metrics
+* Establish risk-capacity trade-offs for deposit cap configuration
 
 ### 1.3 Critical Assumptions
 
@@ -62,6 +62,7 @@ The analysis employs a discrete-event Monte Carlo simulation framework with the 
 
 #### 2.1.2 Deposit Cap Ratio Testing
 Five deposit cap ratios tested against the baseline $500K total pool:
+
 * **1:1 Ratio:** $500K deposits vs $500K pool liquidity
 * **2:1 Ratio:** $1M deposits vs $500K pool liquidity  
 * **3:1 Ratio:** $1.5M deposits vs $500K pool liquidity
@@ -70,6 +71,7 @@ Five deposit cap ratios tested against the baseline $500K total pool:
 
 #### 2.1.3 Price Shock Scenarios
 Three single-epoch BTC price decline scenarios:
+
 * **Moderate Shock:** 10% BTC price decline ($100K → $90K)
 * **Significant Shock:** 15% BTC price decline ($100K → $85K)
 * **Severe Shock:** 25% BTC price decline ($100K → $75K)
@@ -86,9 +88,10 @@ The health factor for each agent is calculated as:
 HF = (Collateral_Value × Collateral_Factor) / Debt_Value
 
 Where:
-- Collateral_Value = BTC_Amount × Current_BTC_Price
-- Collateral_Factor = 0.80 (80% collateral factor for BTC)
-- Debt_Value = MOET_Borrowed × MOET_Price (assumed $1.00)
+
+* Collateral_Value = BTC_Amount × Current_BTC_Price
+* Collateral_Factor = 0.80 (80% collateral factor for BTC)
+* Debt_Value = MOET_Borrowed × MOET_Price (assumed $1.00)
 ```
 
 **Liquidation Trigger:** HF < 1.0
@@ -102,8 +105,9 @@ When an agent's health factor falls below 1.0, partial liquidation is executed:
 Target_Debt = (Collateral_Value × Collateral_Factor) / Target_HF_After_Liquidation
 
 Where:
-- Target_HF_After_Liquidation = 1.1
-- Debt_To_Liquidate = Current_Debt - Target_Debt
+
+* Target_HF_After_Liquidation = 1.1
+* Debt_To_Liquidate = Current_Debt * Target_Debt
 ```
 
 #### 3.2.2 Collateral Seizure Calculation
@@ -111,7 +115,8 @@ Where:
 Collateral_To_Seize = (Debt_To_Liquidate / BTC_Price) × (1 + Liquidation_Bonus)
 
 Where:
-- Liquidation_Bonus = 0.05 (5% liquidation penalty)
+
+* Liquidation_Bonus = 0.05 (5% liquidation penalty)
 ```
 
 ### 3.3 Uniswap V3 Concentrated Liquidity Mathematics
@@ -129,12 +134,13 @@ Peripheral_Liquidity = Total_Pool_Liquidity × 0.20 = $100K
 For BTC → MOET swaps during liquidation:
 
 ```
-Slippage_Amount = Expected_MOET_Out - Actual_MOET_Out
+Slippage_Amount = Expected_MOET_Out * Actual_MOET_Out
 
 Where:
-- Expected_MOET_Out = BTC_Amount × Spot_Price × (1 - Fee_Tier)
-- Actual_MOET_Out = Σ(Bin_Output) across consumed liquidity bins
-- Fee_Tier = 0.003 (0.3% Uniswap V3 fee)
+
+* Expected_MOET_Out = BTC_Amount × Spot_Price × (1 * Fee_Tier)
+* Actual_MOET_Out = Σ(Bin_Output) across consumed liquidity bins
+* Fee_Tier = 0.003 (0.3% Uniswap V3 fee)
 ```
 
 #### 3.3.3 Concentration Utilization Metric
@@ -289,6 +295,7 @@ Complete simulation state is preserved in structured JSON format for reproducibi
 ### 7.1 Liquidity Buffer Analysis
 
 Current results indicate substantial liquidity headroom:
+
 * **Maximum utilization:** 25.7% under most severe tested conditions
 * **Buffer remaining:** 74.3% concentration liquidity unused
 * **Safety margin:** 4x current maximum utilization before exhaustion
@@ -304,14 +311,16 @@ Based on simulation results:
 ### 7.3 Risk Considerations
 
 **Concentration Risk Factors:**
-- Higher deposit ratios increase liquidation volume concentration
-- Slippage costs scale non-linearly with pool utilization
-- Single large liquidation events may consume disproportionate liquidity
+
+* Higher deposit ratios increase liquidation volume concentration
+* Slippage costs scale non-linearly with pool utilization
+* Single large liquidation events may consume disproportionate liquidity
 
 **Recommended Safeguards:**
-- Dynamic deposit cap adjustment based on real-time pool utilization
-- Emergency liquidity provision mechanisms for extreme scenarios
-- Gradual liquidation implementation to spread impact across time
+
+* Dynamic deposit cap adjustment based on real-time pool utilization
+* Emergency liquidity provision mechanisms for extreme scenarios
+* Gradual liquidation implementation to spread impact across time
 
 ---
 
@@ -320,6 +329,7 @@ Based on simulation results:
 ### 8.1 Mathematical Verification
 
 All liquidation calculations follow established DeFi protocols:
+
 * **Health Factor Logic:** Standard Aave-style implementation
 * **Uniswap V3 Math:** Discrete bin-based slippage calculation  
 * **Concentration Modeling:** 80% peg concentration with peripheral distribution
@@ -388,9 +398,10 @@ The BTC:MOET pool liquidation capacity analysis demonstrates that the current $5
 4. **Efficiency Preservation:** Slippage costs remain manageable even at maximum tested ratios
 
 **Strategic Implications:**
-- Current pool sizing may be conservative relative to actual risk requirements
-- Higher deposit caps could be sustained without compromising liquidation capacity
-- Protocol can confidently support aggressive growth scenarios within tested parameters
+
+* Current pool sizing may be conservative relative to actual risk requirements
+* Higher deposit caps could be sustained without compromising liquidation capacity
+* Protocol can confidently support aggressive growth scenarios within tested parameters
 
 This analysis provides quantitative foundation for deposit cap policy decisions while highlighting areas for future research to identify ultimate capacity limits.
 
@@ -405,13 +416,14 @@ For a leveraged position with collateral C and debt D:
 ```
 HF = (C × CF) / D
 
-Post-shock HF = (C × (1 - shock_rate) × CF) / D
-              = HF₀ × (1 - shock_rate)
+Post-shock HF = (C × (1 * shock_rate) × CF) / D
+              = HF₀ × (1 * shock_rate)
 
 Where:
-- HF₀ = initial health factor
-- shock_rate = percentage price decline
-- CF = collateral factor
+
+* HF₀ = initial health factor
+* shock_rate = percentage price decline
+* CF = collateral factor
 ```
 
 ### A.2 Liquidation Amount Optimization
@@ -419,12 +431,13 @@ Where:
 To restore health factor to target value HF_target after liquidation:
 
 ```
-(C - C_seized) × CF / (D - D_repaid) = HF_target
+(C * C_seized) × CF / (D * D_repaid) = HF_target
 
 Solving for D_repaid:
-D_repaid = D - (C - C_seized) × CF / HF_target
+D_repaid = D * (C * C_seized) × CF / HF_target
 
 Where:
+
 C_seized = (D_repaid / P_BTC) × (1 + liquidation_bonus)
 ```
 

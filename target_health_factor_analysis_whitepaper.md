@@ -44,11 +44,13 @@ High Tide Protocol represents an evolution in DeFi lending, implementing **autom
 ### 1.3 Strategic Importance
 
 The target health factor represents the trigger threshold for automated rebalancing. Lower thresholds enable:
+
 * **Higher Capital Efficiency** - Users can maintain more leveraged positions
 * **Reduced Opportunity Cost** - Less conservative margin requirements
 * **Competitive Advantage** - More attractive yield farming conditions
 
 However, overly aggressive thresholds risk:
+
 * **Insufficient Rebalancing Buffer** - Potential system failure during rapid market movements
 * **Pool Liquidity Exhaustion** - Overwhelming rebalancing demand
 * **Slippage Cost Escalation** - Prohibitive trading costs undermining profitability
@@ -91,10 +93,11 @@ For each agent with BTC collateral and MOET debt:
 HF = (BTC_Amount × Current_BTC_Price × Collateral_Factor) / MOET_Debt
 
 Where:
-- BTC_Amount = 1.0 BTC per agent (standardized)
-- Current_BTC_Price = Market price at time t
-- Collateral_Factor = 0.80 (80% BTC collateral factor)
-- MOET_Debt = Outstanding MOET borrowed
+
+* BTC_Amount = 1.0 BTC per agent (standardized)
+* Current_BTC_Price = Market price at time t
+* Collateral_Factor = 0.80 (80% BTC collateral factor)
+* MOET_Debt = Outstanding MOET borrowed
 ```
 
 **Rebalancing Trigger:** HF < Target_HF
@@ -109,9 +112,10 @@ Target_Debt = (Effective_Collateral_Value) / Initial_Health_Factor
 Debt_Reduction_Required = Current_Debt - Target_Debt
 
 Where:
-- Effective_Collateral_Value = BTC_Amount × BTC_Price × 0.80
-- Initial_Health_Factor = Agent's starting leverage (1.2-1.5)
-- Rebalancing restores position to initial health factor, not target
+
+* Effective_Collateral_Value = BTC_Amount × BTC_Price × 0.80
+* Initial_Health_Factor = Agent's starting leverage (1.2-1.5)
+* Rebalancing restores position to initial health factor, not target
 ```
 
 #### 3.2.2 Yield Token Liquidation Strategy
@@ -135,17 +139,19 @@ Actual_MOET_Out = Σ(Liquidity_Bin_Output) across consumed bins
 
 Slippage_Cost = Expected_MOET_Out - Actual_MOET_Out + Trading_Fees
 Where:
-- Spot_Rate = 1.0 (YT:MOET parity)
-- Fee_Rate = 0.003 (0.3% Uniswap V3)
-- Trading_Fees = YT_Amount × 0.003
+
+* Spot_Rate = 1.0 (YT:MOET parity)
+* Fee_Rate = 0.003 (0.3% Uniswap V3)
+* Trading_Fees = YT_Amount × 0.003
 ```
 
 #### 3.3.2 Concentration Impact
 ```
 90% Concentration at Peg:
-- Concentrated_Liquidity = $450K (90% of $500K total)
-- Peripheral_Liquidity = $50K (10% distributed across ranges)
-- Low_Slippage_Capacity = ~$45K per direction before high slippage
+
+* Concentrated_Liquidity = $450K (90% of $500K total)
+* Peripheral_Liquidity = $50K (10% distributed across ranges)
+* Low_Slippage_Capacity = ~$45K per direction before high slippage
 ```
 
 ---
