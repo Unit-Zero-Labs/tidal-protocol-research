@@ -169,8 +169,8 @@ Where:
 
 ### 4.2 Rebalancing Activity Analysis
 
-**Figure 1: Rebalancing Events by Target Health Factor**
-![Rebalancing Analysis](charts/target_hf_optimization_dashboard.png)
+**Figure 1: Health Factor Analysis Overview**
+![Health Factor Analysis](run_001_20250904_091703/charts/high_tide_health_factor_analysis.png)
 
 **Rebalancing Activity Patterns:**
 - **Target HF 1.01:** 3.67 avg rebalancing events (most conservative rebalancing)
