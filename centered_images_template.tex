@@ -1,0 +1,12 @@
+\usepackage{graphicx}
+\usepackage{float}
+
+% Center all figures
+\makeatletter
+\renewenvironment{figure}[1][]{%
+  \@float{figure}[#1]%
+  \centering%
+}{%
+  \end@float%
+}
+\makeatother
