@@ -12,10 +12,10 @@
 This technical analysis determines the optimal target health factor threshold for High Tide Protocol's automated rebalancing mechanism. Through systematic testing of three aggressive target health factors (1.01, 1.025, 1.05) with agents having randomized initial health factors (1.2-1.5), we evaluate the protocol's ability to prevent liquidations through proactive yield token rebalancing during 60-minute BTC price drawdowns.
 
 **Key Findings:**
-- **100% survival rate** achieved across all tested target health factors (1.01, 1.025, 1.05)
-- **Zero liquidations** occurred in any scenario, demonstrating robust rebalancing effectiveness
+* **100% survival rate** achieved across all tested target health factors (1.01, 1.025, 1.05)
+* **Zero liquidations** occurred in any scenario, demonstrating robust rebalancing effectiveness
 - Average **5.7 rebalancing events** per scenario with proper Uniswap V3 slippage costs
-- **Target HF of 1.01** provides maximum capital efficiency while maintaining complete liquidation prevention
+* **Target HF of 1.01** provides maximum capital efficiency while maintaining complete liquidation prevention
 
 **Recommendation:** High Tide Protocol can safely operate with a **target health factor of 1.01** - the most aggressive threshold tested - without compromising position safety through its automated rebalancing mechanism.
 
@@ -36,22 +36,22 @@ High Tide Protocol represents an evolution in DeFi lending, implementing **autom
 **Primary Objective:** Determine how low the target health factor can be set while ensuring automated rebalancing prevents full liquidations.
 
 **Critical Analysis Parameters:**
-- **Target Health Factors Tested:** 1.01, 1.025, 1.05
-- **Agent Initial Health Factors:** Randomized 1.2-1.5 per agent
-- **Market Stress Scenario:** 60-minute BTC price drawdown (23.66% decline)
-- **Rebalancing Mechanism:** MOET:YT pool with $250K liquidity each side, 90% concentration
+* **Target Health Factors Tested:** 1.01, 1.025, 1.05
+* **Agent Initial Health Factors:** Randomized 1.2-1.5 per agent
+* **Market Stress Scenario:** 60-minute BTC price drawdown (23.66% decline)
+* **Rebalancing Mechanism:** MOET:YT pool with $250K liquidity each side, 90% concentration
 
 ### 1.3 Strategic Importance
 
 The target health factor represents the trigger threshold for automated rebalancing. Lower thresholds enable:
-- **Higher Capital Efficiency** - Users can maintain more leveraged positions
-- **Reduced Opportunity Cost** - Less conservative margin requirements
-- **Competitive Advantage** - More attractive yield farming conditions
+* **Higher Capital Efficiency** - Users can maintain more leveraged positions
+* **Reduced Opportunity Cost** - Less conservative margin requirements
+* **Competitive Advantage** - More attractive yield farming conditions
 
 However, overly aggressive thresholds risk:
-- **Insufficient Rebalancing Buffer** - Potential system failure during rapid market movements
-- **Pool Liquidity Exhaustion** - Overwhelming rebalancing demand
-- **Slippage Cost Escalation** - Prohibitive trading costs undermining profitability
+* **Insufficient Rebalancing Buffer** - Potential system failure during rapid market movements
+* **Pool Liquidity Exhaustion** - Overwhelming rebalancing demand
+* **Slippage Cost Escalation** - Prohibitive trading costs undermining profitability
 
 ---
 
@@ -60,15 +60,15 @@ However, overly aggressive thresholds risk:
 ### 2.1 Simulation Architecture
 
 #### 2.1.1 Agent Configuration
-- **Simulation Runs:** Monte Carlo runs per target health factor (9 total scenarios)
-- **Agents per Run:** 15 agents with randomized initial health factors
-- **Initial Health Factor Distribution:** Uniform random (1.2, 1.5)
-- **Target Health Factor:** Fixed per scenario (1.01, 1.025, or 1.05)
+* **Simulation Runs:** Monte Carlo runs per target health factor (9 total scenarios)
+* **Agents per Run:** 15 agents with randomized initial health factors
+* **Initial Health Factor Distribution:** Uniform random (1.2, 1.5)
+* **Target Health Factor:** Fixed per scenario (1.01, 1.025, or 1.05)
 
 #### 2.1.2 Market Stress Simulation
-- **BTC Price Trajectory:** 60-minute decline from $100,000 to $76,342.50 (23.66% drawdown)
-- **Stress Profile:** Continuous decline simulating sustained market pressure
-- **No Recovery Period:** Pure stress test with no price recovery
+* **BTC Price Trajectory:** 60-minute decline from $100,000 to $76,342.50 (23.66% drawdown)
+* **Stress Profile:** Continuous decline simulating sustained market pressure
+* **No Recovery Period:** Pure stress test with no price recovery
 
 #### 2.1.3 Rebalancing Pool Configuration
 ```
@@ -163,26 +163,34 @@ Where:
 | 1.05      | 100.0%        | 0            | 7.00                   | Low Risk ✅     |
 
 **Key Performance Insights:**
-- **Perfect Liquidation Prevention:** Zero liquidations across 135 total agents (9 scenarios × 15 agents)
-- **Rebalancing Correlation:** Lower target HFs triggered more frequent rebalancing (expected behavior)
-- **Stress Test Success:** Protocol maintained stability during 23.66% BTC decline
+* **Perfect Liquidation Prevention:** Zero liquidations across 135 total agents (9 scenarios × 15 agents)
+* **Rebalancing Correlation:** Lower target HFs triggered more frequent rebalancing (expected behavior)
+* **Stress Test Success:** Protocol maintained stability during 23.66% BTC decline
 
 ### 4.2 Rebalancing Activity Analysis
 
 **Figure 1: Health Factor Analysis Overview**
+<div align="center">
+
 ![Health Factor Analysis](tidal_protocol_sim/results/target_health_factor_analysis/run_001_20250904_091703/charts/high_tide_health_factor_analysis.png)
 
+</div>
+
 **Rebalancing Activity Patterns:**
-- **Target HF 1.01:** 3.67 avg rebalancing events (most conservative rebalancing)
-- **Target HF 1.025:** 6.33 avg rebalancing events (moderate rebalancing activity)
-- **Target HF 1.05:** 7.00 avg rebalancing events (highest rebalancing frequency)
+* **Target HF 1.01:** 3.67 avg rebalancing events (most conservative rebalancing)
+* **Target HF 1.025:** 6.33 avg rebalancing events (moderate rebalancing activity)
+* **Target HF 1.05:** 7.00 avg rebalancing events (highest rebalancing frequency)
 
 **Economic Interpretation:** Lower target health factors require more frequent rebalancing but provide higher capital efficiency. The relationship demonstrates optimal risk-reward calibration.
 
 ### 4.3 Agent-Level Performance Analysis
 
 **Figure 2: Individual Agent Tracking Analysis**
+<div align="center">
+
 ![Individual Agent Tracking](tidal_protocol_sim/results/target_health_factor_analysis/charts/individual_agent_tracking_analysis.png)
+
+</div>
 
 **Sample Agent Performance (Target HF 1.01):**
 
@@ -194,20 +202,24 @@ hf_test_ht_1.01_run0_agent12,1.252,1.563,1,$228.44,$24,848.28
 ```
 
 **Key Agent Insights:**
-- **Successful Rebalancing:** Agents requiring intervention (3-4 per run) successfully rebalanced
-- **Health Factor Recovery:** All rebalanced agents achieved final HFs well above liquidation threshold
-- **Slippage Costs:** Reasonable slippage costs ($198-$269 per rebalancing event)
+* **Successful Rebalancing:** Agents requiring intervention (3-4 per run) successfully rebalanced
+* **Health Factor Recovery:** All rebalanced agents achieved final HFs well above liquidation threshold
+* **Slippage Costs:** Reasonable slippage costs ($198-$269 per rebalancing event)
 
 ### 4.4 Pool Utilization and Slippage Analysis
 
 **Figure 3: Pool Utilization Analysis**
+<div align="center">
+
 ![Pool Utilization](tidal_protocol_sim/results/target_health_factor_analysis/charts/pool_utilization_analysis.png)
 
+</div>
+
 **Pool Utilization Metrics:**
-- **Maximum Single Rebalancing:** ~$13,685 yield token swap (largest observed)
-- **Pool Capacity Utilization:** <3% of total $250K MOET:YT pool per transaction
-- **Concentration Impact:** 90% concentration provides adequate liquidity depth
-- **Slippage Range:** $197.77 - $268.83 per rebalancing event (0.8-1.2% of swap value)
+* **Maximum Single Rebalancing:** ~$13,685 yield token swap (largest observed)
+* **Pool Capacity Utilization:** <3% of total $250K MOET:YT pool per transaction
+* **Concentration Impact:** 90% concentration provides adequate liquidity depth
+* **Slippage Range:** $197.77 - $268.83 per rebalancing event (0.8-1.2% of swap value)
 
 ---
 
@@ -224,9 +236,9 @@ hf_test_ht_1.01_run0_agent12,1.252,1.563,1,$228.44,$24,848.28
 | 1.05      | 5.0%        | 95.2% utilization | High (7.00)          | Conservative  |
 
 **Risk-Efficiency Trade-off Analysis:**
-- **1.01 Target HF:** Maximum capital efficiency with minimal safety buffer
-- **1.025 Target HF:** Balanced approach with moderate buffer
-- **1.05 Target HF:** Conservative approach with substantial buffer
+* **1.01 Target HF:** Maximum capital efficiency with minimal safety buffer
+* **1.025 Target HF:** Balanced approach with moderate buffer
+* **1.05 Target HF:** Conservative approach with substantial buffer
 
 ### 5.2 Economic Cost Analysis
 
@@ -245,10 +257,10 @@ Annual Cost Estimation (assuming 4 major rebalancing events/year):
 ### 5.3 Pool Liquidity Buffer Analysis
 
 **MOET:YT Pool Capacity Assessment:**
-- **Current Pool Size:** $250K MOET + $250K Yield Tokens
-- **Maximum Observed Utilization:** $13,685 per transaction (5.5% of one side)
-- **Simultaneous Rebalancing Capacity:** ~18 concurrent max-size rebalancing events
-- **Buffer Remaining:** 94.5% pool capacity unused in worst-case scenario
+* **Current Pool Size:** $250K MOET + $250K Yield Tokens
+* **Maximum Observed Utilization:** $13,685 per transaction (5.5% of one side)
+* **Simultaneous Rebalancing Capacity:** ~18 concurrent max-size rebalancing events
+* **Buffer Remaining:** 94.5% pool capacity unused in worst-case scenario
 
 ---
 
@@ -288,10 +300,10 @@ token value appreciation during rebalancing, demonstrating system robustness.
 ### 6.3 Data Integrity Assurance
 
 **Complete State Tracking:**
-- **Agent-Level Data:** 135 individual agent outcomes recorded
-- **Rebalancing Events:** All yield token sales tracked with precise slippage costs
-- **Time Series Data:** Minute-by-minute health factor evolution captured
-- **Pool State Evolution:** MOET:YT pool state tracked throughout simulation
+* **Agent-Level Data:** 135 individual agent outcomes recorded
+* **Rebalancing Events:** All yield token sales tracked with precise slippage costs
+* **Time Series Data:** Minute-by-minute health factor evolution captured
+* **Pool State Evolution:** MOET:YT pool state tracked throughout simulation
 
 ---
 
@@ -352,10 +364,10 @@ The complete absence of liquidations across all 135 agent simulations under seve
 **Primary Recommendation: Target HF = 1.01**
 
 **Justification:**
-- **Maximum Capital Efficiency:** 99% collateral utilization
-- **Proven Safety Record:** Zero liquidations under severe stress
-- **Minimal Rebalancing Overhead:** Only 3.67 avg rebalancing events
-- **Cost-Effective:** Lowest total rebalancing costs while maintaining safety
+* **Maximum Capital Efficiency:** 99% collateral utilization
+* **Proven Safety Record:** Zero liquidations under severe stress
+* **Minimal Rebalancing Overhead:** Only 3.67 avg rebalancing events
+* **Cost-Effective:** Lowest total rebalancing costs while maintaining safety
 
 **Risk Mitigation Strategies:**
 1. **Pool Monitoring:** Track MOET:YT pool utilization in real-time
@@ -383,10 +395,10 @@ For $10M protocol TVL: $400K additional borrowing capacity
 ### 9.1 Market Stress Profile
 
 **BTC Price Trajectory (60 minutes):**
-- **Initial Price:** $100,000
-- **Final Price:** $76,342.50  
-- **Total Decline:** 23.66%
-- **Decline Profile:** Continuous, sustained pressure (realistic bear market simulation)
+* **Initial Price:** $100,000
+* **Final Price:** $76,342.50  
+* **Total Decline:** 23.66%
+* **Decline Profile:** Continuous, sustained pressure (realistic bear market simulation)
 
 ### 9.2 Agent Response Patterns
 
@@ -402,10 +414,10 @@ Result: All agents successfully restored health factors above liquidation thresh
 ### 9.3 Pool Liquidity Stress Assessment
 
 **Maximum Pool Utilization:**
-- **Largest Single Swap:** $13,685.09 yield token → MOET
-- **Pool Utilization:** 5.5% of $250K MOET side
-- **Slippage Impact:** $268.83 (1.96% of swap value)
-- **Remaining Capacity:** 94.5% pool liquidity unused
+* **Largest Single Swap:** $13,685.09 yield token → MOET
+* **Pool Utilization:** 5.5% of $250K MOET side
+* **Slippage Impact:** $268.83 (1.96% of swap value)
+* **Remaining Capacity:** 94.5% pool liquidity unused
 
 ---
 
@@ -424,9 +436,9 @@ slippage_cost = slippage_result["slippage_amount"] + slippage_result["trading_fe
 ```
 
 **Slippage Cost Validation:**
-- **Trading Fees:** 0.3% of swap value (standard Uniswap V3)
-- **Price Impact:** Minimal due to 90% concentration at peg
-- **Total Slippage:** 0.8-1.2% inclusive of all costs
+* **Trading Fees:** 0.3% of swap value (standard Uniswap V3)
+* **Price Impact:** Minimal due to 90% concentration at peg
+* **Total Slippage:** 0.8-1.2% inclusive of all costs
 
 ### 10.2 Rebalancing Algorithm Validation
 
@@ -454,26 +466,26 @@ debt_reduction_needed = current_debt - target_debt
 ### 11.2 Protocol Configuration Recommendations
 
 **Immediate Implementation:**
-- **Set Target Health Factor to 1.01** for maximum capital efficiency
-- **Maintain 90% MOET:YT Pool Concentration** for optimal slippage minimization
-- **Monitor Pool Utilization** during high-stress periods
+* **Set Target Health Factor to 1.01** for maximum capital efficiency
+* **Maintain 90% MOET:YT Pool Concentration** for optimal slippage minimization
+* **Monitor Pool Utilization** during high-stress periods
 
 **Risk Management Enhancements:**
-- **Pool Size Scaling:** Increase MOET:YT pool proportionally with protocol TVL growth
-- **Dynamic Threshold Adjustment:** Consider temporarily raising target HF during extreme market volatility (>30% daily moves)
-- **Emergency Mechanisms:** Implement automatic pool liquidity expansion triggers
+* **Pool Size Scaling:** Increase MOET:YT pool proportionally with protocol TVL growth
+* **Dynamic Threshold Adjustment:** Consider temporarily raising target HF during extreme market volatility (>30% daily moves)
+* **Emergency Mechanisms:** Implement automatic pool liquidity expansion triggers
 
 ### 11.3 Competitive Advantages
 
 **Capital Efficiency Leadership:**
-- **99% Collateral Utilization** vs traditional lending protocols (~75-80%)
-- **Predictable Rebalancing Costs** vs unpredictable liquidation losses
-- **Yield Preservation** through automated position management
+* **99% Collateral Utilization** vs traditional lending protocols (~75-80%)
+* **Predictable Rebalancing Costs** vs unpredictable liquidation losses
+* **Yield Preservation** through automated position management
 
 **Risk Management Excellence:**
-- **Zero Liquidation Occurrence** under severe stress testing
-- **Proactive Position Management** prevents cascade liquidations
-- **Mathematical Certainty** in rebalancing trigger mechanisms
+* **Zero Liquidation Occurrence** under severe stress testing
+* **Proactive Position Management** prevents cascade liquidations
+* **Mathematical Certainty** in rebalancing trigger mechanisms
 
 ---
 

@@ -14,7 +14,7 @@ This technical analysis evaluates the maximum deposit cap ratios that can be sus
 **Key Findings:**
 - The $500K total BTC:MOET pool can handle deposit cap ratios up to **5:1** ($2.5M deposits) without liquidity exhaustion
 - Maximum concentration utilization reaches **25.7%** under worst-case scenarios (5:1 ratio, 25% shock)
-- **100% liquidation success rate** achieved across all tested configurations
+* **100% liquidation success rate** achieved across all tested configurations
 - Liquidation volumes scale linearly with deposit cap ratios while maintaining efficiency
 
 **Recommendation:** Current pool configuration is **over-capitalized** for tested scenarios. Higher deposit cap ratios (6:1+) or larger shock scenarios (30%+) should be tested to identify actual breaking points.
@@ -42,10 +42,10 @@ The protocol architecture consists of two primary liquidity pools:
 
 ### 1.3 Critical Assumptions
 
-- **Pool Configuration:** $250K BTC : $250K MOET with 80% concentration at peg
-- **Agent Behavior:** No rebalancing mechanisms active (pure liquidation testing)
-- **Market Conditions:** Single-epoch price shocks simulating extreme market stress
-- **Liquidation Logic:** Aave-style partial liquidations targeting 1.1 health factor restoration
+* **Pool Configuration:** $250K BTC : $250K MOET with 80% concentration at peg
+* **Agent Behavior:** No rebalancing mechanisms active (pure liquidation testing)
+* **Market Conditions:** Single-epoch price shocks simulating extreme market stress
+* **Liquidation Logic:** Aave-style partial liquidations targeting 1.1 health factor restoration
 
 ---
 
@@ -56,23 +56,23 @@ The protocol architecture consists of two primary liquidity pools:
 The analysis employs a discrete-event Monte Carlo simulation framework with the following components:
 
 #### 2.1.1 Agent Configuration
-- **Agent Count:** 15 agents per scenario (fixed for consistency)
-- **Health Factor Distribution:** Fixed progression from 1.1 to 1.8 in 0.05 increments
-- **Collateral Scaling:** Equal distribution of total deposit capacity across agents
+* **Agent Count:** 15 agents per scenario (fixed for consistency)
+* **Health Factor Distribution:** Fixed progression from 1.1 to 1.8 in 0.05 increments
+* **Collateral Scaling:** Equal distribution of total deposit capacity across agents
 
 #### 2.1.2 Deposit Cap Ratio Testing
 Five deposit cap ratios tested against the baseline $500K total pool:
-- **1:1 Ratio:** $500K deposits vs $500K pool liquidity
-- **2:1 Ratio:** $1M deposits vs $500K pool liquidity  
-- **3:1 Ratio:** $1.5M deposits vs $500K pool liquidity
-- **4:1 Ratio:** $2M deposits vs $500K pool liquidity
-- **5:1 Ratio:** $2.5M deposits vs $500K pool liquidity
+* **1:1 Ratio:** $500K deposits vs $500K pool liquidity
+* **2:1 Ratio:** $1M deposits vs $500K pool liquidity  
+* **3:1 Ratio:** $1.5M deposits vs $500K pool liquidity
+* **4:1 Ratio:** $2M deposits vs $500K pool liquidity
+* **5:1 Ratio:** $2.5M deposits vs $500K pool liquidity
 
 #### 2.1.3 Price Shock Scenarios
 Three single-epoch BTC price decline scenarios:
-- **Moderate Shock:** 10% BTC price decline ($100K → $90K)
-- **Significant Shock:** 15% BTC price decline ($100K → $85K)
-- **Severe Shock:** 25% BTC price decline ($100K → $75K)
+* **Moderate Shock:** 10% BTC price decline ($100K → $90K)
+* **Significant Shock:** 15% BTC price decline ($100K → $85K)
+* **Severe Shock:** 25% BTC price decline ($100K → $75K)
 
 ---
 
@@ -187,11 +187,12 @@ agent_details.sort(key=lambda x: x["liquidation_priority"], reverse=True)
 ![Max Concentration Chart](tidal_protocol_sim/results/moet_yt_borrow_cap_analysis/run_001_20250904_130630/charts/max_concentration_utilization.png)
 
 The analysis reveals that concentration utilization scales sub-linearly with deposit cap ratios:
-- **1:1 Ratio:** 5.1% maximum utilization (25% shock)
-- **2:1 Ratio:** 10.3% maximum utilization (25% shock)  
-- **3:1 Ratio:** 15.4% maximum utilization (25% shock)
-- **4:1 Ratio:** 20.6% maximum utilization (25% shock)
-- **5:1 Ratio:** 25.7% maximum utilization (25% shock)
+
+* **1:1 Ratio:** 5.1% maximum utilization (25% shock)
+* **2:1 Ratio:** 10.3% maximum utilization (25% shock)  
+* **3:1 Ratio:** 15.4% maximum utilization (25% shock)
+* **4:1 Ratio:** 20.6% maximum utilization (25% shock)
+* **5:1 Ratio:** 25.7% maximum utilization (25% shock)
 
 ### 5.2 Liquidation Volume Analysis
 
@@ -288,9 +289,9 @@ Complete simulation state is preserved in structured JSON format for reproducibi
 ### 7.1 Liquidity Buffer Analysis
 
 Current results indicate substantial liquidity headroom:
-- **Maximum utilization:** 25.7% under most severe tested conditions
-- **Buffer remaining:** 74.3% concentration liquidity unused
-- **Safety margin:** 4x current maximum utilization before exhaustion
+* **Maximum utilization:** 25.7% under most severe tested conditions
+* **Buffer remaining:** 74.3% concentration liquidity unused
+* **Safety margin:** 4x current maximum utilization before exhaustion
 
 ### 7.2 Deposit Cap Recommendations
 
@@ -319,16 +320,16 @@ Based on simulation results:
 ### 8.1 Mathematical Verification
 
 All liquidation calculations follow established DeFi protocols:
-- **Health Factor Logic:** Standard Aave-style implementation
-- **Uniswap V3 Math:** Discrete bin-based slippage calculation  
-- **Concentration Modeling:** 80% peg concentration with peripheral distribution
+* **Health Factor Logic:** Standard Aave-style implementation
+* **Uniswap V3 Math:** Discrete bin-based slippage calculation  
+* **Concentration Modeling:** 80% peg concentration with peripheral distribution
 
 ### 8.2 Data Integrity Assurance
 
-- **No Data Hallucination:** All charts derived directly from simulation results
-- **State Persistence:** Complete simulation state saved in JSON format
-- **Agent-Level Tracking:** Individual agent outcomes recorded in CSV
-- **Reproducible Results:** Deterministic agent configurations enable consistent testing
+* **No Data Hallucination:** All charts derived directly from simulation results
+* **State Persistence:** Complete simulation state saved in JSON format
+* **Agent-Level Tracking:** Individual agent outcomes recorded in CSV
+* **Reproducible Results:** Deterministic agent configurations enable consistent testing
 
 ---
 
@@ -354,10 +355,10 @@ All liquidation calculations follow established DeFi protocols:
 
 ### 10.1 Simulation Engine Specifications
 
-- **Language:** Python 3.x with NumPy mathematical libraries
-- **Architecture:** Discrete-event simulation with state persistence
-- **Parallelization:** Single-threaded deterministic execution for reproducibility
-- **Output Formats:** JSON (machine-readable), CSV (analysis), PNG (visualization)
+* **Language:** Python 3.x with NumPy mathematical libraries
+* **Architecture:** Discrete-event simulation with state persistence
+* **Parallelization:** Single-threaded deterministic execution for reproducibility
+* **Output Formats:** JSON (machine-readable), CSV (analysis), PNG (visualization)
 
 ### 10.2 Uniswap V3 Integration
 
