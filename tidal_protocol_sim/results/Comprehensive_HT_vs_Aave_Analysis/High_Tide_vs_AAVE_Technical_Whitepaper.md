@@ -14,7 +14,7 @@ This comprehensive technical analysis compares High Tide Protocol's automated re
 **Key Findings:**
 - **High Tide Survival Rate:** 100.0% vs **AAVE Survival Rate:** 100.0%
 - **Survival Improvement:** +0.0% with High Tide's automated rebalancing
-- **Cost Efficiency:** 98.9% cost reduction compared to traditional liquidations
+- **Cost Efficiency:** 98.8% cost reduction compared to traditional liquidations
 - **Risk Mitigation:** Consistent outperformance across all 5 tested scenarios
 
 **Strategic Recommendation:** High Tide Protocol's automated rebalancing mechanism demonstrates superior capital preservation and cost efficiency compared to traditional liquidation systems, providing significant advantages for leveraged position management.
@@ -129,8 +129,8 @@ Protocol_Fees = Variable based on pool utilization
 | Metric | High Tide | AAVE | Improvement |
 |--------|-----------|------|-------------|
 | Mean Survival Rate | 100.0% | 100.0% | +0.0% |
-| Mean Total Cost | $86 | $7,849 | -98.9% |
-| Cost per Agent | $6 | $523 | Cost Efficient |
+| Mean Total Cost | $86 | $7,309 | -98.8% |
+| Cost per Agent | $6 | $487 | Cost Efficient |
 
 
 ### 3.2 Scenario-by-Scenario Performance Analysis
@@ -143,7 +143,7 @@ Protocol_Fees = Variable based on pool utilization
 - **AAVE Survival:** 100.0%
 - **Survival Improvement:** +0.0%
 - **High Tide Cost:** $81
-- **AAVE Cost:** $25,080
+- **AAVE Cost:** $23,361
 - **Cost Reduction:** 99.7%
 - **Win Rate:** 0.0%
 
@@ -154,8 +154,8 @@ Protocol_Fees = Variable based on pool utilization
 - **AAVE Survival:** 100.0%
 - **Survival Improvement:** +0.0%
 - **High Tide Cost:** $62
-- **AAVE Cost:** $1,752
-- **Cost Reduction:** 96.5%
+- **AAVE Cost:** $1,626
+- **Cost Reduction:** 96.2%
 - **Win Rate:** 0.0%
 
 #### Scenario 3: Conservative 1.05
@@ -176,8 +176,8 @@ Protocol_Fees = Variable based on pool utilization
 - **AAVE Survival:** 100.0%
 - **Survival Improvement:** +0.0%
 - **High Tide Cost:** $101
-- **AAVE Cost:** $8,471
-- **Cost Reduction:** 98.8%
+- **AAVE Cost:** $7,890
+- **Cost Reduction:** 98.7%
 - **Win Rate:** 0.0%
 
 #### Scenario 5: Balanced 1.1
@@ -187,8 +187,8 @@ Protocol_Fees = Variable based on pool utilization
 - **AAVE Survival:** 100.0%
 - **Survival Improvement:** +0.0%
 - **High Tide Cost:** $106
-- **AAVE Cost:** $3,944
-- **Cost Reduction:** 97.3%
+- **AAVE Cost:** $3,666
+- **Cost Reduction:** 97.1%
 - **Win Rate:** 0.0%
 
 
@@ -213,14 +213,14 @@ Protocol_Fees = Variable based on pool utilization
 
 **High Tide Cost Breakdown:**
 - **Mean Rebalancing Cost:** $6
-- **Mean Slippage Cost:** $98
+- **Mean Slippage Cost:** $5,659
 - **Mean Yield Opportunity Cost:** $5,721
-- **Total Mean Cost:** $104
+- **Total Mean Cost:** $5,665
 
 **AAVE Cost Breakdown:**
 - **Mean Liquidation Penalty:** $458
 - **Mean Collateral Loss:** $0
-- **Mean Protocol Fees:** $65
+- **Mean Protocol Fees:** $29
 - **Total Mean Cost:** $458
 
 
@@ -233,7 +233,7 @@ Protocol_Fees = Variable based on pool utilization
 
 **AAVE Capital Efficiency:**
 - **Position Preservation Rate:** 100.0%
-- **Average Cost per Liquidated Position:** $7,849
+- **Average Cost per Liquidated Position:** $7,309
 - **Capital Utilization:** Forced deleveraging during market stress
 
 ### 4.3 Risk-Adjusted Returns
@@ -281,7 +281,7 @@ Protocol_Fees = Variable based on pool utilization
 High Tide's automated rebalancing achieves 0.0% better survival rates compared to AAVE's liquidation-based approach, demonstrating the effectiveness of proactive position management.
 
 **Cost Effectiveness:**
-Despite requiring active management, High Tide's rebalancing approach results in 98.9% lower total costs compared to AAVE liquidations, primarily due to avoiding severe liquidation penalties.
+Despite requiring active management, High Tide's rebalancing approach results in 98.8% lower total costs compared to AAVE liquidations, primarily due to avoiding severe liquidation penalties.
 
 **Consistency Across Scenarios:**
 High Tide outperformed AAVE across all 5 tested health factor scenarios, indicating robust performance across different risk profiles and market conditions.

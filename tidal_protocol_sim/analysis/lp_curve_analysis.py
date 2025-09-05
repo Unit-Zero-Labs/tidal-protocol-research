@@ -105,12 +105,21 @@ class LPCurveTracker:
             self.cumulative_trade_volume += trade_amount
             
             # Simulate price impact on the concentrated liquidity
-            trade_direction = "sell" if trade_type == "rebalance" else "buy"
-            impact = self.concentrated_pool.simulate_price_impact(trade_amount, trade_direction)
+            # Determine token being traded in based on trade type and pool
+            if trade_type == "rebalance":
+                # Rebalancing typically involves selling yield tokens for MOET
+                if "Yield" in self.pool_name:
+                    token_in = "Yield_Token"
+                else:
+                    token_in = "MOET"  # For MOET:BTC pool, selling MOET for BTC
+            else:
+                # Buy operations - opposite direction
+                token_in = "MOET"
             
-            # Update the pool's liquidity distribution based on the trade
-            if impact["price_impact"] > 0:
-                self.concentrated_pool.update_liquidity_distribution(impact["price_impact"])
+            impact = self.concentrated_pool.simulate_trade_impact(trade_amount, token_in)
+            
+            # Note: The new Uniswap V3 implementation automatically handles liquidity distribution
+            # through proper tick-based math, so no manual update is needed
         
         snapshot = PoolSnapshot(
             minute=minute,
