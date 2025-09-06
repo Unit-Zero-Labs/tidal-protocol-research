@@ -25,8 +25,8 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighTideSimulationEngine
-from tidal_protocol_sim.simulation.aave_engine import AaveConfig, AaveSimulationEngine
+from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideConfig, HighTideVaultEngine
+from tidal_protocol_sim.simulation.aave_protocol_engine import AaveConfig, AaveProtocolEngine
 from tidal_protocol_sim.core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
 
 
@@ -115,7 +115,7 @@ def run_quick_target_hf_test():
                 target_hf, num_agents=10, agent_type="high_tide"
             )
             
-            ht_engine = HighTideSimulationEngine(ht_config)
+            ht_engine = HighTideVaultEngine(ht_config)
             ht_engine.high_tide_agents = custom_ht_agents
             
             # Replace protocol with BTC-only version
@@ -124,7 +124,7 @@ def run_quick_target_hf_test():
             for agent in custom_ht_agents:
                 ht_engine.agents[agent.agent_id] = agent
             
-            ht_results = ht_engine.run_high_tide_simulation()
+            ht_results = ht_engine.run_simulation()
             ht_runs.append(ht_results)
             
             # Aave simulation
@@ -138,13 +138,13 @@ def run_quick_target_hf_test():
                 target_hf, num_agents=10, agent_type="aave"
             )
             
-            aave_engine = AaveSimulationEngine(aave_config)
+            aave_engine = AaveProtocolEngine(aave_config)
             aave_engine.aave_agents = custom_aave_agents
             
             for agent in custom_aave_agents:
                 aave_engine.agents[agent.agent_id] = agent
             
-            aave_results = aave_engine.run_aave_simulation()
+            aave_results = aave_engine.run_simulation()
             aave_runs.append(aave_results)
             
             print("✓")
@@ -435,14 +435,14 @@ def run_detailed_simulation_for_charts() -> Dict:
         )
         
         # Run the simulation
-        ht_engine = HighTideSimulationEngine(ht_config)
+        ht_engine = HighTideVaultEngine(ht_config)
         ht_engine.high_tide_agents = custom_ht_agents
         
         for agent in custom_ht_agents:
             ht_engine.agents[agent.agent_id] = agent
         
         # Run simulation and get full results
-        ht_results = ht_engine.run_high_tide_simulation()
+        ht_results = ht_engine.run_simulation()
         
         print(f"✅ Detailed simulation completed with {len(ht_results.get('agent_outcomes', []))} agents")
         return ht_results

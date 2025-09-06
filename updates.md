@@ -1,75 +1,296 @@
-Your task is to refactor some of the code in our simulation system, which currently has some broken assumptions, in order for us to use the system to actual risk questions based on the results of our simulations. You will review the code and instructions here thoroughly, and then work to streamline, refactor, and improve our code in order to solve the gaps that currently exist in our simulation results. 
+[1 tool called]
 
-Core components to understand:
+# 🔧 Engine Architecture Refactoring Plan
 
-High Tide is an automated yield aggregation layer built atop the Tidal Protocol, designed to enable crypto holders to deposit assets (BTC, ETH, FLOW, stables) and earn optimized in-kind yield without manual management. Unlike passive lending protocols that rely on forced liquidations, Tidal Protocol leverages active position management: automated rebalancing  proactively defend user health factors during market downturns, minimizing principal loss and maximizing capital efficiency. This allows High Tide to take advantage of this engine while offering users market-leading yield
+## **Problem Summary**
+The current engine architecture is inconsistent and confusing:
+- AAVE engine inherits from Tidal (wrong conceptually)
+- Sophisticated Uniswap V3 math only used in High Tide, not base Tidal
+- Comparison scripts compare incompatible architectures
 
-Our simulation evaluates how different liquidity pool configurations—both external (MOET:BTC) and internal (MOET:Yield Token)—impact the protocol’s ability to execute rebalancing operations. We focus on three key metrics:
 
-## **Technical Specification of High Tide Protocol**
+## **Target Architecture**
 
-### **2.1 Foundation: Tidal Protocol**
+```
+BaseLendingEngine (Abstract)
+├── Common lending mechanics
+├── Health factor calculations  
+├── Basic liquidation framework
+└── Agent management
 
-High Tide builds on the Tidal Protocol, an actively managed lending engine for the Flow blockchain. Core features include:
+TidalProtocolEngine (BaseLendingEngine)
+├── Uses sophisticated Uniswap V3 math
+├── MOET:BTC pools with proper slippage
+├── Tidal-specific lending mechanics
+└── Foundation for all Tidal variants
 
-- **Collateral Supply:** Users deposit BTC as collateral
-- **Stablecoin Borrowing:** MOET stablecoins are borrowed against collateral
-- **Active Management:** Automated callbacks and health factor thresholds trigger position rebalancing, leveraging Flow’s scheduled transaction infrastructure
+HighTideVaultEngine (TidalProtocolEngine)  
+├── Inherits all Tidal Uniswap V3 functionality
+├── Adds MOET:YieldToken pools
+├── Adds rebalancing mechanisms
+└── Yield vault strategies
 
-Tidal’s kinked interest rate model increases borrowing rates sharply above 80% pool utilization, incentivizing agents to maintain healthy positions and avoid costly liquidations.
+AaveProtocolEngine (BaseLendingEngine)
+├── Pure AAVE implementation
+├── Traditional liquidation (50% + 5% bonus)  
+├── AAVE's actual DEX mechanics
+└── No Tidal dependencies
+```
 
-### **2.2 High Tide Enhancement: Yield Token Strategy**
+## **Refactoring Tasks**
 
-High Tide introduces an automated yield token strategy:
+### **Phase 1: Create Base Architecture**
 
-- **Immediate Yield Token Purchase:** Borrowed MOET is converted to yield-bearing tokens at 10% APR
-- **Continuous Compounding:** Yield tokens accrue interest every minute
-- **Health Factor Monitoring:** The system tracks each agent’s health factor (collateral value / debt value)
-- **Active Rebalancing:** Yield tokens are automatically sold to repay debt when health factors fall below maintenance thresholds
+#### **Task 1.1: Create BaseLendingEngine**
+```python
+# File: tidal_protocol_sim/simulation/base_lending_engine.py
 
-**Liquidation as Last Resort:** Forced liquidation only occurs if yield token sales cannot restore solvency. Forced liquidations seize collateral and swap it for MOET to pay down DEBT
+class BaseLendingEngine:
+    """Abstract base class for all lending protocol simulations"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.agents = {}
+        self.current_step = 0
+        self.liquidation_events = []
+        
+    def run_simulation(self, steps: int) -> Dict:
+        """Abstract method - must be implemented by subclasses"""
+        raise NotImplementedError
+        
+    def _process_agent_actions(self):
+        """Common agent processing logic"""
+        pass
+        
+    def _check_liquidations(self):
+        """Common liquidation checking logic"""
+        pass
+        
+    def _record_metrics(self):
+        """Common metrics recording"""
+        pass
+```
 
-## **Things that need to immediately get fixed:**
+#### **Task 1.2: Refactor TidalProtocolEngine**
+```python
+# File: tidal_protocol_sim/simulation/tidal_engine.py (rename from engine.py)
 
-Currently our system handles automated rebalancing by swapping Yield Tokens for MOET and then swapping MOET for BTC to pay down collateral. This is structurally incorrect. The rebalances need to swap Yield Tokens for MOET and pay down the debt asset directly rather than an extra swap into the collateral asset. The BTC:MOET pool is only used for liquidations
+from .base_lending_engine import BaseLendingEngine
+from ..core.uniswap_v3_math import UniswapV3Pool, UniswapV3SlippageCalculator
 
-All of our scenario analyses need to have two simulations run and compared against each other. The HighTide/Tidal simulation vs. the Aave simulation.
+class TidalProtocolEngine(BaseLendingEngine):
+    """Tidal Protocol with sophisticated Uniswap V3 mathematics"""
+    
+    def __init__(self, config: TidalConfig):
+        super().__init__(config)
+        
+        # Initialize Uniswap V3 pools for ALL Tidal simulations
+        self._setup_uniswap_v3_pools()
+        
+    def _setup_uniswap_v3_pools(self):
+        """Setup Uniswap V3 pools with proper math"""
+        from ..core.uniswap_v3_math import create_moet_btc_pool
+        
+        self.moet_btc_pool = create_moet_btc_pool(
+            pool_size=self.config.moet_btc_pool_size,
+            btc_price=self.config.btc_initial_price,
+            concentration=self.config.moet_btc_concentration
+        )
+        
+        self.slippage_calculator = UniswapV3SlippageCalculator(self.moet_btc_pool)
+```
 
-Specific Files to Review:
+### **Phase 2: Fix High Tide Engine**
 
-- comprehensive_realistic_pool_analysis.py
-- high_tide_engine.py
-- lp_curve_analysis.py
-- uniswap_v3_math.py
-- yield_tokens.py
+#### **Task 2.1: Refactor HighTideVaultEngine**
+```python
+# File: tidal_protocol_sim/simulation/high_tide_engine.py
 
-The results for our ‘comprehensive_realistic_pool_analysis.py’ script are under ‘comprehensive_realistic_analysis’ folder
+from .tidal_engine import TidalProtocolEngine  # Changed inheritance
 
-## **Questions we need answered:**
+class HighTideVaultEngine(TidalProtocolEngine):  # Now inherits from Tidal
+    """High Tide Yield Vaults built on Tidal Protocol"""
+    
+    def __init__(self, config: HighTideConfig):
+        super().__init__(config)  # Gets all Uniswap V3 functionality
+        
+        # Add yield token pools ON TOP of existing Tidal functionality
+        self._setup_yield_token_pools()
+        
+    def _setup_yield_token_pools(self):
+        """Add yield token functionality to existing Tidal base"""
+        from ..core.uniswap_v3_math import create_yield_token_pool
+        
+        self.yield_token_pool = create_yield_token_pool(
+            pool_size=self.config.moet_yield_pool_size,
+            btc_price=self.config.btc_initial_price,
+            concentration=self.config.yield_token_concentration
+        )
+        
+        self.yield_token_slippage_calculator = UniswapV3SlippageCalculator(
+            self.yield_token_pool
+        )
+```
 
-We need to be thinking about supply and borrow behavior in the frame of ratios:
-- What is the right Deposit Cap of BTC as a % of Liquidity of BTC:MOET available externally. Based on our earliest simulations it appears that most of our agents do not get liquidated because our automated rebalancing mechanism prevents it. However, this leads us to question two.
+### **Phase 3: Create Pure AAVE Engine**
 
-- How low can we make the Target Health Factor (the one that triggers rebalancing) before agents begin to get liquidated frequently? We should test target health factors of 1.01, 1.05, 1.1, 1.15 for this. We should also make it so aggressive agents take an initially large LTV loan (low health factor, say 1.1-1.2) with an aggressive target HF (1.05) to see what happens.
+#### **Task 3.1: Create Independent AaveProtocolEngine**
+```python
+# File: tidal_protocol_sim/simulation/aave_engine.py
 
-- Is there a borrow cap that should be set as a % of Liquidity in the MOET:YT pool? We are initially establishing a $250:$250k MOET:YT as our baseline. We should be testing this against a large number of agents with tight ranges between their initial health factor and their target health factor who will initiate a lot of rebalances.
+from .base_lending_engine import BaseLendingEngine  # Changed inheritance
 
-- Given the $250k:$250k MOET:YT pool, what is the most aggressive initial health factor and target health factor we can take without forcing *any* liquidations given our aggressive BTC Price Decline scenario which is back dated as the most aggressive price decline in BTC history? I guess this is the same as question number 2 above.
+class AaveConfig:
+    """Pure AAVE configuration - no Tidal dependencies"""
+    
+    def __init__(self):
+        self.scenario_name = "AAVE_Protocol"
+        self.liquidation_threshold = 0.85
+        self.liquidation_bonus = 0.05  # 5%
+        self.liquidation_percentage = 0.5  # 50%
+        # No Uniswap V3 parameters
 
-- Given that Tidal Protocol and High Tide are separate. There may be users of Tidal not using High Tide; thus, after answering all of these scenarios above for High Tide specifically. What happens as we increase the % of users just borrowing MOET without any Rebalancing Mechanism given the BEST Deposit Cap answer to question #1.
+class AaveProtocolEngine(BaseLendingEngine):  # No Tidal inheritance
+    """Pure AAVE Protocol implementation"""
+    
+    def __init__(self, config: AaveConfig):
+        super().__init__(config)
+        
+        # AAVE uses traditional AMM pools, not Uniswap V3
+        self._setup_aave_liquidation_pools()
+        
+    def _setup_aave_liquidation_pools(self):
+        """Setup AAVE's actual liquidation mechanisms"""
+        # Traditional constant product AMM
+        # 50% liquidation + 5% bonus
+        pass
+        
+    def _execute_aave_liquidation(self, agent, collateral_asset, debt_amount):
+        """Traditional AAVE liquidation: 50% collateral + 5% bonus"""
+        liquidation_amount = debt_amount * 0.5  # 50% max
+        bonus = liquidation_amount * 0.05  # 5% bonus
+        return liquidation_amount + bonus
+```
 
-## How we are currently thinking about these questions:
+### **Phase 4: Fix Comparison Scripts**
 
-- **Rebalancing Cost Optimization:** Minimizing slippage and trading fees during position adjustments
-- **Agent Survival Rates:** Maintaining healthy borrowing positions through market stress
-- **Protocol Efficiency:** Maximizing capital utilization while preserving system stability
+#### **Task 4.1: Update High Tide vs AAVE Comparison**
+```python
+# File: run_high_tide_vs_aave_comparison.py
 
-Sixteen pool sizing combinations were tested to determine optimal allocation strategies for High Tide’s architecture.
+from tidal_protocol_sim.simulation.high_tide_engine import HighTideVaultEngine, HighTideConfig
+from tidal_protocol_sim.simulation.aave_engine import AaveProtocolEngine, AaveConfig
 
-## **Structural Things:**
+def run_comparison():
+    """Now comparing apples to apples: both use same scenarios but different protocols"""
+    
+    # High Tide: Tidal + Yield Vaults
+    ht_config = HighTideConfig()
+    ht_engine = HighTideVaultEngine(ht_config)  # Gets Uniswap V3 from Tidal base
+    
+    # AAVE: Pure AAVE protocol
+    aave_config = AaveConfig()  # No Tidal dependencies
+    aave_engine = AaveProtocolEngine(aave_config)  # Pure AAVE
+    
+    # Fair comparison: same market conditions, different protocols
+```
 
-We need all of our simulations to create a simulation results json file that is used to create all of our charts. All charts must have the right data in the json file to meet our needs. No hallucination of data into the charts can occur. No hardcoded values or mock data should be implemented in order to achieve desirable results. The visualizations MUST use the system-generated simulation results.
+#### **Task 4.2: Update Borrow Cap Analysis**
+```python
+# File: moet_yt_borrow_cap_analysis.py
 
-Additionally, we need a report builder that for each analysis provides an Introduction to the simulation outlining the questions we want answered, the technical methodologies and the results of the simulation.
+from tidal_protocol_sim.simulation.tidal_engine import TidalProtocolEngine, TidalConfig
 
-We use the right Uniswap V3 math already baked in so no need to add anything there just streamline if needed. If not needed to do not add extra changes.
+def run_borrow_cap_analysis():
+    """Test Tidal protocol's borrow capacity using proper Uniswap V3 math"""
+    
+    # Use base Tidal engine with Uniswap V3 math
+    tidal_config = TidalConfig()
+    tidal_engine = TidalProtocolEngine(tidal_config)  # Now has Uniswap V3
+    
+    # Test liquidation capacity with proper slippage calculations
+```
+
+## **File Structure Changes**
+
+### **Rename/Move Files:**
+```
+OLD → NEW
+tidal_protocol_sim/simulation/engine.py → tidal_protocol_sim/simulation/tidal_engine.py
+tidal_protocol_sim/simulation/high_tide_engine.py → tidal_protocol_sim/simulation/high_tide_vault_engine.py
+```
+
+### **New Files to Create:**
+```
+tidal_protocol_sim/simulation/base_lending_engine.py
+tidal_protocol_sim/simulation/configs/
+├── base_config.py
+├── tidal_config.py  
+├── high_tide_config.py
+└── aave_config.py
+```
+
+## **Migration Steps**
+
+### **Step 1: Create Base Classes**
+1. Create `BaseLendingEngine` with common functionality
+2. Create `BaseLendingConfig` with common parameters
+3. Test base classes work independently
+
+### **Step 2: Migrate Tidal Engine**
+1. Rename `engine.py` → `tidal_engine.py`
+2. Add Uniswap V3 math to base Tidal engine
+3. Update `TidalSimulationEngine` → `TidalProtocolEngine`
+4. Test Tidal engine with Uniswap V3 math
+
+### **Step 3: Fix High Tide Engine**
+1. Change inheritance: `TidalSimulationEngine` → `TidalProtocolEngine`
+2. Remove duplicate Uniswap V3 setup (inherit from Tidal)
+3. Focus on yield token additions only
+4. Test High Tide inherits Tidal functionality
+
+### **Step 4: Rebuild AAVE Engine**
+1. Remove Tidal inheritance
+2. Inherit from `BaseLendingEngine` only
+3. Implement pure AAVE liquidation mechanics
+4. Remove all Uniswap V3 references
+
+### **Step 5: Update Analysis Scripts**
+1. Update imports to use new engine names
+2. Fix comparison logic to use proper engines
+3. Test all analysis scripts work with new architecture
+
+## **Testing Plan**
+
+### **Unit Tests:**
+```python
+def test_tidal_engine_has_uniswap_v3():
+    """Verify base Tidal engine uses Uniswap V3 math"""
+    
+def test_high_tide_inherits_tidal():
+    """Verify High Tide gets Uniswap V3 from Tidal base"""
+    
+def test_aave_independent():
+    """Verify AAVE has no Tidal dependencies"""
+    
+def test_comparison_scripts():
+    """Verify comparison scripts use correct engines"""
+```
+
+### **Integration Tests:**
+```python
+def test_high_tide_vs_aave_comparison():
+    """Test full comparison with proper architectures"""
+    
+def test_borrow_cap_analysis():
+    """Test borrow cap analysis uses Tidal Uniswap V3"""
+```
+
+## **Benefits of This Refactor**
+
+1. **Architectural Clarity**: Each engine has a clear, logical purpose
+2. **Uniswap V3 Utilization**: Your week of work becomes the foundation for all Tidal simulations
+3. **Proper Comparisons**: High Tide vs AAVE compares different protocols, not different variants of the same protocol
+4. **Maintainability**: Clear inheritance hierarchy makes future changes easier
+5. **Extensibility**: Easy to add new protocols or Tidal variants
+

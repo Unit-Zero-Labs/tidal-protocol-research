@@ -24,8 +24,8 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighTideSimulationEngine
-from tidal_protocol_sim.simulation.aave_engine import AaveConfig, AaveSimulationEngine
+from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideConfig, HighTideVaultEngine
+from tidal_protocol_sim.simulation.aave_protocol_engine import AaveConfig, AaveProtocolEngine
 from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
 from tidal_protocol_sim.agents.aave_agent import AaveAgent
 from tidal_protocol_sim.core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
@@ -223,13 +223,13 @@ def run_aggressive_scenario(scenario: Dict, pool_scenario: Dict) -> Dict:
             initial_hf, target_hf, num_agents=20, agent_type="high_tide", run_num=run_num
         )
         
-        ht_engine = HighTideSimulationEngine(ht_config)
+        ht_engine = HighTideVaultEngine(ht_config)
         ht_engine.protocol = BTCOnyProtocol()  # Enforce BTC-only
         ht_engine.high_tide_agents = aggressive_ht_agents
         for agent in aggressive_ht_agents:
             ht_engine.agents[agent.agent_id] = agent
         
-        ht_result = ht_engine.run_high_tide_simulation()
+        ht_result = ht_engine.run_simulation()
         ht_results.append(ht_result)
         
         # Matching Aave scenario
@@ -244,12 +244,12 @@ def run_aggressive_scenario(scenario: Dict, pool_scenario: Dict) -> Dict:
             initial_hf, target_hf, num_agents=20, agent_type="aave", run_num=run_num
         )
         
-        aave_engine = AaveSimulationEngine(aave_config)
+        aave_engine = AaveProtocolEngine(aave_config)
         aave_engine.aave_agents = aggressive_aave_agents
         for agent in aggressive_aave_agents:
             aave_engine.agents[agent.agent_id] = agent
         
-        aave_result = aave_engine.run_aave_simulation()
+        aave_result = aave_engine.run_simulation()
         aave_results.append(aave_result)
     
     # Aggregate results for this scenario

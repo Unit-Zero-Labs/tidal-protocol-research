@@ -11,8 +11,8 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Any, Tuple
 from datetime import datetime
-from ..simulation.high_tide_engine import HighTideSimulationEngine, HighTideConfig
-from ..simulation.aave_engine import AaveSimulationEngine, AaveConfig
+from ..simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
+from ..simulation.aave_protocol_engine import AaveProtocolEngine, AaveConfig
 from ..analysis.results_manager import ResultsManager
 
 
@@ -118,8 +118,8 @@ class HighTideVsAaveComparison:
         config.monte_carlo_agent_variation = self.config.monte_carlo_agent_variation
         
         # Create and run engine
-        engine = HighTideSimulationEngine(config)
-        results = engine.run_high_tide_simulation()
+        engine = HighTideVaultEngine(config)
+        results = engine.run_simulation()
         
         # Add run metadata
         results["run_metadata"] = {
@@ -147,8 +147,8 @@ class HighTideVsAaveComparison:
         config.monte_carlo_agent_variation = self.config.monte_carlo_agent_variation
         
         # Create and run engine
-        engine = AaveSimulationEngine(config)
-        results = engine.run_aave_simulation()
+        engine = AaveProtocolEngine(config)
+        results = engine.run_simulation()
         
         # Add run metadata
         results["run_metadata"] = {

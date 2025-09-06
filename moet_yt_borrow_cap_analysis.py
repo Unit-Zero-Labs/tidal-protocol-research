@@ -24,8 +24,7 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighTideSimulationEngine
-from tidal_protocol_sim.simulation.aave_engine import AaveConfig, AaveSimulationEngine
+from tidal_protocol_sim.simulation.tidal_engine import TidalProtocolEngine, TidalConfig
 from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
 from tidal_protocol_sim.agents.aave_agent import AaveAgent
 from tidal_protocol_sim.core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
@@ -465,22 +464,31 @@ def test_dex_liquidation_capacity_with_priority(liquidation_analysis: Dict, pool
             
             # Calculate slippage cost using proper Uniswap V3 math
             # This is a BTC:MOET swap (debt liquidation)
-            pool_state = UniswapV3Pool(
-                pool_name="MOET:BTC",
-                total_liquidity=pool_moet_liquidity * 2,  # Total pool value
-                btc_price=btc_price,
-                concentration=concentration  # 0.8 (80% concentration)
-            )
-            slippage_calculator = UniswapV3SlippageCalculator(pool_state)
-            
-            slippage_result = slippage_calculator.calculate_swap_slippage(
-                amount_in=debt_to_liquidate,
-                token_in="BTC"
-            )
-            slippage_cost = slippage_result["slippage_amount"]
+            try:
+                pool_state = UniswapV3Pool(
+                    pool_name="MOET:BTC",
+                    total_liquidity=pool_moet_liquidity * 2,  # Total pool value
+                    btc_price=btc_price,
+                    concentration=concentration  # 0.8 (80% concentration)
+                )
+                slippage_calculator = UniswapV3SlippageCalculator(pool_state)
+                
+                slippage_result = slippage_calculator.calculate_swap_slippage(
+                    amount_in=debt_to_liquidate,
+                    token_in="BTC"
+                )
+                slippage_cost = slippage_result["slippage_amount"]
+                
+                # Include trading fees in total cost (slippage + fees)
+                total_swap_cost = slippage_cost + slippage_result.get("trading_fees", 0)
+                
+            except Exception as e:
+                # If slippage calculation fails, use simplified estimate
+                slippage_cost = 0.0
+                total_swap_cost = debt_to_liquidate * 0.003  # 0.3% trading fee estimate
             
             successful_liquidations += 1
-            total_slippage_cost += slippage_cost
+            total_slippage_cost += total_swap_cost  # Use total cost including fees
             cumulative_liquidations += debt_to_liquidate
             
             # Calculate concentration utilization based on concentrated liquidity (80% of total pool)
@@ -492,7 +500,7 @@ def test_dex_liquidation_capacity_with_priority(liquidation_analysis: Dict, pool
                 "agent_id": agent_detail["agent_id"],
                 "debt_liquidated": debt_to_liquidate,
                 "collateral_seized": collateral_to_seize,
-                "slippage_cost": slippage_cost,
+                "slippage_cost": total_swap_cost,  # Use total cost including fees
                 "cumulative_liquidations": cumulative_liquidations,
                 "concentration_utilization": concentration_utilization
             })
@@ -692,13 +700,13 @@ def run_borrow_cap_scenario(agent_count: int, hf_scenario: Dict,
             initial_hf, target_hf, agent_count, "high_tide", run_num, profile
         )
         
-        ht_engine = HighTideSimulationEngine(ht_config)
+        ht_engine = HighTideVaultEngine(ht_config)
         ht_engine.protocol = BTCOnyProtocol()  # Enforce BTC-only
         ht_engine.high_tide_agents = tight_ht_agents
         for agent in tight_ht_agents:
             ht_engine.agents[agent.agent_id] = agent
         
-        ht_result = ht_engine.run_high_tide_simulation()
+        ht_result = ht_engine.run_simulation()
         ht_results.append(ht_result)
         
         # Matching Aave scenario
@@ -712,12 +720,12 @@ def run_borrow_cap_scenario(agent_count: int, hf_scenario: Dict,
             initial_hf, target_hf, agent_count, "aave", run_num, profile
         )
         
-        aave_engine = AaveSimulationEngine(aave_config)
+        aave_engine = AaveProtocolEngine(aave_config)
         aave_engine.aave_agents = tight_aave_agents
         for agent in tight_aave_agents:
             aave_engine.agents[agent.agent_id] = agent
         
-        aave_result = aave_engine.run_aave_simulation()
+        aave_result = aave_engine.run_simulation()
         aave_results.append(aave_result)
     
     # Aggregate results

@@ -24,8 +24,8 @@ import random
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.high_tide_engine import HighTideSimulationEngine, HighTideConfig
-from tidal_protocol_sim.simulation.aave_engine import AaveSimulationEngine, AaveConfig
+from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
+from tidal_protocol_sim.simulation.aave_protocol_engine import AaveProtocolEngine, AaveConfig
 from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
 from tidal_protocol_sim.agents.aave_agent import AaveAgent
 from tidal_protocol_sim.core.protocol import TidalProtocol
@@ -240,7 +240,7 @@ class ComprehensiveHTvsAaveAnalysis:
         )
         
         # Create engine and run simulation
-        ht_engine = HighTideSimulationEngine(ht_config)
+        ht_engine = HighTideVaultEngine(ht_config)
         ht_engine.high_tide_agents = custom_ht_agents
         ht_engine.protocol = TidalProtocol()
         
@@ -249,7 +249,7 @@ class ComprehensiveHTvsAaveAnalysis:
             ht_engine.agents[agent.agent_id] = agent
         
         # Run simulation
-        results = ht_engine.run_high_tide_simulation()
+        results = ht_engine.run_simulation()
         
         # Add metadata
         results["run_metadata"] = {
@@ -287,7 +287,7 @@ class ComprehensiveHTvsAaveAnalysis:
             custom_aave_agents.append(agent)
         
         # Create engine and run simulation
-        aave_engine = AaveSimulationEngine(aave_config)
+        aave_engine = AaveProtocolEngine(aave_config)
         aave_engine.aave_agents = custom_aave_agents
         aave_engine.protocol = TidalProtocol()
         
@@ -296,7 +296,7 @@ class ComprehensiveHTvsAaveAnalysis:
             aave_engine.agents[agent.agent_id] = agent
         
         # Run simulation
-        results = aave_engine.run_aave_simulation()
+        results = aave_engine.run_simulation()
         
         # Add metadata
         results["run_metadata"] = {

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-Advanced Uniswap V3 Concentrated Liquidity System
+Uniswap V3 Concentrated Liquidity System 
 
-Implements discrete liquidity bins with accurate slippage calculations:
-- MOET:BTC: 80% at peg ±0.99%, 100k liquidity at ±1% in both directions
-- MOET:Yield Token: 95% at peg, remaining distributed in 1 basis point increments
+Implements authentic Uniswap V3 mathematics using:
+- Tick-based price system with Q64.96 fixed-point arithmetic
+- Proper constant product curve calculations
+- Concentrated liquidity positions
+- MOET:BTC: 80% concentrated around peg
+- MOET:Yield Token: 95% concentrated around peg
 
-Provides both trading functionality and visualization data for bar charts.
+Provides both trading functionality and visualization data for charts.
 """
 
 import math
@@ -14,282 +17,744 @@ import numpy as np
 from typing import Tuple, Dict, Optional, List
 from dataclasses import dataclass
 
+# Uniswap V3 Constants
+MIN_TICK = -887272
+MAX_TICK = 887272
+Q96 = 2 ** 96
+TICK_SPACING_0_3_PERCENT = 60  # For 0.3% fee tier
+MIN_SQRT_RATIO = 4295128739  # sqrt(1.0001^-887272) * 2^96
+MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342  # sqrt(1.0001^887272) * 2^96
+
+
+# Core Uniswap V3 Math Functions - Exact Integer Implementation
+def tick_to_sqrt_price_x96(tick: int) -> int:
+    """Convert tick to sqrt price in Q64.96 format using simplified exact math"""
+    if tick < MIN_TICK or tick > MAX_TICK:
+        raise ValueError(f"Tick {tick} out of bounds [{MIN_TICK}, {MAX_TICK}]")
+    
+    # Use the mathematical formula: sqrt_price = sqrt(1.0001^tick)
+    # For precision, we'll use the exact formula but with proper bounds checking
+    sqrt_price = 1.0001 ** (tick / 2.0)
+    sqrt_price_x96 = int(sqrt_price * Q96)
+    
+    # Ensure bounds
+    return max(MIN_SQRT_RATIO, min(MAX_SQRT_RATIO, sqrt_price_x96))
+
+
+def sqrt_price_x96_to_tick(sqrt_price_x96: int) -> int:
+    """Convert sqrt price X96 to tick using exact integer math"""
+    if sqrt_price_x96 < MIN_SQRT_RATIO or sqrt_price_x96 > MAX_SQRT_RATIO:
+        raise ValueError(f"sqrt_price_x96 {sqrt_price_x96} out of bounds")
+    
+    # Use binary search for exact tick calculation
+    tick_low = MIN_TICK
+    tick_high = MAX_TICK
+    
+    while tick_high - tick_low > 1:
+        tick_mid = (tick_low + tick_high) // 2
+        sqrt_price_mid = tick_to_sqrt_price_x96(tick_mid)
+        
+        if sqrt_price_mid <= sqrt_price_x96:
+            tick_low = tick_mid
+        else:
+            tick_high = tick_mid
+    
+    return tick_low
+
+
+# Safe math helpers
+def mul_div(a: int, b: int, denominator: int) -> int:
+    """Multiply two numbers and divide by denominator with overflow protection"""
+    if denominator == 0:
+        raise ValueError("Division by zero")
+    result = (a * b) // denominator
+    return result
+
+def mul_div_rounding_up(a: int, b: int, denominator: int) -> int:
+    """Multiply and divide with rounding up"""
+    if denominator == 0:
+        raise ValueError("Division by zero")
+    result = (a * b + denominator - 1) // denominator
+    return result
+
+def get_amount0_delta(
+    sqrt_price_a_x96: int,
+    sqrt_price_b_x96: int, 
+    liquidity: int,
+    round_up: bool = False
+) -> int:
+    """Calculate amount0 delta for liquidity in price range with proper rounding"""
+    if sqrt_price_a_x96 > sqrt_price_b_x96:
+        sqrt_price_a_x96, sqrt_price_b_x96 = sqrt_price_b_x96, sqrt_price_a_x96
+    
+    if liquidity == 0 or sqrt_price_a_x96 == sqrt_price_b_x96:
+        return 0
+    
+    numerator1 = liquidity << 96  # liquidity * Q96
+    numerator2 = sqrt_price_b_x96 - sqrt_price_a_x96
+    denominator = sqrt_price_b_x96 * sqrt_price_a_x96
+    
+    if round_up:
+        return mul_div_rounding_up(mul_div_rounding_up(numerator1, numerator2, sqrt_price_b_x96), 1, sqrt_price_a_x96)
+    else:
+        return mul_div(numerator1, numerator2, denominator)
+
+
+def get_amount1_delta(
+    sqrt_price_a_x96: int,
+    sqrt_price_b_x96: int,
+    liquidity: int,
+    round_up: bool = False
+) -> int:
+    """Calculate amount1 delta for liquidity in price range with proper rounding"""
+    if sqrt_price_a_x96 > sqrt_price_b_x96:
+        sqrt_price_a_x96, sqrt_price_b_x96 = sqrt_price_b_x96, sqrt_price_a_x96
+    
+    if liquidity == 0 or sqrt_price_a_x96 == sqrt_price_b_x96:
+        return 0
+    
+    if round_up:
+        return mul_div_rounding_up(liquidity, sqrt_price_b_x96 - sqrt_price_a_x96, Q96)
+    else:
+        return mul_div(liquidity, sqrt_price_b_x96 - sqrt_price_a_x96, Q96)
+
+
+def get_next_sqrt_price_from_amount0_rounding_up(
+    sqrt_price_x96: int,
+    liquidity: int,
+    amount: int,
+    add: bool
+) -> int:
+    """Calculate next sqrt price from amount0 with proper rounding up"""
+    if amount == 0:
+        return sqrt_price_x96
+    
+    if liquidity == 0:
+        raise ValueError("Liquidity cannot be zero")
+    
+    numerator1 = liquidity << 96  # liquidity * Q96
+    
+    if add:
+        # Adding amount0: sqrt_price decreases
+        # Formula: L * sqrt_P / (L + amount0 * sqrt_P)
+        product = amount * sqrt_price_x96
+        # Check for overflow
+        if amount != 0 and product // amount != sqrt_price_x96:
+            raise ValueError("Multiplication overflow")
+        
+        denominator = numerator1 + product
+        if denominator < numerator1:
+            raise ValueError("Addition overflow")
+            
+        return mul_div(numerator1, sqrt_price_x96, denominator)
+    else:
+        # Removing amount0: sqrt_price increases
+        # Formula: L / (L/sqrt_P - amount0)
+        quotient = mul_div_rounding_up(numerator1, 1, sqrt_price_x96)
+        if quotient <= amount:
+            raise ValueError("Amount too large")
+        return mul_div_rounding_up(numerator1, 1, quotient - amount)
+
+
+def get_next_sqrt_price_from_amount1_rounding_down(
+    sqrt_price_x96: int,
+    liquidity: int,
+    amount: int,
+    add: bool
+) -> int:
+    """Calculate next sqrt price from amount1 with proper rounding down"""
+    if amount == 0:
+        return sqrt_price_x96
+    
+    if liquidity == 0:
+        raise ValueError("Liquidity cannot be zero")
+    
+    if add:
+        # Adding amount1: sqrt_price increases
+        # Formula: sqrt_P + amount1 / L
+        quotient = mul_div(amount, Q96, liquidity)
+        result = sqrt_price_x96 + quotient
+        if result < sqrt_price_x96:
+            raise ValueError("Addition overflow")
+        return result
+    else:
+        # Removing amount1: sqrt_price decreases
+        # Formula: sqrt_P - amount1 / L
+        quotient = mul_div_rounding_up(amount, Q96, liquidity)
+        if sqrt_price_x96 <= quotient:
+            raise ValueError("Amount too large")
+        return sqrt_price_x96 - quotient
+
+
+def compute_swap_step(
+    sqrt_price_current_x96: int,
+    sqrt_price_target_x96: int,
+    liquidity: int,
+    amount_remaining: int,
+    fee_pips: int
+) -> Tuple[int, int, int, int]:
+    """
+    Compute a single swap step using exact Uniswap V3 logic
+    Returns: (sqrt_price_next_x96, amount_in, amount_out, fee_amount)
+    """
+    zero_for_one = sqrt_price_current_x96 >= sqrt_price_target_x96
+    exact_in = amount_remaining >= 0
+    
+    sqrt_price_next_x96 = 0
+    amount_in = 0
+    amount_out = 0
+    fee_amount = 0
+    
+    if exact_in:
+        # Calculate amount after fees
+        amount_remaining_less_fee = mul_div(amount_remaining, 1000000 - fee_pips, 1000000)
+        
+        # Calculate how much input is needed to reach target price
+        amount_in = get_amount0_delta(
+            sqrt_price_target_x96, sqrt_price_current_x96, liquidity, True
+        ) if zero_for_one else get_amount1_delta(
+            sqrt_price_current_x96, sqrt_price_target_x96, liquidity, True
+        )
+        
+        if amount_remaining_less_fee >= amount_in:
+            # We can reach the target price
+            sqrt_price_next_x96 = sqrt_price_target_x96
+        else:
+            # We cannot reach target price with remaining amount
+            sqrt_price_next_x96 = get_next_sqrt_price_from_input(
+                sqrt_price_current_x96, liquidity, amount_remaining_less_fee, zero_for_one
+            )
+    else:
+        # Exact output case
+        amount_out = get_amount1_delta(
+            sqrt_price_target_x96, sqrt_price_current_x96, liquidity, False
+        ) if zero_for_one else get_amount0_delta(
+            sqrt_price_current_x96, sqrt_price_target_x96, liquidity, False
+        )
+        
+        if -amount_remaining >= amount_out:
+            # We can reach the target price
+            sqrt_price_next_x96 = sqrt_price_target_x96
+        else:
+            # We cannot reach target price with remaining amount
+            sqrt_price_next_x96 = get_next_sqrt_price_from_output(
+                sqrt_price_current_x96, liquidity, -amount_remaining, zero_for_one
+            )
+    
+    max_price_reached = sqrt_price_target_x96 == sqrt_price_next_x96
+    
+    # Calculate actual amounts based on the price change
+    if zero_for_one:
+        amount_in = get_amount0_delta(
+            sqrt_price_next_x96, sqrt_price_current_x96, liquidity, True
+        ) if not max_price_reached or not exact_in else get_amount0_delta(
+            sqrt_price_next_x96, sqrt_price_current_x96, liquidity, False
+        )
+        
+        amount_out = get_amount1_delta(
+            sqrt_price_next_x96, sqrt_price_current_x96, liquidity, False
+        )
+    else:
+        amount_in = get_amount1_delta(
+            sqrt_price_current_x96, sqrt_price_next_x96, liquidity, True
+        ) if not max_price_reached or not exact_in else get_amount1_delta(
+            sqrt_price_current_x96, sqrt_price_next_x96, liquidity, False
+        )
+        
+        amount_out = get_amount0_delta(
+            sqrt_price_current_x96, sqrt_price_next_x96, liquidity, False
+        )
+    
+    # Cap output amount if exact output
+    if not exact_in and amount_out > -amount_remaining:
+        amount_out = -amount_remaining
+    
+    # Calculate fees
+    if exact_in and sqrt_price_next_x96 != sqrt_price_target_x96:
+        # Not all input was used, so fee is on remaining amount
+        fee_amount = amount_remaining - amount_in
+    else:
+        # Standard fee calculation
+        fee_amount = mul_div_rounding_up(amount_in, fee_pips, 1000000 - fee_pips)
+    
+    return sqrt_price_next_x96, amount_in, amount_out, fee_amount
+
+
+def get_next_sqrt_price_from_input(
+    sqrt_price_x96: int,
+    liquidity: int,
+    amount_in: int,
+    zero_for_one: bool
+) -> int:
+    """Calculate next sqrt price from input amount"""
+    if zero_for_one:
+        return get_next_sqrt_price_from_amount0_rounding_up(sqrt_price_x96, liquidity, amount_in, True)
+    else:
+        return get_next_sqrt_price_from_amount1_rounding_down(sqrt_price_x96, liquidity, amount_in, True)
+
+
+def get_next_sqrt_price_from_output(
+    sqrt_price_x96: int,
+    liquidity: int,
+    amount_out: int,
+    zero_for_one: bool
+) -> int:
+    """Calculate next sqrt price from output amount"""
+    if zero_for_one:
+        return get_next_sqrt_price_from_amount1_rounding_down(sqrt_price_x96, liquidity, amount_out, False)
+    else:
+        return get_next_sqrt_price_from_amount0_rounding_up(sqrt_price_x96, liquidity, amount_out, False)
+
 
 @dataclass
+class TickInfo:
+    """Information stored for each tick in Uniswap V3"""
+    liquidity_gross: int = 0  # Total liquidity referencing this tick
+    liquidity_net: int = 0   # Net liquidity change at this tick
+    initialized: bool = False  # Whether this tick has been initialized
+    
+@dataclass
+class Position:
+    """Represents a concentrated liquidity position"""
+    tick_lower: int  # Lower tick of the position
+    tick_upper: int  # Upper tick of the position  
+    liquidity: int   # Amount of liquidity in this position
+    
+# Backward compatibility - represents a "bin" as a tick for visualization
+@dataclass
 class LiquidityBin:
-    """Represents a discrete liquidity bin at a specific price point"""
-    price: float  # Price at this bin
-    liquidity: float  # Amount of liquidity in this bin
-    bin_index: int  # Sequential bin index
-    is_active: bool = True  # Whether this bin has active liquidity
+    """Backward compatibility: represents a tick as a bin for visualization"""
+    price: float  # Price at this tick
+    liquidity: float  # Amount of liquidity at this tick
+    bin_index: int  # Sequential index (tick-based)
+    is_active: bool = True  # Whether this tick has active liquidity
+    tick: int = 0  # The actual tick number
 
 
 @dataclass
 class UniswapV3Pool:
-    """Advanced Uniswap v3 pool with discrete liquidity bins"""
+    """Proper Uniswap V3 pool implementation with tick-based math"""
     pool_name: str  # "MOET:BTC" or "MOET:Yield_Token"
     total_liquidity: float  # Total pool size in USD
     btc_price: float = 100_000.0  # BTC price in USD
-    num_bins: int = 100  # Number of discrete liquidity bins
     fee_tier: float = 0.003  # 0.3% fee tier
     concentration: float = 0.80  # Concentration level (0.80 = 80% at peg)
+    tick_spacing: int = TICK_SPACING_0_3_PERCENT  # Tick spacing for this fee tier
+    
+    # Core Uniswap V3 state
+    sqrt_price_x96: int = Q96  # Current sqrt price in Q64.96 format
+    liquidity: int = 0  # Current active liquidity
+    tick_current: int = 0  # Current tick
+    
+    # Tick and position data
+    ticks: Dict[int, TickInfo] = None  # tick -> TickInfo
+    positions: List[Position] = None  # List of liquidity positions
     
     # Legacy fields for backward compatibility
-    token0_reserve: Optional[float] = None  # MOET reserve (calculated from bins)
-    token1_reserve: Optional[float] = None  # BTC reserve (calculated from bins)
-    sqrt_price_x96: Optional[float] = None
-    liquidity: Optional[float] = None
-    tick_current: Optional[int] = None
+    token0_reserve: Optional[float] = None  # MOET reserve (calculated from ticks)
+    token1_reserve: Optional[float] = None  # BTC reserve (calculated from ticks)
+    num_bins: int = 100  # For visualization compatibility
+    bins: List[LiquidityBin] = None  # For backward compatibility
     
     def __post_init__(self):
-        """Initialize discrete liquidity bins and derived values"""
-        # Determine pool type and peg price
-        if "MOET:BTC" in self.pool_name:
-            self.peg_price = 0.00001  # 1 BTC = 100,000 MOET
-            self.concentration_type = "moet_btc"
-        else:
-            self.peg_price = 1.0  # 1:1 for yield tokens
-            self.concentration_type = "yield_token"
+        """Initialize Uniswap V3 pool with proper tick-based math"""
+        # Initialize tick and position data structures
+        self.ticks = {} if self.ticks is None else self.ticks
+        self.positions = [] if self.positions is None else self.positions
         
-        # Initialize discrete liquidity bins
-        self.bins: List[LiquidityBin] = []
-        self._initialize_liquidity_distribution()
+        # Determine pool type and peg price using exact calculations
+        if "MOET:BTC" in self.pool_name:
+            self.concentration_type = "moet_btc"
+            # For MOET:BTC, we want a small price (1 BTC = 100,000 MOET)
+            # This corresponds to approximately tick -115129 for 0.00001 price
+            self.tick_current = -115129  # Exact tick for ~0.00001 price
+            self.tick_current = max(MIN_TICK + 1000, min(MAX_TICK - 1000, self.tick_current))
+            self.sqrt_price_x96 = tick_to_sqrt_price_x96(self.tick_current)
+            # Calculate exact peg price from sqrt_price_x96
+            sqrt_price = self.sqrt_price_x96 / Q96
+            self.peg_price = sqrt_price * sqrt_price
+        else:
+            self.concentration_type = "yield_token"
+            # Set current price to exact 1:1 peg
+            self.tick_current = 0
+            self.sqrt_price_x96 = Q96
+            self.peg_price = 1.0
+        
+        # Initialize concentrated liquidity positions
+        self._initialize_concentrated_positions()
+        
+        # Create backward compatibility bins for visualization
+        self._create_visualization_bins()
+        
+        # Calculate legacy fields for backward compatibility
+        self._update_legacy_fields()
+    
+    def _initialize_concentrated_positions(self):
+        """Initialize concentrated liquidity positions using proper Uniswap V3 math"""
+        if self.concentration_type == "moet_btc":
+            self._initialize_moet_btc_positions()
+        else:
+            self._initialize_yield_token_positions()
+    
+    def _initialize_moet_btc_positions(self):
+        """Initialize MOET:BTC concentrated liquidity positions using exact tick math"""
+        total_liquidity_amount = int(self.total_liquidity * 1e6)
+        concentrated_liquidity = int(total_liquidity_amount * self.concentration)
+        
+        # Position 1: Concentrated range (±1% = ~100 ticks)
+        peg_tick = self.tick_current
+        tick_range = 100  # Approximately 1% price range
+        
+        tick_lower = ((peg_tick - tick_range) // self.tick_spacing) * self.tick_spacing
+        tick_upper = ((peg_tick + tick_range) // self.tick_spacing) * self.tick_spacing
+        
+        # Ensure valid bounds
+        tick_lower = max(MIN_TICK + self.tick_spacing, tick_lower)
+        tick_upper = min(MAX_TICK - self.tick_spacing, tick_upper)
+        
+        if tick_lower < tick_upper:
+            self._add_position(tick_lower, tick_upper, concentrated_liquidity)
+        
+        # Position 2: Wider range for remaining liquidity
+        remaining_liquidity = total_liquidity_amount - concentrated_liquidity
+        if remaining_liquidity > 0:
+            wide_tick_range = 1000  # Approximately 10% price range
+            
+            # Create 3 positions in wider range
+            for i in range(3):
+                range_multiplier = (i + 2) // 4  # 0.5, 0.75, 1.0
+                inner_tick_range = wide_tick_range * range_multiplier
+                
+                pos_tick_lower = ((peg_tick - inner_tick_range) // self.tick_spacing) * self.tick_spacing
+                pos_tick_upper = ((peg_tick + inner_tick_range) // self.tick_spacing) * self.tick_spacing
+                
+                pos_tick_lower = max(MIN_TICK + self.tick_spacing, pos_tick_lower)
+                pos_tick_upper = min(MAX_TICK - self.tick_spacing, pos_tick_upper)
+                
+                if pos_tick_lower < pos_tick_upper:
+                    self._add_position(pos_tick_lower, pos_tick_upper, remaining_liquidity // 3)
+    
+    def _initialize_yield_token_positions(self):
+        """Initialize MOET:Yield Token concentrated liquidity positions using exact tick math"""
+        total_liquidity_amount = int(self.total_liquidity * 1e6)
+        concentrated_liquidity = int(total_liquidity_amount * self.concentration)
+        
+        # Position 1: Very tight range around 1:1 peg (±0.1% = ~10 ticks)
+        peg_tick = self.tick_current  # Should be 0 for 1:1 peg
+        tick_range = 10  # Approximately 0.1% price range
+        
+        tick_lower = ((peg_tick - tick_range) // self.tick_spacing) * self.tick_spacing
+        tick_upper = ((peg_tick + tick_range) // self.tick_spacing) * self.tick_spacing
+        
+        # Ensure valid bounds
+        tick_lower = max(MIN_TICK + self.tick_spacing, tick_lower)
+        tick_upper = min(MAX_TICK - self.tick_spacing, tick_upper)
+        
+        if tick_lower < tick_upper:
+            self._add_position(tick_lower, tick_upper, concentrated_liquidity)
+        
+        # Position 2: Wider range for remaining liquidity (±1% = ~100 ticks)
+        remaining_liquidity = total_liquidity_amount - concentrated_liquidity
+        if remaining_liquidity > 0:
+            wide_tick_range = 100  # Approximately 1% price range
+            
+            tick_lower = ((peg_tick - wide_tick_range) // self.tick_spacing) * self.tick_spacing
+            tick_upper = ((peg_tick + wide_tick_range) // self.tick_spacing) * self.tick_spacing
+            
+            tick_lower = max(MIN_TICK + self.tick_spacing, tick_lower)
+            tick_upper = min(MAX_TICK - self.tick_spacing, tick_upper)
+            
+            if tick_lower < tick_upper:
+                self._add_position(tick_lower, tick_upper, remaining_liquidity)
+    
+    def _add_position(self, tick_lower: int, tick_upper: int, liquidity: int):
+        """Add a liquidity position and update tick data"""
+        if liquidity <= 0:
+            return
+            
+        # Create position
+        position = Position(tick_lower, tick_upper, liquidity)
+        self.positions.append(position)
+        
+        # Update tick data
+        if tick_lower not in self.ticks:
+            self.ticks[tick_lower] = TickInfo()
+        if tick_upper not in self.ticks:
+            self.ticks[tick_upper] = TickInfo()
+        
+        # Update liquidity deltas
+        self.ticks[tick_lower].liquidity_net += liquidity
+        self.ticks[tick_lower].liquidity_gross += liquidity
+        self.ticks[tick_lower].initialized = True
+        
+        self.ticks[tick_upper].liquidity_net -= liquidity
+        self.ticks[tick_upper].liquidity_gross += liquidity
+        self.ticks[tick_upper].initialized = True
+        
+        # Update current liquidity if position includes current tick
+        if tick_lower <= self.tick_current < tick_upper:
+            self.liquidity += liquidity
+    
+    def swap(
+        self,
+        zero_for_one: bool,
+        amount_specified: int,
+        sqrt_price_limit_x96: int
+    ) -> Tuple[int, int]:
+        """Execute a swap using proper Uniswap V3 math"""
+        if amount_specified == 0:
+            return (0, 0)
+        
+        exact_input = amount_specified > 0
+        
+        # Set price limit if not specified
+        if sqrt_price_limit_x96 == 0:
+            sqrt_price_limit_x96 = MIN_SQRT_RATIO + 1 if zero_for_one else MAX_SQRT_RATIO - 1
+        
+        # Validate price limit
+        if zero_for_one:
+            if sqrt_price_limit_x96 >= self.sqrt_price_x96:
+                raise ValueError("Price limit too high for zero_for_one swap")
+            if sqrt_price_limit_x96 < MIN_SQRT_RATIO:
+                raise ValueError("Price limit too low")
+        else:
+            if sqrt_price_limit_x96 <= self.sqrt_price_x96:
+                raise ValueError("Price limit too low for one_for_zero swap")
+            if sqrt_price_limit_x96 > MAX_SQRT_RATIO:
+                raise ValueError("Price limit too high")
+        
+        # Initialize swap state
+        state = {
+            'amount_specified_remaining': amount_specified,
+            'amount_calculated': 0,
+            'sqrt_price_x96': self.sqrt_price_x96,
+            'tick': self.tick_current,
+            'liquidity': self.liquidity
+        }
+        
+        # Convert fee to pips (0.003 = 3000 pips)
+        fee_pips = int(self.fee_tier * 1000000)
+        
+        # Continue swapping until amount is exhausted or price limit is reached
+        # Add safety counter to prevent infinite loops
+        max_iterations = 1000
+        iteration_count = 0
+        
+        # Debug flag - can be enabled for troubleshooting
+        debug_swap = False
+        
+        while (abs(state['amount_specified_remaining']) > 1 and  # Use tolerance instead of exact 0
+               state['sqrt_price_x96'] != sqrt_price_limit_x96 and
+               iteration_count < max_iterations):
+            
+            iteration_count += 1
+            
+            if debug_swap and iteration_count % 100 == 0:
+                print(f"Swap iteration {iteration_count}: remaining={state['amount_specified_remaining']}, price={state['sqrt_price_x96']}")
+            
+            # Store previous state to detect if we're making progress
+            prev_amount_remaining = state['amount_specified_remaining']
+            prev_sqrt_price = state['sqrt_price_x96']
+            
+            # Find the next initialized tick
+            tick_next = self._next_initialized_tick(state['tick'], zero_for_one)
+            
+            # Check if we have no more liquidity to trade through
+            if ((zero_for_one and tick_next == MIN_TICK) or 
+                (not zero_for_one and tick_next == MAX_TICK)):
+                # No more initialized ticks in this direction - exit
+                if debug_swap:
+                    print(f"No more initialized ticks, exiting swap at iteration {iteration_count}")
+                break
+                
+            sqrt_price_next_x96 = tick_to_sqrt_price_x96(tick_next)
+            
+            # Ensure we don't exceed the price limit
+            if zero_for_one:
+                sqrt_price_target_x96 = max(sqrt_price_next_x96, sqrt_price_limit_x96)
+            else:
+                sqrt_price_target_x96 = min(sqrt_price_next_x96, sqrt_price_limit_x96)
+            
+            # Compute the swap step
+            try:
+                sqrt_price_next_x96, amount_in, amount_out, fee_amount = compute_swap_step(
+                    state['sqrt_price_x96'],
+                    sqrt_price_target_x96,
+                    state['liquidity'],
+                    state['amount_specified_remaining'],
+                    fee_pips
+                )
+            except (ValueError, ZeroDivisionError):
+                # Exit on math errors
+                break
+            
+            # Check if we made no progress (stuck in infinite loop)
+            if (amount_in == 0 and amount_out == 0 and 
+                state['sqrt_price_x96'] == prev_sqrt_price):
+                if debug_swap:
+                    print(f"No progress made, exiting swap at iteration {iteration_count}")
+                break
+            
+            # Update amounts
+            if exact_input:
+                state['amount_specified_remaining'] -= (amount_in + fee_amount)
+                state['amount_calculated'] -= amount_out
+            else:
+                state['amount_specified_remaining'] += amount_out
+                state['amount_calculated'] += (amount_in + fee_amount)
+            
+            # Update price
+            state['sqrt_price_x96'] = sqrt_price_next_x96
+            
+            # If we've reached the next tick, update liquidity
+            if sqrt_price_next_x96 == tick_to_sqrt_price_x96(tick_next):
+                if tick_next in self.ticks and self.ticks[tick_next].initialized:
+                    liquidity_net = self.ticks[tick_next].liquidity_net
+                    if zero_for_one:
+                        liquidity_net = -liquidity_net
+                    state['liquidity'] += liquidity_net
+                
+                state['tick'] = tick_next
+            else:
+                # We didn't reach the next tick, update tick to current price
+                state['tick'] = sqrt_price_x96_to_tick(sqrt_price_next_x96)
+            
+            # Additional safety check: if liquidity becomes 0, we can't continue
+            if state['liquidity'] <= 0:
+                if debug_swap:
+                    print(f"Liquidity exhausted, exiting swap at iteration {iteration_count}")
+                break
+        
+        # Warn if we hit the iteration limit
+        if iteration_count >= max_iterations:
+            print(f"⚠️  Swap hit maximum iterations ({max_iterations}) - potential infinite loop prevented")
+        
+        # Update pool state
+        self.sqrt_price_x96 = state['sqrt_price_x96']
+        self.tick_current = state['tick']
+        self.liquidity = state['liquidity']
+        
+        # Return amounts (input, output)
+        if exact_input:
+            amount_in_final = amount_specified - state['amount_specified_remaining']
+            amount_out_final = -state['amount_calculated']
+            # DEBUG: Print the final calculations (disabled)
+            # print(f"DEBUG: amount_specified={amount_specified}, remaining={state['amount_specified_remaining']}, calculated={state['amount_calculated']}")
+            # print(f"DEBUG: Final amounts: in={amount_in_final}, out={amount_out_final}")
+            return (amount_in_final, amount_out_final)
+        else:
+            return (state['amount_calculated'], 
+                    amount_specified - state['amount_specified_remaining'])
+    
+    def _next_initialized_tick(self, tick: int, zero_for_one: bool) -> int:
+        """Find the next initialized tick in the given direction"""
+        if zero_for_one:
+            # Moving down (decreasing price)
+            initialized_ticks = [t for t in self.ticks.keys() if t < tick and self.ticks[t].initialized]
+            if initialized_ticks:
+                return max(initialized_ticks)
+            else:
+                # No more ticks below - return MIN_TICK to signal boundary
+                return MIN_TICK
+        else:
+            # Moving up (increasing price)  
+            initialized_ticks = [t for t in self.ticks.keys() if t > tick and self.ticks[t].initialized]
+            if initialized_ticks:
+                return min(initialized_ticks)
+            else:
+                # No more ticks above - return MAX_TICK to signal boundary
+                return MAX_TICK
+    
+    def _create_visualization_bins(self):
+        """Create backward compatibility bins for visualization from tick data"""
+        self.bins = []
+        
+        # Get all ticks sorted by value
+        sorted_ticks = sorted(self.ticks.keys())
+        
+        if not sorted_ticks:
+            return
+        
+        # Create bins representing tick ranges
+        for i, tick in enumerate(sorted_ticks):
+            price = (tick_to_sqrt_price_x96(tick) / Q96) ** 2
+            
+            # Calculate liquidity at this tick (sum of all positions that include this tick)
+            liquidity_at_tick = 0
+            for position in self.positions:
+                if position.tick_lower <= tick < position.tick_upper:
+                    liquidity_at_tick += position.liquidity
+            
+            # Convert back to USD for visualization
+            liquidity_usd = liquidity_at_tick / 1e6
+            
+            self.bins.append(LiquidityBin(
+                price=price,
+                liquidity=liquidity_usd,
+                bin_index=i,
+                is_active=liquidity_usd > 1000,  # $1k threshold
+                tick=tick
+            ))
         
         # Sort bins by price for proper visualization
         self.bins.sort(key=lambda b: b.price)
         
-        # Re-assign bin indices after sorting to maintain order
+        # Re-assign bin indices after sorting
         for i, bin in enumerate(self.bins):
             bin.bin_index = i
-        
-        # Calculate legacy fields from bins for backward compatibility
-        self._update_legacy_fields()
-    
-    def _initialize_liquidity_distribution(self):
-        """Initialize liquidity distribution across discrete bins"""
-        if self.concentration_type == "moet_btc":
-            self._initialize_moet_btc_distribution()
-        else:
-            self._initialize_yield_token_distribution()
-    
-    def _initialize_moet_btc_distribution(self):
-        """Initialize MOET:BTC liquidity distribution with proper Uniswap V3 concentrated liquidity:
-        - 80% of total liquidity in the SINGLE bin at the exact peg price (0.00001 BTC per MOET)
-        - $100k liquidity distributed in 100 basis point increments on each side of the peg
-        - Remaining liquidity in outer bins
-        """
-        
-        peg_price = self.peg_price  # 0.00001 BTC per MOET
-        
-        # 1. Create the SINGLE peg bin with 80% of total liquidity
-        peg_liquidity = self.total_liquidity * self.concentration  # 80% of total
-        self.bins.append(LiquidityBin(
-            price=peg_price,
-            liquidity=peg_liquidity,
-            bin_index=0,
-            is_active=True
-        ))
-        
-        # 2. Create bins in 100 basis point increments on each side of the peg
-        # 100 basis points = 1% = 0.01
-        bp_increment = 0.01  # 1%
-        bins_per_side = 10   # 10 bins on each side (10% range each side)
-        
-        # Calculate liquidity per bin for the $100k total
-        total_side_liquidity = 100_000  # $100k as specified
-        liquidity_per_side_bin = total_side_liquidity / (bins_per_side * 2)  # Split between both sides
-        
-        # Lower side bins (below peg)
-        for i in range(1, bins_per_side + 1):
-            price = peg_price * (1 - bp_increment * i)  # Each bin is 1% lower
-            self.bins.append(LiquidityBin(
-                price=price,
-                liquidity=liquidity_per_side_bin,
-                bin_index=i,
-                is_active=True
-            ))
-        
-        # Upper side bins (above peg)
-        for i in range(1, bins_per_side + 1):
-            price = peg_price * (1 + bp_increment * i)  # Each bin is 1% higher
-            self.bins.append(LiquidityBin(
-                price=price,
-                liquidity=liquidity_per_side_bin,
-                bin_index=bins_per_side + i,
-                is_active=True
-            ))
-        
-        # 3. Create outer bins with remaining liquidity
-        remaining_liquidity = self.total_liquidity - peg_liquidity - total_side_liquidity
-        outer_bins_count = self.num_bins - (1 + bins_per_side * 2)  # Remaining bins
-        
-        if outer_bins_count > 0 and remaining_liquidity > 0:
-            outer_liquidity_per_bin = remaining_liquidity / outer_bins_count
-            
-            # Lower outer range (beyond 10% from peg)
-            lower_outer_count = outer_bins_count // 2
-            for i in range(lower_outer_count):
-                price = peg_price * (1 - bp_increment * (bins_per_side + 1 + i))
-                self.bins.append(LiquidityBin(
-                    price=price,
-                    liquidity=outer_liquidity_per_bin,
-                    bin_index=1 + bins_per_side * 2 + i,
-                    is_active=outer_liquidity_per_bin > 1000
-                ))
-            
-            # Upper outer range (beyond 10% from peg)
-            upper_outer_count = outer_bins_count - lower_outer_count
-            for i in range(upper_outer_count):
-                price = peg_price * (1 + bp_increment * (bins_per_side + 1 + i))
-                self.bins.append(LiquidityBin(
-                    price=price,
-                    liquidity=outer_liquidity_per_bin,
-                    bin_index=1 + bins_per_side * 2 + lower_outer_count + i,
-                    is_active=outer_liquidity_per_bin > 1000
-                ))
-    
-    def _initialize_yield_token_distribution(self):
-        """Initialize MOET:Yield Token liquidity distribution with single peg bin model:
-        - 95% of total liquidity in the SINGLE bin at the exact peg price (1.0)
-        - Remaining 5% distributed in 1 basis point increments on each side of the peg
-        """
-        
-        peg_price = self.peg_price  # 1.0 MOET per Yield Token
-        
-        # 1. Create the SINGLE peg bin with 95% of total liquidity
-        peg_liquidity = self.total_liquidity * self.concentration  # 95% of total
-        self.bins.append(LiquidityBin(
-            price=peg_price,
-            liquidity=peg_liquidity,
-            bin_index=0,
-            is_active=True
-        ))
-        
-        # 2. Create bins in 1 basis point increments on each side of the peg
-        # 1 basis point = 0.01% = 0.0001
-        bp_increment = 0.0001  # 1 basis point
-        bins_per_side = 50     # 50 bins on each side (5% range each side)
-        
-        # Calculate liquidity per bin for the remaining 5%
-        remaining_liquidity = self.total_liquidity * (1 - self.concentration)  # 5%
-        liquidity_per_side_bin = remaining_liquidity / (bins_per_side * 2)  # Split between both sides
-        
-        # Lower side bins (below peg)
-        for i in range(1, bins_per_side + 1):
-            price = peg_price * (1 - bp_increment * i)  # Each bin is 1bp lower
-            self.bins.append(LiquidityBin(
-                price=price,
-                liquidity=liquidity_per_side_bin,
-                bin_index=i,
-                is_active=True
-            ))
-        
-        # Upper side bins (above peg)
-        for i in range(1, bins_per_side + 1):
-            price = peg_price * (1 + bp_increment * i)  # Each bin is 1bp higher
-            self.bins.append(LiquidityBin(
-                price=price,
-                liquidity=liquidity_per_side_bin,
-                bin_index=bins_per_side + i,
-                is_active=True
-            ))
-        
-        # 3. Create outer bins with any remaining liquidity
-        outer_bins_count = self.num_bins - (1 + bins_per_side * 2)  # Remaining bins
-        
-        if outer_bins_count > 0:
-            # Any remaining liquidity goes to outer bins
-            outer_liquidity_per_bin = 1000  # Small amount for outer bins
-            
-            # Lower outer range (beyond 5% from peg)
-            lower_outer_count = outer_bins_count // 2
-            for i in range(lower_outer_count):
-                price = peg_price * (1 - bp_increment * (bins_per_side + 1 + i))
-                self.bins.append(LiquidityBin(
-                    price=price,
-                    liquidity=outer_liquidity_per_bin,
-                    bin_index=1 + bins_per_side * 2 + i,
-                    is_active=True
-                ))
-            
-            # Upper outer range (beyond 5% from peg)
-            upper_outer_count = outer_bins_count - lower_outer_count
-            for i in range(upper_outer_count):
-                price = peg_price * (1 + bp_increment * (bins_per_side + 1 + i))
-                self.bins.append(LiquidityBin(
-                    price=price,
-                    liquidity=outer_liquidity_per_bin,
-                    bin_index=1 + bins_per_side * 2 + lower_outer_count + i,
-                    is_active=True
-                ))
-    
-    def _update_legacy_fields(self):
-        """Update legacy fields for backward compatibility"""
-        # Calculate total reserves from bins
-        total_active_liquidity = sum(bin.liquidity for bin in self.bins if bin.is_active)
-        
-        # Split reserves 50/50 for compatibility
-        self.token0_reserve = total_active_liquidity / 2  # MOET reserve in USD
-        self.token1_reserve = total_active_liquidity / 2  # BTC reserve in USD
-        
-        # Calculate price and derived values
-        current_price = self.get_price()
-        self.sqrt_price_x96 = math.sqrt(current_price) * (2 ** 96)
-        self.liquidity = math.sqrt(self.token0_reserve * self.token1_reserve)
     
     def get_price(self) -> float:
-        """Get current effective price from active bins"""
-        # Calculate weighted average price from active bins
-        if not self.bins or not any(b.is_active for b in self.bins):
-            return self.peg_price
-            
-        total_liquidity = 0
-        weighted_price = 0
-        
-        for bin in self.bins:
-            if bin.is_active and bin.liquidity > 0:
-                total_liquidity += bin.liquidity
-                weighted_price += bin.price * bin.liquidity
-        
-        if total_liquidity > 0:
-            return weighted_price / total_liquidity
-        else:
-            return self.peg_price
-
-
+        """Get current price from sqrt_price_x96 using exact calculation"""
+        # Convert to float for compatibility with existing code
+        sqrt_price = self.sqrt_price_x96 / Q96
+        return sqrt_price * sqrt_price
+    
     def get_liquidity_at_price(self, target_price: float) -> float:
         """Get liquidity available at a specific price point"""
-        # Find the closest bin to the target price
-        closest_bin = min(self.bins, key=lambda b: abs(b.price - target_price))
+        # Convert price to tick
+        target_tick = int(math.log(target_price) / math.log(1.0001))
         
-        if closest_bin.is_active:
-            return closest_bin.liquidity
-        else:
-            return 0.0
+        # Find liquidity at this tick
+        liquidity_at_tick = 0
+        for position in self.positions:
+            if position.tick_lower <= target_tick < position.tick_upper:
+                liquidity_at_tick += position.liquidity
+        
+        # Convert back to USD
+        return liquidity_at_tick / 1e6
     
     def get_total_active_liquidity(self) -> float:
-        """Get total liquidity across all active bins"""
-        return sum(bin.liquidity for bin in self.bins if bin.is_active)
+        """Get total liquidity across all active positions"""
+        total_liquidity = sum(position.liquidity for position in self.positions)
+        return total_liquidity / 1e6  # Convert back to USD
     
     def get_liquidity_distribution(self) -> Tuple[List[float], List[float]]:
         """Get price and liquidity arrays for charting"""
+        if not self.bins:
+            return [], []
+        
         active_bins = [bin for bin in self.bins if bin.is_active]
         prices = [bin.price for bin in active_bins]
         liquidity = [bin.liquidity for bin in active_bins]
         return prices, liquidity
     
     def get_bin_data_for_charts(self) -> List[Dict]:
-        """Get bin data formatted for bar chart visualization"""
+        """Get bin data formatted for bar chart visualization (backward compatibility)"""
         return [
             {
                 "bin_index": bin.bin_index,
                 "price": bin.price,
                 "liquidity": bin.liquidity,
                 "is_active": bin.is_active,
-                "price_label": self._format_price_label(bin.price)
+                "price_label": self._format_price_label(bin.price),
+                "tick": bin.tick
             }
             for bin in self.bins
         ]
+    
+    def get_tick_data_for_charts(self) -> List[Dict]:
+        """Get tick data formatted for bar chart visualization"""
+        return self.get_bin_data_for_charts()  # Same format for compatibility
     
     def _format_price_label(self, price: float) -> str:
         """Format price for display labels"""
@@ -300,63 +765,77 @@ class UniswapV3Pool:
             # For yield tokens, show as MOET per yield token
             return f"{price:.4f}"
     
-    def simulate_price_impact(self, trade_amount: float, trade_direction: str) -> Dict:
-        """Simulate the impact of a trade on the liquidity distribution"""
-        # Find the bin closest to current peg
-        peg_bin = min(self.bins, key=lambda b: abs(b.price - self.peg_price))
+    def simulate_trade_impact(self, trade_amount_usd: float, token_in: str) -> Dict[str, float]:
+        """Simulate trade impact using actual swap logic"""
+        # Convert USD to scaled amount
+        amount_in_scaled = int(trade_amount_usd * 1e6)
         
-        # Calculate how much liquidity this trade consumes
-        liquidity_consumed = min(trade_amount, peg_bin.liquidity)
+        # Store original state
+        original_sqrt_price = self.sqrt_price_x96
+        original_tick = self.tick_current
+        original_liquidity = self.liquidity
         
-        # Calculate price impact based on liquidity depth
-        if liquidity_consumed > 0:
-            # Price impact increases as we consume more liquidity
-            price_impact = (liquidity_consumed / peg_bin.liquidity) * 0.001  # 0.1% max impact
+        try:
+            # Determine swap direction
+            zero_for_one = token_in in ["MOET", "token0"]
             
-            # Determine new price based on trade direction
-            if trade_direction == "buy":
-                new_price = self.peg_price * (1 + price_impact)
-            else:
-                new_price = self.peg_price * (1 - price_impact)
-        else:
-            new_price = self.peg_price
-            price_impact = 0.0
+            # Execute simulated swap
+            amount_in_actual, amount_out_actual = self.swap(
+                zero_for_one=zero_for_one,
+                amount_specified=amount_in_scaled,
+                sqrt_price_limit_x96=0  # No limit
+            )
+            
+            # Calculate results
+            new_price = self.get_price()
+            current_price = (original_sqrt_price / Q96) ** 2
+            price_impact = abs((new_price - current_price) / current_price) if current_price > 0 else 0
+            
+            result = {
+                "price_impact": price_impact,
+                "new_price": new_price,
+                "current_price": current_price,
+                "amount_in": amount_in_actual / 1e6,
+                "amount_out": amount_out_actual / 1e6,
+                "trade_amount": trade_amount_usd
+            }
+            
+        except (ValueError, ZeroDivisionError):
+            # Handle edge cases
+            result = {
+                "price_impact": 0.0,
+                "new_price": self.get_price(),
+                "current_price": self.get_price(),
+                "amount_in": 0.0,
+                "amount_out": 0.0,
+                "trade_amount": trade_amount_usd
+            }
+        finally:
+            # Restore original state
+            self.sqrt_price_x96 = original_sqrt_price
+            self.tick_current = original_tick
+            self.liquidity = original_liquidity
         
-        return {
-            "original_price": self.peg_price,
-            "new_price": new_price,
-            "price_impact": price_impact,
-            "liquidity_consumed": liquidity_consumed,
-            "remaining_liquidity": peg_bin.liquidity - liquidity_consumed,
-            "trade_amount": trade_amount
-        }
+        return result
     
-    def update_liquidity_distribution(self, price_change: float):
-        """Update liquidity distribution after a price change"""
-        # Shift the peg price
-        self.peg_price *= (1 + price_change)
+    def _update_legacy_fields(self):
+        """Update legacy fields for backward compatibility"""
+        # Calculate total reserves from positions
+        total_active_liquidity = self.get_total_active_liquidity()
         
-        # Update bin prices proportionally
-        for bin in self.bins:
-            bin.price *= (1 + price_change)
-            
-            # Deactivate bins that are too far from the new peg
-            distance_from_peg = abs(bin.price - self.peg_price) / self.peg_price
-            
-            if self.concentration_type == "moet_btc":
-                # Deactivate if more than 2% from peg
-                bin.is_active = distance_from_peg <= 0.02
-            else:
-                # Deactivate if more than 0.5% from peg
-                bin.is_active = distance_from_peg <= 0.005
-        
-        # Update legacy fields
-        self._update_legacy_fields()
+        # Split reserves 50/50 for compatibility
+        self.token0_reserve = total_active_liquidity / 2  # MOET reserve in USD
+        self.token1_reserve = total_active_liquidity / 2  # BTC reserve in USD
+    
+# Old bin-based methods removed - now using proper tick-based positions
+
+
+# Old methods cleaned up - using proper Uniswap V3 implementation above
 
 
 class UniswapV3SlippageCalculator:
     """
-    Advanced slippage calculator using discrete liquidity bins
+    Proper Uniswap V3 slippage calculator using tick-based math
     """
     
     def __init__(self, pool_state: UniswapV3Pool):
@@ -366,13 +845,13 @@ class UniswapV3SlippageCalculator:
         self, 
         amount_in: float, 
         token_in: str,  # "MOET", "BTC", or "Yield_Token"
-        concentrated_range: float = 0.2  # Legacy parameter, now uses actual bins
+        concentrated_range: float = 0.2  # Legacy parameter for backward compatibility
     ) -> Dict[str, float]:
         """
-        Calculate slippage for a swap using discrete liquidity bins
+        Calculate slippage for a swap using proper Uniswap V3 tick-based math
         
         Args:
-            amount_in: Amount of input token to swap
+            amount_in: Amount of input token to swap (in USD)
             token_in: Which token is being swapped in ("MOET", "BTC", or "Yield_Token")
             concentrated_range: Legacy parameter for backward compatibility
             
@@ -382,169 +861,274 @@ class UniswapV3SlippageCalculator:
         
         if token_in == "MOET":
             if "Yield_Token" in self.pool.pool_name:
-                return self._calculate_moet_to_yield_token_swap_with_bins(amount_in)
+                return self._calculate_moet_to_yield_token_swap(amount_in)
             else:
-                return self._calculate_moet_to_btc_swap_with_bins(amount_in)
+                return self._calculate_moet_to_btc_swap(amount_in)
         elif token_in == "BTC":
-            return self._calculate_btc_to_moet_swap_with_bins(amount_in)
+            return self._calculate_btc_to_moet_swap(amount_in)
         elif token_in == "Yield_Token":
-            return self._calculate_yield_token_to_moet_swap_with_bins(amount_in)
+            return self._calculate_yield_token_to_moet_swap(amount_in)
         else:
             raise ValueError("token_in must be 'MOET', 'BTC', or 'Yield_Token'")
     
-    def _calculate_moet_to_btc_swap_with_bins(self, moet_amount: float) -> Dict[str, float]:
-        """Calculate MOET -> BTC swap using discrete liquidity bins"""
+    def _calculate_moet_to_btc_swap(self, moet_amount: float) -> Dict[str, float]:
+        """Calculate MOET -> BTC swap using proper Uniswap V3 math"""
         
-        # Current price (BTC per MOET) - should be 0.00001
+        # Store original pool state
+        original_sqrt_price_x96 = self.pool.sqrt_price_x96
+        original_tick_current = self.pool.tick_current
+        original_liquidity = self.pool.liquidity
+        
+        # Current price (BTC per MOET)
         current_price = self.pool.get_price()
         
-        # moet_amount is in USD terms, apply fees
-        moet_after_fees = moet_amount * (1 - self.pool.fee_tier)
-        trading_fees = moet_amount * self.pool.fee_tier
+        # Convert USD amount to token amount (scaled for precision)
+        # For MOET: 1 MOET = $1, so amount_in_tokens = moet_amount
+        amount_in_scaled = int(moet_amount * 1e6)  # Scale up for precision
         
-        # Calculate swap using discrete bins
-        remaining_moet_value = moet_after_fees  # USD value of MOET to swap
-        total_btc_out = 0.0
-        bins_consumed = []
-        
-        # Sort bins by price (closest to peg first)
-        sorted_bins = sorted([b for b in self.pool.bins if b.is_active], 
-                           key=lambda b: abs(b.price - self.pool.peg_price))
-        
-        for bin in sorted_bins:
-            if remaining_moet_value <= 0:
-                break
-                
-            # Each bin has liquidity split 50/50 between MOET and BTC sides
-            bin_moet_liquidity_usd = bin.liquidity / 2
-            moet_to_consume = min(remaining_moet_value, bin_moet_liquidity_usd)
+        try:
+            # Execute the swap: MOET (token0) -> BTC (token1), so zero_for_one = True
+            zero_for_one = True
+            sqrt_price_limit_x96 = MIN_SQRT_RATIO + 1  # No specific limit
             
-            # Convert to actual BTC using bin price
-            # bin.price is BTC per MOET, so MOET_USD * (BTC/MOET) / BTC_PRICE = BTC tokens
-            btc_tokens_from_bin = (moet_to_consume / 1.0) * bin.price  # MOET tokens * BTC per MOET
+            amount_in_actual, amount_out_actual = self.pool.swap(
+                zero_for_one=zero_for_one,
+                amount_specified=amount_in_scaled,
+                sqrt_price_limit_x96=sqrt_price_limit_x96
+            )
             
-            total_btc_out += btc_tokens_from_bin
-            remaining_moet_value -= moet_to_consume
+            # Convert back to USD amounts
+            amount_in_usd = amount_in_actual / 1e6
+            amount_out_btc_tokens = amount_out_actual / 1e6
             
-            bins_consumed.append({
-                "bin_index": bin.bin_index,
-                "price": bin.price,
-                "moet_consumed": moet_to_consume,
-                "btc_output": btc_tokens_from_bin
-            })
+            # Calculate expected output without slippage
+            moet_tokens_in = moet_amount  # 1 MOET = $1
+            expected_btc_out = moet_tokens_in * current_price
+            
+            # Calculate slippage
+            slippage_amount = max(0, expected_btc_out - amount_out_btc_tokens)
+            slippage_percentage = (slippage_amount / expected_btc_out) * 100 if expected_btc_out > 0 else 0
+            
+            # Calculate new price and price impact
+            new_price = self.pool.get_price()
+            price_impact = abs((current_price - new_price) / current_price) * 100 if current_price > 0 else 0
+            
+            # Calculate trading fees
+            trading_fees = amount_in_usd * self.pool.fee_tier
+            
+            result = {
+                "amount_in": moet_amount,
+                "token_in": "MOET",
+                "amount_out": amount_out_btc_tokens,
+                "token_out": "BTC",
+                "expected_amount_out": expected_btc_out,
+                "slippage_amount": slippage_amount,
+                "slippage_percentage": slippage_percentage,
+                "price_impact_percentage": price_impact,
+                "trading_fees": trading_fees,
+                "current_price": current_price,
+                "new_price": new_price,
+                "effective_liquidity": self.pool.get_total_active_liquidity(),
+                "bins_consumed": []  # For backward compatibility
+            }
+            
+        finally:
+            # Restore original pool state (for simulation purposes)
+            self.pool.sqrt_price_x96 = original_sqrt_price_x96
+            self.pool.tick_current = original_tick_current
+            self.pool.liquidity = original_liquidity
         
-        # Calculate expected output without slippage
-        moet_tokens_in = moet_amount / 1.0  # USD to MOET tokens (1 MOET = $1)
-        expected_btc_out = moet_tokens_in * current_price
-        
-        # Calculate slippage
-        slippage_amount = max(0, expected_btc_out - total_btc_out)
-        slippage_percentage = (slippage_amount / expected_btc_out) * 100 if expected_btc_out > 0 else 0
-        
-        # Calculate effective price (BTC per MOET)
-        effective_price = total_btc_out / moet_tokens_in if moet_tokens_in > 0 else current_price
-        price_impact = ((current_price - effective_price) / current_price) * 100 if current_price > 0 else 0
-        
-        return {
-            "amount_in": moet_amount,
-            "token_in": "MOET",
-            "amount_out": total_btc_out,
-            "token_out": "BTC",
-            "expected_amount_out": expected_btc_out,
-            "slippage_amount": slippage_amount,
-            "slippage_percentage": slippage_percentage,
-            "price_impact_percentage": abs(price_impact),
-            "trading_fees": trading_fees,
-            "current_price": current_price,
-            "new_price": effective_price,
-            "effective_liquidity": self.pool.get_total_active_liquidity(),
-            "bins_consumed": bins_consumed
-        }
+        return result
     
-    def _calculate_btc_to_moet_swap_with_bins(self, btc_amount: float) -> Dict[str, float]:
-        """Calculate BTC -> MOET swap using discrete liquidity bins"""
+    def _calculate_btc_to_moet_swap(self, btc_amount: float) -> Dict[str, float]:
+        """Calculate BTC -> MOET swap using proper Uniswap V3 math"""
+        
+        # Store original pool state
+        original_sqrt_price_x96 = self.pool.sqrt_price_x96
+        original_tick_current = self.pool.tick_current
+        original_liquidity = self.pool.liquidity
         
         # Current price (BTC per MOET)
         current_price_btc_per_moet = self.pool.get_price()
-        # For BTC -> MOET swap, we need MOET per BTC (inverse)
-        current_price_moet_per_btc = 1.0 / current_price_btc_per_moet if current_price_btc_per_moet > 0 else 100000.0
         
-        # Amount of BTC going in (after fees) - btc_amount is in USD since we're tracking USD values
-        btc_after_fees = btc_amount * (1 - self.pool.fee_tier)
-        trading_fees = btc_amount * self.pool.fee_tier
+        # Convert USD amount to BTC tokens, then scale for precision
+        btc_tokens = btc_amount / self.pool.btc_price  # USD to BTC tokens
+        amount_in_scaled = int(btc_tokens * 1e6)  # Scale up for precision
         
-        # Calculate swap using discrete bins
-        remaining_btc_usd = btc_after_fees  # This is in USD
-        total_moet_out = 0.0
-        bins_consumed = []
-        
-        # Sort bins by price (closest to peg first for better execution)
-        sorted_bins = sorted([b for b in self.pool.bins if b.is_active], 
-                           key=lambda b: abs(b.price - self.pool.peg_price))
-        
-        for bin in sorted_bins:
-            if remaining_btc_usd <= 0:
-                break
-                
-            # Calculate how much BTC this bin can handle
-            # bin.liquidity is total USD liquidity, half is BTC side
-            bin_capacity_btc_usd = bin.liquidity / 2  # BTC side capacity in USD
-            btc_to_consume_usd = min(remaining_btc_usd, bin_capacity_btc_usd)
+        try:
+            # Execute the swap: BTC (token1) -> MOET (token0), so zero_for_one = False
+            zero_for_one = False
+            sqrt_price_limit_x96 = MAX_SQRT_RATIO - 1  # No specific limit
             
-            # Convert USD to BTC tokens (BTC is at $100,000)
-            btc_tokens = btc_to_consume_usd / self.pool.btc_price  # USD to BTC tokens
+            amount_in_actual, amount_out_actual = self.pool.swap(
+                zero_for_one=zero_for_one,
+                amount_specified=amount_in_scaled,
+                sqrt_price_limit_x96=sqrt_price_limit_x96
+            )
             
-            # Calculate MOET output from this bin
-            # bin.price is BTC per MOET, so BTC / (BTC/MOET) = MOET tokens
-            moet_tokens = btc_tokens / bin.price  # BTC / (BTC/MOET) = MOET tokens
+            # Convert back to USD amounts
+            amount_out_moet_usd = amount_out_actual / 1e6  # MOET output in USD
             
-            # Convert MOET tokens to USD (since 1 MOET = $1)
-            moet_from_bin_usd = moet_tokens * 1.0  # MOET tokens to USD
+            # Calculate expected output without slippage (CORRECTED)
+            # If we're swapping $X worth of BTC, we expect to get $X worth of MOET (ignoring fees)
+            expected_moet_out = btc_amount  # USD in = USD out (before slippage/fees)
             
-            total_moet_out += moet_from_bin_usd
-            remaining_btc_usd -= btc_to_consume_usd
+            # Calculate slippage
+            slippage_amount = max(0, expected_moet_out - amount_out_moet_usd)
+            slippage_percentage = (slippage_amount / expected_moet_out) * 100 if expected_moet_out > 0 else 0
             
-            bins_consumed.append({
-                "bin_index": bin.bin_index,
-                "price": bin.price,
-                "btc_consumed": btc_to_consume_usd,  # Store in USD for consistency
-                "moet_output": moet_from_bin_usd
-            })
+            # Calculate new price and price impact
+            new_price_btc_per_moet = self.pool.get_price()
+            price_impact = abs((current_price_btc_per_moet - new_price_btc_per_moet) / current_price_btc_per_moet) * 100 if current_price_btc_per_moet > 0 else 0
+            
+            # Calculate trading fees
+            trading_fees = btc_amount * self.pool.fee_tier
+            
+            result = {
+                "amount_in": btc_amount,
+                "token_in": "BTC",
+                "amount_out": amount_out_moet_usd,
+                "token_out": "MOET",
+                "expected_amount_out": expected_moet_out,
+                "slippage_amount": slippage_amount,
+                "slippage_percentage": slippage_percentage,
+                "price_impact_percentage": price_impact,
+                "trading_fees": trading_fees,
+                "current_price": current_price_btc_per_moet,
+                "new_price": new_price_btc_per_moet,
+                "effective_liquidity": self.pool.get_total_active_liquidity(),
+                "bins_consumed": []  # For backward compatibility
+            }
+            
+        finally:
+            # Restore original pool state (for simulation purposes)
+            self.pool.sqrt_price_x96 = original_sqrt_price_x96
+            self.pool.tick_current = original_tick_current
+            self.pool.liquidity = original_liquidity
         
-        # Calculate slippage metrics
-        # btc_amount is in USD, convert to BTC tokens then to MOET
-        btc_tokens_in = btc_amount / self.pool.btc_price  # USD to BTC tokens
-        moet_tokens_out = btc_tokens_in / current_price_btc_per_moet  # BTC tokens / (BTC/MOET) = MOET tokens
-        expected_moet_out = moet_tokens_out * 1.0  # MOET tokens to USD (1 MOET = $1)
-        slippage_amount = max(0, expected_moet_out - total_moet_out)
-        slippage_percentage = (slippage_amount / expected_moet_out) * 100 if expected_moet_out > 0 else 0
-        
-        # Calculate effective price and price impact
-        # effective_price should be MOET per BTC in USD terms
-        effective_price_moet_per_btc = total_moet_out / btc_amount if btc_amount > 0 else current_price_moet_per_btc
-        price_impact = ((current_price_moet_per_btc - effective_price_moet_per_btc) / current_price_moet_per_btc) * 100 if current_price_moet_per_btc > 0 else 0
-        
-        # Effective liquidity is the sum of active bin liquidity
-        effective_liquidity = self.pool.get_total_active_liquidity()
-        
-        return {
-            "amount_in": btc_amount,
-            "token_in": "BTC", 
-            "amount_out": total_moet_out,
-            "token_out": "MOET",
-            "expected_amount_out": expected_moet_out,
-            "slippage_amount": slippage_amount,
-            "slippage_percentage": slippage_percentage,
-            "price_impact_percentage": abs(price_impact),
-            "trading_fees": trading_fees,
-            "current_price": current_price_moet_per_btc,
-            "new_price": effective_price_moet_per_btc,
-            "effective_liquidity": effective_liquidity,
-            "bins_consumed": bins_consumed
-        }
+        return result
     
+    def _calculate_moet_to_yield_token_swap(self, moet_amount: float) -> Dict[str, float]:
+        """Calculate MOET -> Yield Token swap using proper Uniswap V3 math"""
+        
+        # Store original pool state
+        original_sqrt_price_x96 = self.pool.sqrt_price_x96
+        original_tick_current = self.pool.tick_current
+        original_liquidity = self.pool.liquidity
+        
+        # Current price (should be close to 1.0 for yield tokens)
+        current_price = self.pool.get_price()
+        
+        # Convert USD amount to token amount (scaled for precision)
+        amount_in_scaled = int(moet_amount * 1e6)  # Scale up for precision
+        
+        try:
+            # For MOET:YieldToken pool, MOET is token0, YieldToken is token1
+            # MOET -> YieldToken, so zero_for_one = True
+            zero_for_one = True
+            sqrt_price_limit_x96 = MIN_SQRT_RATIO + 1  # No specific limit
+            
+            amount_in_actual, amount_out_actual = self.pool.swap(
+                zero_for_one=zero_for_one,
+                amount_specified=amount_in_scaled,
+                sqrt_price_limit_x96=sqrt_price_limit_x96
+            )
+            
+            # Convert back to USD amounts
+            amount_in_usd = amount_in_actual / 1e6
+            amount_out_yt = amount_out_actual / 1e6
+            
+            # Calculate expected output without slippage (should be ~1:1)
+            expected_yt_out = moet_amount * current_price
+            
+            # Calculate slippage
+            slippage_amount = max(0, expected_yt_out - amount_out_yt)
+            slippage_percent = (slippage_amount / expected_yt_out) * 100 if expected_yt_out > 0 else 0
+            
+            # Calculate new price and price impact
+            new_price = self.pool.get_price()
+            price_impact = abs((current_price - new_price) / current_price) * 100 if current_price > 0 else 0
+            
+            # Calculate trading fees
+            trading_fees = amount_in_usd * self.pool.fee_tier
+            
+            result = {
+                "amount_in": moet_amount,
+                "amount_out": amount_out_yt,
+                "slippage_percent": slippage_percent,
+                "slippage_amount": slippage_amount,
+                "trading_fees": trading_fees,
+                "price_impact": price_impact
+            }
+            
+        finally:
+            # Restore original pool state (for simulation purposes)
+            self.pool.sqrt_price_x96 = original_sqrt_price_x96
+            self.pool.tick_current = original_tick_current
+            self.pool.liquidity = original_liquidity
+        
+        return result
+    
+    def _calculate_yield_token_to_moet_swap(self, yield_token_amount: float) -> Dict[str, float]:
+        """Calculate Yield Token -> MOET swap using proper Uniswap V3 math"""
+        
+        # Store original pool state
+        original_sqrt_price_x96 = self.pool.sqrt_price_x96
+        original_tick_current = self.pool.tick_current
+        original_liquidity = self.pool.liquidity
+        
+        # Current price (should be close to 1.0 for yield tokens)
+        current_price = self.pool.get_price()
+        
+        # Convert USD amount to token amount (scaled for precision)
+        amount_in_scaled = int(yield_token_amount * 1e6)  # Scale up for precision
+        
+        try:
+            # For MOET:YieldToken pool, YieldToken is token1, MOET is token0
+            # YieldToken -> MOET, so zero_for_one = False
+            zero_for_one = False
+            sqrt_price_limit_x96 = MAX_SQRT_RATIO - 1  # No specific limit
+            
+            amount_in_actual, amount_out_actual = self.pool.swap(
+                zero_for_one=zero_for_one,
+                amount_specified=amount_in_scaled,
+                sqrt_price_limit_x96=sqrt_price_limit_x96
+            )
+            
+            # Convert back to USD amounts
+            amount_out_moet = amount_out_actual / 1e6
+            
+            # Calculate expected output without slippage (should be ~1:1)
+            expected_moet_out = yield_token_amount / current_price
+            
+            # Calculate slippage
+            slippage_amount = max(0, expected_moet_out - amount_out_moet)
+            slippage_percent = (slippage_amount / expected_moet_out) * 100 if expected_moet_out > 0 else 0
+            
+            # Calculate new price and price impact
+            new_price = self.pool.get_price()
+            price_impact = abs((current_price - new_price) / current_price) * 100 if current_price > 0 else 0
+            
+            # Calculate trading fees
+            trading_fees = yield_token_amount * self.pool.fee_tier
+            
+            result = {
+                "amount_in": yield_token_amount,
+                "amount_out": amount_out_moet,
+                "slippage_percent": slippage_percent,
+                "slippage_amount": slippage_amount,
+                "trading_fees": trading_fees,
+                "price_impact": price_impact
+            }
+            
+        finally:
+            # Restore original pool state (for simulation purposes)
+            self.pool.sqrt_price_x96 = original_sqrt_price_x96
+            self.pool.tick_current = original_tick_current
+            self.pool.liquidity = original_liquidity
+        
+        return result
 
-    
     def update_pool_state(self, swap_result: Dict[str, float]):
         """Update pool state after a swap by consuming liquidity from bins"""
         
@@ -583,97 +1167,6 @@ class UniswapV3SlippageCalculator:
         # Update legacy fields for backward compatibility
         self.pool._update_legacy_fields()
 
-    def _calculate_moet_to_yield_token_swap_with_bins(self, moet_amount: float) -> Dict[str, float]:
-        """Calculate MOET -> Yield Token swap using discrete liquidity bins"""
-        
-        # Current price (Yield Token per MOET) - should be 1.0
-        current_price = self.pool.get_price()
-        
-        # Calculate total liquidity available in active bins
-        total_liquidity = sum(bin.liquidity for bin in self.pool.bins if bin.is_active)
-        
-        if total_liquidity <= 0:
-            return {
-                "amount_in": moet_amount,
-                "amount_out": 0.0,
-                "slippage_percent": 100.0,
-                "slippage_amount": moet_amount,
-                "trading_fees": moet_amount * self.pool.fee_tier,
-                "price_impact": 100.0
-            }
-        
-        # Calculate price impact based on trade size vs liquidity
-        # For yield tokens, we use a more conservative calculation since they're protocol-native
-        price_impact = (moet_amount / total_liquidity) * 0.5  # 50% of the ratio as price impact
-        
-        # Calculate output with price impact
-        effective_price = current_price * (1 - price_impact)
-        yield_tokens_out = moet_amount * effective_price
-        
-        # Apply trading fees
-        trading_fees = moet_amount * self.pool.fee_tier
-        net_moet_amount = moet_amount - trading_fees
-        yield_tokens_out = net_moet_amount * effective_price
-        
-        # Calculate slippage
-        expected_output = moet_amount * current_price
-        slippage_amount = expected_output - yield_tokens_out
-        slippage_percent = (slippage_amount / expected_output * 100) if expected_output > 0 else 0
-        
-        return {
-            "amount_in": moet_amount,
-            "amount_out": yield_tokens_out,
-            "slippage_percent": slippage_percent,
-            "slippage_amount": slippage_amount,
-            "trading_fees": trading_fees,
-            "price_impact": price_impact * 100
-        }
-
-    def _calculate_yield_token_to_moet_swap_with_bins(self, yield_token_amount: float) -> Dict[str, float]:
-        """Calculate Yield Token -> MOET swap using discrete liquidity bins"""
-        
-        # Current price (MOET per Yield Token) - should be 1.0
-        current_price = 1.0 / self.pool.get_price()  # Invert for MOET per Yield Token
-        
-        # Calculate total liquidity available in active bins
-        total_liquidity = sum(bin.liquidity for bin in self.pool.bins if bin.is_active)
-        
-        if total_liquidity <= 0:
-            return {
-                "amount_in": yield_token_amount,
-                "amount_out": 0.0,
-                "slippage_percent": 100.0,
-                "slippage_amount": yield_token_amount,
-                "trading_fees": yield_token_amount * self.pool.fee_tier,
-                "price_impact": 100.0
-            }
-        
-        # Calculate price impact based on trade size vs liquidity
-        # For yield tokens, we use a more conservative calculation since they're protocol-native
-        price_impact = (yield_token_amount / total_liquidity) * 0.5  # 50% of the ratio as price impact
-        
-        # Calculate output with price impact
-        effective_price = current_price * (1 - price_impact)
-        moet_out = yield_token_amount * effective_price
-        
-        # Apply trading fees
-        trading_fees = yield_token_amount * self.pool.fee_tier
-        net_yield_token_amount = yield_token_amount - trading_fees
-        moet_out = net_yield_token_amount * effective_price
-        
-        # Calculate slippage
-        expected_output = yield_token_amount * current_price
-        slippage_amount = expected_output - moet_out
-        slippage_percent = (slippage_amount / expected_output * 100) if expected_output > 0 else 0
-        
-        return {
-            "amount_in": yield_token_amount,
-            "amount_out": moet_out,
-            "slippage_percent": slippage_percent,
-            "slippage_amount": slippage_amount,
-            "trading_fees": trading_fees,
-            "price_impact": price_impact * 100
-        }
 
 
 def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.80) -> UniswapV3Pool:

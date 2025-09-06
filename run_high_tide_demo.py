@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from tidal_protocol_sim.simulation.high_tide_engine import HighTideSimulationEngine, HighTideConfig
+    from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
     from tidal_protocol_sim.stress_testing.runner import StressTestRunner
     from tidal_protocol_sim.simulation.config import SimulationConfig
     from tidal_protocol_sim.analysis.agent_summary_table import AgentSummaryTableGenerator
@@ -46,7 +46,7 @@ def run_high_tide_demo():
         config.btc_final_price_range = (75_000, 85_000)
         
         print("Creating High Tide simulation engine...")
-        engine = HighTideSimulationEngine(config)
+        engine = HighTideVaultEngine(config)
         
         print(f"Initialized {len(engine.high_tide_agents)} High Tide agents:")
         
@@ -63,7 +63,7 @@ def run_high_tide_demo():
         print("-" * 40)
         
         # Run the simulation
-        results = engine.run_high_tide_simulation()
+        results = engine.run_simulation()
         
         # Generate position tracker CSV if available
         if hasattr(engine, 'position_tracker') and engine.position_tracker.tracking_data:

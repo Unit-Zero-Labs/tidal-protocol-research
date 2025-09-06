@@ -9,7 +9,7 @@ and protocol stability as specified in the refactoring requirements.
 from typing import Dict, List, Callable
 from ..core.protocol import Asset
 from ..simulation.config import StressTestScenarios
-from ..simulation.engine import TidalSimulationEngine
+from ..simulation.tidal_engine import TidalProtocolEngine
 from ..simulation.state import SimulationState
 
 
@@ -23,11 +23,11 @@ class StressTestScenario:
         self.duration = duration
         self.results = None
     
-    def apply_to_engine(self, engine: TidalSimulationEngine):
+    def apply_to_engine(self, engine: TidalProtocolEngine):
         """Apply scenario to simulation engine"""
         self.setup_func(engine)
     
-    def run(self, engine: TidalSimulationEngine) -> dict:
+    def run(self, engine: TidalProtocolEngine) -> dict:
         """Run the stress test scenario"""
         print(f"Running stress test: {self.name}")
         print(f"Description: {self.description}")
@@ -137,11 +137,11 @@ class TidalStressTestSuite:
             )
         ]
     
-    def _apply_price_shock(self, engine: TidalSimulationEngine, shocks: Dict[Asset, float]):
+    def _apply_price_shock(self, engine: TidalProtocolEngine, shocks: Dict[Asset, float]):
         """Apply immediate price shocks"""
         engine.state.apply_price_shock(shocks)
     
-    def _apply_moet_depeg_scenario(self, engine: TidalSimulationEngine):
+    def _apply_moet_depeg_scenario(self, engine: TidalProtocolEngine):
         """Apply MOET depeg with liquidity drain"""
         # Depeg MOET
         engine.state.current_prices[Asset.MOET] = 0.95
@@ -153,39 +153,39 @@ class TidalStressTestSuite:
                     pool.reserves[asset] *= 0.5
                 pool.lp_token_supply *= 0.5
     
-    def _reduce_pool_liquidity(self, engine: TidalSimulationEngine, reduction: float):
+    def _reduce_pool_liquidity(self, engine: TidalProtocolEngine, reduction: float):
         """Reduce liquidity in all pools"""
         for pool in engine.protocol.liquidity_pools.values():
             for asset in pool.reserves:
                 pool.reserves[asset] *= (1 - reduction)
             pool.lp_token_supply *= (1 - reduction)
     
-    def _adjust_collateral_factors(self, engine: TidalSimulationEngine, adjustment: float):
+    def _adjust_collateral_factors(self, engine: TidalProtocolEngine, adjustment: float):
         """Adjust collateral factors"""
         for asset, pool in engine.protocol.asset_pools.items():
             pool.collateral_factor *= (1 + adjustment)
             pool.collateral_factor = max(0.1, min(1.0, pool.collateral_factor))
     
-    def _adjust_liquidation_thresholds(self, engine: TidalSimulationEngine, adjustment: float):
+    def _adjust_liquidation_thresholds(self, engine: TidalProtocolEngine, adjustment: float):
         """Adjust liquidation thresholds"""
         for asset, pool in engine.protocol.asset_pools.items():
             pool.liquidation_threshold *= (1 + adjustment)
             pool.liquidation_threshold = max(0.1, min(1.0, pool.liquidation_threshold))
     
-    def _force_high_utilization(self, engine: TidalSimulationEngine):
+    def _force_high_utilization(self, engine: TidalProtocolEngine):
         """Force high utilization rates"""
         for asset, pool in engine.protocol.asset_pools.items():
             # Set borrowed amount to 95% of supplied
             target_utilization = 0.95
             pool.total_borrowed = pool.total_supplied * target_utilization
     
-    def _trigger_interest_spike(self, engine: TidalSimulationEngine):
+    def _trigger_interest_spike(self, engine: TidalProtocolEngine):
         """Trigger interest rate spike by pushing above kink"""
         for asset, pool in engine.protocol.asset_pools.items():
             # Push utilization above kink (80%) to trigger jump rate
             pool.total_borrowed = pool.total_supplied * 0.90  # 90% utilization
     
-    def _black_swan_scenario(self, engine: TidalSimulationEngine):
+    def _black_swan_scenario(self, engine: TidalProtocolEngine):
         """Apply multiple simultaneous stress factors"""
         # Multiple price shocks
         shocks = {
@@ -202,7 +202,7 @@ class TidalStressTestSuite:
         # Adjust risk parameters
         self._adjust_collateral_factors(engine, -0.15)  # 15% reduction
     
-    def _debt_cap_stress_test(self, engine: TidalSimulationEngine):
+    def _debt_cap_stress_test(self, engine: TidalProtocolEngine):
         """Test debt cap under extreme conditions"""
         # Maximize debt near cap
         current_debt_cap = engine.protocol.calculate_debt_cap()
@@ -215,10 +215,10 @@ class TidalStressTestSuite:
         shocks = {Asset.ETH: -0.20, Asset.BTC: -0.20, Asset.FLOW: -0.30}
         engine.state.apply_price_shock(shocks)
         
-    def _setup_high_tide_scenario(self, engine: TidalSimulationEngine):
+    def _setup_high_tide_scenario(self, engine: TidalProtocolEngine):
         """Setup High Tide scenario - this is a placeholder for integration with HighTideSimulationEngine"""
         # Note: This scenario requires special handling in the stress test runner
-        # to use HighTideSimulationEngine instead of the regular TidalSimulationEngine
+        # to use HighTideSimulationEngine instead of the regular TidalProtocolEngine
         
         # For now, apply a gradual BTC decline pattern
         # The actual High Tide logic will be handled by HighTideSimulationEngine
@@ -240,7 +240,7 @@ class TidalStressTestSuite:
                 # Create fresh engine for each scenario
                 from ..simulation.config import SimulationConfig
                 config = SimulationConfig()
-                engine = TidalSimulationEngine(config)
+                engine = TidalProtocolEngine(config)
                 
                 # Run scenario
                 results = scenario.run(engine)
@@ -264,7 +264,7 @@ class TidalStressTestSuite:
         
         from ..simulation.config import SimulationConfig
         config = SimulationConfig()
-        engine = TidalSimulationEngine(config)
+        engine = TidalProtocolEngine(config)
         
         return scenario.run(engine)
     

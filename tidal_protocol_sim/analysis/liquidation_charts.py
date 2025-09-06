@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from ..core.protocol import Asset, TidalProtocol
 from ..core.math import TidalMath
-from ..simulation.engine import TidalSimulationEngine
+from ..simulation.tidal_engine import TidalProtocolEngine
 from ..simulation.config import SimulationConfig
 
 

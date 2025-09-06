@@ -22,7 +22,7 @@ try:
     from tidal_protocol_sim.stress_testing.runner import StressTestRunner, QuickStressTest
     from tidal_protocol_sim.stress_testing.scenarios import TidalStressTestSuite  
     from tidal_protocol_sim.simulation.config import SimulationConfig
-    from tidal_protocol_sim.simulation.engine import TidalSimulationEngine
+    from tidal_protocol_sim.simulation.tidal_engine import TidalProtocolEngine, TidalConfig
     from tidal_protocol_sim.analysis.metrics import TidalMetricsCalculator
 except ImportError as e:
     print(f"Import error: {e}")
@@ -272,7 +272,8 @@ def generate_baseline(config: SimulationConfig, args) -> int:
     
     print("Initializing Tidal Protocol...")
     
-    engine = TidalSimulationEngine(config)
+    tidal_config = TidalConfig()
+    engine = TidalProtocolEngine(tidal_config)
     calculator = TidalMetricsCalculator(engine.protocol)
     
     # Run short simulation to get baseline

@@ -50,10 +50,10 @@ class LPCurveTracker:
         # Initialize the concentrated liquidity pool
         if "MOET:BTC" in pool_name:
             from ..core.uniswap_v3_math import create_moet_btc_pool
-            self.concentrated_pool = create_moet_btc_pool(initial_pool_size, btc_price, concentration_range)
+            self.concentrated_pool = create_moet_btc_pool(pool_size_usd=initial_pool_size, btc_price=btc_price, concentration=concentration_range)
         else:
             from ..core.uniswap_v3_math import create_yield_token_pool
-            self.concentrated_pool = create_yield_token_pool(initial_pool_size, btc_price, concentration_range)
+            self.concentrated_pool = create_yield_token_pool(pool_size_usd=initial_pool_size, btc_price=btc_price, concentration=concentration_range)
         
         # Calculate correct initial price based on pool type
         if "MOET:BTC" in pool_name:
@@ -105,12 +105,20 @@ class LPCurveTracker:
             self.cumulative_trade_volume += trade_amount
             
             # Simulate price impact on the concentrated liquidity
-            trade_direction = "sell" if trade_type == "rebalance" else "buy"
-            impact = self.concentrated_pool.simulate_price_impact(trade_amount, trade_direction)
+            # Determine token being traded in based on trade type and pool
+            if trade_type == "rebalance":
+                # Rebalancing typically involves selling yield tokens for MOET
+                if "Yield" in self.pool_name:
+                    token_in = "Yield_Token"
+                else:
+                    token_in = "MOET"  # For MOET:BTC pool, selling MOET for BTC
+            else:
+                # Buy operations - opposite direction
+                token_in = "MOET"
             
-            # Update the pool's liquidity distribution based on the trade
-            if impact["price_impact"] > 0:
-                self.concentrated_pool.update_liquidity_distribution(impact["price_impact"])
+            impact = self.concentrated_pool.simulate_trade_impact(trade_amount, token_in)
+            
+            
         
         snapshot = PoolSnapshot(
             minute=minute,
