@@ -22,8 +22,9 @@ from .agents.liquidator import Liquidator
 from .agents.high_tide_agent import HighTideAgent, create_high_tide_agents
 
 # Simulation
-from .simulation.engine import TidalSimulationEngine
-from .simulation.high_tide_engine import HighTideSimulationEngine, HighTideConfig
+from .simulation.tidal_engine import TidalProtocolEngine, TidalConfig
+from .simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
+from .simulation.aave_protocol_engine import AaveProtocolEngine, AaveConfig
 from .simulation.config import SimulationConfig, StressTestScenarios
 from .simulation.state import SimulationState
 
@@ -45,7 +46,7 @@ __all__ = [
     "HighTideAgent", "create_high_tide_agents",
     
     # Simulation
-    "TidalSimulationEngine", "HighTideSimulationEngine", "HighTideConfig",
+    "TidalProtocolEngine", "TidalConfig", "HighTideVaultEngine", "HighTideConfig", "AaveProtocolEngine", "AaveConfig",
     "SimulationConfig", "StressTestScenarios", "SimulationState",
     
     # Stress Testing

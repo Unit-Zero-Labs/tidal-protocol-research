@@ -19,8 +19,8 @@ import seaborn as sns
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighTideSimulationEngine
-from tidal_protocol_sim.simulation.aave_engine import AaveConfig, AaveSimulationEngine
+from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideConfig, HighTideVaultEngine
+from tidal_protocol_sim.simulation.aave_protocol_engine import AaveConfig, AaveProtocolEngine
 from tidal_protocol_sim.analysis.high_tide_charts import HighTideChartGenerator
 
 
@@ -172,12 +172,12 @@ def run_comprehensive_pool_analysis():
                 aave_config.yield_token_concentration = 0.95
                 
                 # Run High Tide simulation
-                ht_engine = HighTideSimulationEngine(ht_config)
-                ht_results = ht_engine.run_high_tide_simulation()
+                ht_engine = HighTideVaultEngine(ht_config)
+                ht_results = ht_engine.run_simulation()
                 
                 # Run Aave simulation
-                aave_engine = AaveSimulationEngine(aave_config)
-                aave_results = aave_engine.run_aave_simulation()
+                aave_engine = AaveProtocolEngine(aave_config)
+                aave_results = aave_engine.run_simulation()
                 
                 # Collect data from High Tide run
                 all_runs_agent_outcomes.extend(ht_results.get("agent_outcomes", []))

@@ -177,14 +177,14 @@ def test_individual_scenarios():
     # Test High Tide scenario
     print("\n🌊 Testing High Tide scenario...")
     try:
-        from tidal_protocol_sim.simulation.high_tide_engine import HighTideSimulationEngine, HighTideConfig
+        from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
         
         config = HighTideConfig()
         config.num_high_tide_agents = 10  # Small test
         config.btc_decline_duration = 10   # Short test
         
-        engine = HighTideSimulationEngine(config)
-        ht_results = engine.run_high_tide_simulation()
+        engine = HighTideVaultEngine(config)
+        ht_results = engine.run_simulation()
         
         # Check key results
         agent_outcomes = ht_results.get("agent_outcomes", [])
@@ -200,14 +200,14 @@ def test_individual_scenarios():
     # Test AAVE scenario
     print("\n🏛️ Testing AAVE scenario...")
     try:
-        from tidal_protocol_sim.simulation.aave_engine import AaveSimulationEngine, AaveConfig
+        from tidal_protocol_sim.simulation.aave_protocol_engine import AaveProtocolEngine, AaveConfig
         
         config = AaveConfig()
         config.num_aave_agents = 10   # Small test
         config.btc_decline_duration = 10  # Short test
         
-        engine = AaveSimulationEngine(config)
-        aave_results = engine.run_aave_simulation()
+        engine = AaveProtocolEngine(config)
+        aave_results = engine.run_simulation()
         
         # Check key results
         agent_outcomes = aave_results.get("agent_outcomes", [])

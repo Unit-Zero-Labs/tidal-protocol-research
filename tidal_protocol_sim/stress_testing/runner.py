@@ -12,8 +12,8 @@ import numpy as np
 from pathlib import Path
 from .scenarios import TidalStressTestSuite
 from .analyzer import StressTestAnalyzer
-from ..simulation.engine import TidalSimulationEngine
-from ..simulation.high_tide_engine import HighTideSimulationEngine, HighTideConfig
+from ..simulation.tidal_engine import TidalProtocolEngine, TidalConfig
+from ..simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
 from ..simulation.config import SimulationConfig
 from ..core.protocol import Asset
 from ..analysis.results_manager import ResultsManager, RunMetadata
@@ -71,7 +71,7 @@ class StressTestRunner:
                 else:
                     # Create engine with potentially varied parameters
                     config = self._create_varied_config() if vary_params else self.config
-                    engine = TidalSimulationEngine(config)
+                    engine = TidalProtocolEngine(config)
                     
                     # Run specific scenario
                     result = self.test_suite.run_scenario(scenario_name, config)
@@ -168,7 +168,7 @@ class StressTestRunner:
         if scenario_name == "High_Tide_BTC_Decline":
             results = self._run_high_tide_scenario(vary_params=False)
         else:
-            engine = TidalSimulationEngine(config)
+            engine = TidalProtocolEngine(config)
             results = self.test_suite.run_scenario(scenario_name, config)
         
         # Analyze results
@@ -186,7 +186,7 @@ class StressTestRunner:
         return final_results
     
     def _run_high_tide_scenario(self, vary_params: bool = True) -> Dict:
-        """Run High Tide scenario using specialized HighTideSimulationEngine"""
+        """Run High Tide scenario using specialized HighTideVaultEngine"""
         # Create High Tide configuration
         config = HighTideConfig()
         
@@ -206,8 +206,8 @@ class StressTestRunner:
             config.moet_btc_pool_size *= np.random.uniform(0.6, 1.4)  # ±40% variation
         
         # Create and run High Tide simulation engine
-        engine = HighTideSimulationEngine(config)
-        results = engine.run_high_tide_simulation()
+        engine = HighTideVaultEngine(config)
+        results = engine.run_simulation()
         
         return results
     
@@ -443,7 +443,7 @@ class QuickStressTest:
         
         config = SimulationConfig()
         config.simulation_steps = steps
-        engine = TidalSimulationEngine(config)
+        engine = TidalProtocolEngine(config)
         
         # Apply ETH crash
         engine.state.apply_price_shock({Asset.ETH: -0.35})
@@ -466,7 +466,7 @@ class QuickStressTest:
         
         config = SimulationConfig()
         config.simulation_steps = steps
-        engine = TidalSimulationEngine(config)
+        engine = TidalProtocolEngine(config)
         
         initial_debt_cap = engine.protocol.calculate_debt_cap()
         

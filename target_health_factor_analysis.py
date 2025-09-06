@@ -24,7 +24,7 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighTideSimulationEngine
+from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
 from tidal_protocol_sim.agents.high_tide_agent import create_high_tide_agents
 from tidal_protocol_sim.core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
 
@@ -124,7 +124,7 @@ def run_target_hf_scenario(target_hf: float, monte_carlo_runs: int) -> Dict:
             target_hf, num_agents=agents_per_run, run_num=run_num, agent_type="high_tide"
         )
         
-        ht_engine = HighTideSimulationEngine(ht_config)
+        ht_engine = HighTideVaultEngine(ht_config)
         ht_engine.high_tide_agents = custom_ht_agents
         
         # Replace protocol with BTC-only version
@@ -134,7 +134,7 @@ def run_target_hf_scenario(target_hf: float, monte_carlo_runs: int) -> Dict:
         for agent in custom_ht_agents:
             ht_engine.agents[agent.agent_id] = agent
         
-        ht_results = ht_engine.run_high_tide_simulation()
+        ht_results = ht_engine.run_simulation()
         ht_runs.append(ht_results)
     
     # Aggregate results (High Tide only)
@@ -757,14 +757,14 @@ def run_detailed_simulation_for_charts() -> Dict:
         )
         
         # Run the simulation
-        ht_engine = HighTideSimulationEngine(ht_config)
+        ht_engine = HighTideVaultEngine(ht_config)
         ht_engine.high_tide_agents = custom_ht_agents
         
         for agent in custom_ht_agents:
             ht_engine.agents[agent.agent_id] = agent
         
         # Run simulation and get full results
-        ht_results = ht_engine.run_high_tide_simulation()
+        ht_results = ht_engine.run_simulation()
         
         print(f"✅ Detailed simulation completed with {len(ht_results.get('agent_outcomes', []))} agents")
         return ht_results

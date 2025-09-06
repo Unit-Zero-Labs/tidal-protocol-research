@@ -50,10 +50,10 @@ class LPCurveTracker:
         # Initialize the concentrated liquidity pool
         if "MOET:BTC" in pool_name:
             from ..core.uniswap_v3_math import create_moet_btc_pool
-            self.concentrated_pool = create_moet_btc_pool(initial_pool_size, btc_price, concentration_range)
+            self.concentrated_pool = create_moet_btc_pool(pool_size_usd=initial_pool_size, btc_price=btc_price, concentration=concentration_range)
         else:
             from ..core.uniswap_v3_math import create_yield_token_pool
-            self.concentrated_pool = create_yield_token_pool(initial_pool_size, btc_price, concentration_range)
+            self.concentrated_pool = create_yield_token_pool(pool_size_usd=initial_pool_size, btc_price=btc_price, concentration=concentration_range)
         
         # Calculate correct initial price based on pool type
         if "MOET:BTC" in pool_name:
@@ -118,8 +118,7 @@ class LPCurveTracker:
             
             impact = self.concentrated_pool.simulate_trade_impact(trade_amount, token_in)
             
-            # Note: The new Uniswap V3 implementation automatically handles liquidity distribution
-            # through proper tick-based math, so no manual update is needed
+            
         
         snapshot = PoolSnapshot(
             minute=minute,

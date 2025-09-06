@@ -1,293 +1,296 @@
-BELOW ARE INSTRUCTIONS FOR YOU ON IMPROVEMENTS RELATED TO THE UNISWAP MATH IN OUR TOKENOMICS SIMULATION SYSTEM. THIS DOCUMENT HAS SOME INFORMATION ABOUT THE SYSTEM  AND THEN IT DIVES INTO DETAILED STEPS AROUND WHERE WE NEED TO FIX THE INCORRECT UNISWAP MATH. READ THIS FILE THOROUGHLY:
-
-Core components to understand:
-
-High Tide is an automated yield aggregation layer built atop the Tidal Protocol, designed to enable crypto holders to deposit assets (BTC, ETH, FLOW, stables) and earn optimized in-kind yield without manual management. Unlike passive lending protocols that rely on forced liquidations, Tidal Protocol leverages active position management: automated rebalancing  proactively defend user health factors during market downturns, minimizing principal loss and maximizing capital efficiency. This allows High Tide to take advantage of this engine while offering users market-leading yield
-
-Our simulation evaluates how different liquidity pool configurations—both external (MOET:BTC) and internal (MOET:Yield Token)—impact the protocol’s ability to execute rebalancing operations. We focus on three key metrics:
-
-## **Technical Specification of High Tide Protocol**
-
-### **2.1 Foundation: Tidal Protocol**
-
-High Tide builds on the Tidal Protocol, an actively managed lending engine for the Flow blockchain. Core features include:
-
-- **Collateral Supply:** Users deposit BTC as collateral
-- **Stablecoin Borrowing:** MOET stablecoins are borrowed against collateral
-- **Active Management:** Automated callbacks and health factor thresholds trigger position rebalancing, leveraging Flow’s scheduled transaction infrastructure
-
-Tidal’s kinked interest rate model increases borrowing rates sharply above 80% pool utilization, incentivizing agents to maintain healthy positions and avoid costly liquidations.
-
-### **2.2 High Tide Enhancement: Yield Token Strategy**
-
-High Tide introduces an automated yield token strategy:
-
-- **Immediate Yield Token Purchase:** Borrowed MOET is converted to yield-bearing tokens at 10% APR
-- **Continuous Compounding:** Yield tokens accrue interest every minute
-- **Health Factor Monitoring:** The system tracks each agent’s health factor (collateral value / debt value)
-- **Active Rebalancing:** Yield tokens are automatically sold to repay debt when health factors fall below maintenance thresholds
-
-**Liquidation as Last Resort:** Forced liquidation only occurs if yield token sales cannot restore solvency. Forced liquidations seize collateral and swap it for MOET to pay down DEBT
-
-
-
-## **Structural Things:**
-
-We need all of our simulations to create a simulation results json file that is used to create all of our charts. All charts must have the right data in the json file to meet our needs. No hallucination of data into the charts can occur. No hardcoded values or mock data should be implemented in order to achieve desirable results. The visualizations MUST use the system-generated simulation results.
-
-## Comprehensive list of tasks to implement uniswap math improvements
-
-I'll review the visualization methodologies in the target health factor analysis script and then provide a comprehensive system prompt for fixing the Uniswap V3 math implementation.
-
-[3 tools called]
-
-Now let me examine the core architecture dependencies:
-
 [1 tool called]
 
-Now I'll create a comprehensive system prompt for fixing the Uniswap V3 implementation:
+# 🔧 Engine Architecture Refactoring Plan
 
-## **System Prompt for Uniswap V3 Math Implementation Fix**
+## **Problem Summary**
+The current engine architecture is inconsistent and confusing:
+- AAVE engine inherits from Tidal (wrong conceptually)
+- Sophisticated Uniswap V3 math only used in High Tide, not base Tidal
+- Comparison scripts compare incompatible architectures
 
-You are tasked with completely rewriting the Uniswap V3 math implementation in `tidal_protocol_sim/core/uniswap_v3_math.py` to use **actual Uniswap V3 mathematics** instead of the current discrete bin approximation. This is a critical fix that affects the entire simulation's accuracy.
 
-### **Current Implementation Issues**
-The existing code uses a **fundamentally flawed "discrete bins" approach** instead of Uniswap V3's continuous tick system with Q64.96 fixed-point arithmetic. This leads to inaccurate slippage calculations and misleading simulation results.
+## **Target Architecture**
 
-### **Required Implementation Changes**
+```
+BaseLendingEngine (Abstract)
+├── Common lending mechanics
+├── Health factor calculations  
+├── Basic liquidation framework
+└── Agent management
 
-#### **1. Replace Discrete Bins with Proper Tick System**
-```python
-# REMOVE: Current LiquidityBin class and discrete bin logic
-# IMPLEMENT: Proper Uniswap V3 tick-based system
+TidalProtocolEngine (BaseLendingEngine)
+├── Uses sophisticated Uniswap V3 math
+├── MOET:BTC pools with proper slippage
+├── Tidal-specific lending mechanics
+└── Foundation for all Tidal variants
 
-import math
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
+HighTideVaultEngine (TidalProtocolEngine)  
+├── Inherits all Tidal Uniswap V3 functionality
+├── Adds MOET:YieldToken pools
+├── Adds rebalancing mechanisms
+└── Yield vault strategies
 
-# Constants from Uniswap V3
-MIN_TICK = -887272
-MAX_TICK = 887272
-Q96 = 2 ** 96
-TICK_SPACING_0_3_PERCENT = 60  # For 0.3% fee tier
-
-def tick_to_sqrt_price_x96(tick: int) -> int:
-    """Convert tick to sqrt price in Q64.96 format"""
-    sqrt_price = 1.0001 ** (tick / 2)
-    return int(sqrt_price * Q96)
-
-def sqrt_price_x96_to_tick(sqrt_price_x96: int) -> int:
-    """Convert sqrt price X96 to tick"""
-    sqrt_price = sqrt_price_x96 / Q96
-    return int(math.log(sqrt_price ** 2) / math.log(1.0001))
-
-def get_amount0_delta(
-    sqrt_price_a_x96: int,
-    sqrt_price_b_x96: int, 
-    liquidity: int
-) -> int:
-    """Calculate amount0 delta for liquidity in price range"""
-    if sqrt_price_a_x96 > sqrt_price_b_x96:
-        sqrt_price_a_x96, sqrt_price_b_x96 = sqrt_price_b_x96, sqrt_price_a_x96
-    
-    return int(liquidity * Q96 * (sqrt_price_b_x96 - sqrt_price_a_x96) // 
-               (sqrt_price_b_x96 * sqrt_price_a_x96))
-
-def get_amount1_delta(
-    sqrt_price_a_x96: int,
-    sqrt_price_b_x96: int,
-    liquidity: int
-) -> int:
-    """Calculate amount1 delta for liquidity in price range"""
-    if sqrt_price_a_x96 > sqrt_price_b_x96:
-        sqrt_price_a_x96, sqrt_price_b_x96 = sqrt_price_b_x96, sqrt_price_a_x96
-    
-    return int(liquidity * (sqrt_price_b_x96 - sqrt_price_a_x96) // Q96)
+AaveProtocolEngine (BaseLendingEngine)
+├── Pure AAVE implementation
+├── Traditional liquidation (50% + 5% bonus)  
+├── AAVE's actual DEX mechanics
+└── No Tidal dependencies
 ```
 
-#### **2. Implement Proper Pool State Management**
+## **Refactoring Tasks**
+
+### **Phase 1: Create Base Architecture**
+
+#### **Task 1.1: Create BaseLendingEngine**
 ```python
-@dataclass
-class UniswapV3Pool:
-    """Proper Uniswap V3 pool implementation"""
-    pool_name: str
-    fee: int  # Fee in hundredths of a bip (3000 = 0.3%)
-    tick_spacing: int  # Tick spacing for this fee tier
+# File: tidal_protocol_sim/simulation/base_lending_engine.py
+
+class BaseLendingEngine:
+    """Abstract base class for all lending protocol simulations"""
     
-    # Core pool state
-    sqrt_price_x96: int  # Current sqrt price in Q64.96
-    liquidity: int  # Current active liquidity
-    tick_current: int  # Current tick
-    
-    # Concentrated liquidity positions
-    ticks: Dict[int, int]  # tick -> net liquidity delta
-    
-    def __post_init__(self):
-        # Initialize based on pool type
-        if "MOET:BTC" in self.pool_name:
-            # 1 BTC = 100,000 MOET, so price = 0.00001
-            price = 0.00001
-            self.tick_current = int(math.log(price) / math.log(1.0001))
-            self.sqrt_price_x96 = tick_to_sqrt_price_x96(self.tick_current)
-        else:
-            # 1:1 for yield tokens
-            self.tick_current = 0
-            self.sqrt_price_x96 = Q96
-    
-    def swap(
-        self,
-        zero_for_one: bool,
-        amount_specified: int,
-        sqrt_price_limit_x96: int
-    ) -> Tuple[int, int]:
-        """Execute a swap using proper Uniswap V3 math"""
-        # Implement the actual Uniswap V3 swap logic
-        # This is complex and requires implementing the full constant product curve
+    def __init__(self, config):
+        self.config = config
+        self.agents = {}
+        self.current_step = 0
+        self.liquidation_events = []
+        
+    def run_simulation(self, steps: int) -> Dict:
+        """Abstract method - must be implemented by subclasses"""
+        raise NotImplementedError
+        
+    def _process_agent_actions(self):
+        """Common agent processing logic"""
+        pass
+        
+    def _check_liquidations(self):
+        """Common liquidation checking logic"""
+        pass
+        
+    def _record_metrics(self):
+        """Common metrics recording"""
         pass
 ```
 
-#### **3. Fix Slippage Calculations**
+#### **Task 1.2: Refactor TidalProtocolEngine**
 ```python
-class UniswapV3SlippageCalculator:
-    """Proper Uniswap V3 slippage calculator"""
+# File: tidal_protocol_sim/simulation/tidal_engine.py (rename from engine.py)
+
+from .base_lending_engine import BaseLendingEngine
+from ..core.uniswap_v3_math import UniswapV3Pool, UniswapV3SlippageCalculator
+
+class TidalProtocolEngine(BaseLendingEngine):
+    """Tidal Protocol with sophisticated Uniswap V3 mathematics"""
     
-    def __init__(self, pool: UniswapV3Pool):
-        self.pool = pool
-    
-    def calculate_swap_slippage(
-        self,
-        amount_in: int,  # Use integers for precision
-        token_in: str,
-        sqrt_price_limit_x96: Optional[int] = None
-    ) -> Dict[str, any]:
-        """Calculate swap with proper Uniswap V3 math"""
+    def __init__(self, config: TidalConfig):
+        super().__init__(config)
         
-        # Determine swap direction
-        zero_for_one = token_in in ["MOET", "Yield_Token"]
+        # Initialize Uniswap V3 pools for ALL Tidal simulations
+        self._setup_uniswap_v3_pools()
         
-        # Set price limit if not provided
-        if sqrt_price_limit_x96 is None:
-            if zero_for_one:
-                sqrt_price_limit_x96 = tick_to_sqrt_price_x96(MIN_TICK + 1)
-            else:
-                sqrt_price_limit_x96 = tick_to_sqrt_price_x96(MAX_TICK - 1)
+    def _setup_uniswap_v3_pools(self):
+        """Setup Uniswap V3 pools with proper math"""
+        from ..core.uniswap_v3_math import create_moet_btc_pool
         
-        # Execute swap using proper math
-        amount_out, sqrt_price_after = self.pool.swap(
-            zero_for_one, amount_in, sqrt_price_limit_x96
+        self.moet_btc_pool = create_moet_btc_pool(
+            pool_size=self.config.moet_btc_pool_size,
+            btc_price=self.config.btc_initial_price,
+            concentration=self.config.moet_btc_concentration
         )
         
-        # Calculate expected output without slippage (at current price)
-        current_price = (self.pool.sqrt_price_x96 / Q96) ** 2
-        expected_out = amount_in * current_price  # Simplified
-        
-        # Calculate slippage
-        slippage = max(0, expected_out - amount_out)
-        slippage_percent = (slippage / expected_out) * 100 if expected_out > 0 else 0
-        
-        return {
-            "amount_in": amount_in,
-            "amount_out": amount_out,
-            "expected_amount_out": expected_out,
-            "slippage_amount": slippage,
-            "slippage_percentage": slippage_percent,
-            "sqrt_price_after": sqrt_price_after
-        }
+        self.slippage_calculator = UniswapV3SlippageCalculator(self.moet_btc_pool)
 ```
 
-### **Visualization System Updates Required**
+### **Phase 2: Fix High Tide Engine**
 
-#### **1. Update LP Curve Analysis (`lp_curve_analysis.py`)**
-- Replace `get_bin_data_for_charts()` with `get_tick_data_for_charts()`
-- Update bar charts to show tick-based liquidity distribution
-- Fix price range calculations to use proper tick spacing
-
-#### **2. Update Chart Generation (`target_health_factor_analysis.py`)**
-- Replace all references to `bins` with `ticks`
-- Update slippage cost extraction to use new data structures
-- Fix CSV generation to use proper tick-based calculations
-
-#### **3. Update Agent Cost Calculations**
-All agent classes need updated slippage cost calculations:
+#### **Task 2.1: Refactor HighTideVaultEngine**
 ```python
-# In HighTideAgent and AaveAgent
-def calculate_slippage_costs(self):
-    # Use proper Uniswap V3 calculations instead of bin approximations
-    pass
+# File: tidal_protocol_sim/simulation/high_tide_engine.py
+
+from .tidal_engine import TidalProtocolEngine  # Changed inheritance
+
+class HighTideVaultEngine(TidalProtocolEngine):  # Now inherits from Tidal
+    """High Tide Yield Vaults built on Tidal Protocol"""
+    
+    def __init__(self, config: HighTideConfig):
+        super().__init__(config)  # Gets all Uniswap V3 functionality
+        
+        # Add yield token pools ON TOP of existing Tidal functionality
+        self._setup_yield_token_pools()
+        
+    def _setup_yield_token_pools(self):
+        """Add yield token functionality to existing Tidal base"""
+        from ..core.uniswap_v3_math import create_yield_token_pool
+        
+        self.yield_token_pool = create_yield_token_pool(
+            pool_size=self.config.moet_yield_pool_size,
+            btc_price=self.config.btc_initial_price,
+            concentration=self.config.yield_token_concentration
+        )
+        
+        self.yield_token_slippage_calculator = UniswapV3SlippageCalculator(
+            self.yield_token_pool
+        )
 ```
 
-### **Backward Compatibility Requirements**
+### **Phase 3: Create Pure AAVE Engine**
 
-#### **1. Maintain Public API**
-Keep these functions working but with proper implementations:
-- `create_moet_btc_pool()`
-- `create_yield_token_pool()`
-- `calculate_rebalancing_cost_with_slippage()`
-- `calculate_liquidation_cost_with_slippage()`
-
-#### **2. Preserve Data Structures**
-Ensure simulation engines can still access:
-- Pool reserves (calculate from tick data)
-- Current price (derive from sqrt_price_x96)
-- Liquidity metrics (aggregate from tick data)
-
-#### **3. Update Legacy Fields**
+#### **Task 3.1: Create Independent AaveProtocolEngine**
 ```python
-def _update_legacy_fields(self):
-    """Update legacy fields for backward compatibility"""
-    # Calculate reserves from tick data
-    self.token0_reserve = self._calculate_token0_reserve()
-    self.token1_reserve = self._calculate_token1_reserve()
+# File: tidal_protocol_sim/simulation/aave_engine.py
+
+from .base_lending_engine import BaseLendingEngine  # Changed inheritance
+
+class AaveConfig:
+    """Pure AAVE configuration - no Tidal dependencies"""
     
-    # Price from sqrt_price_x96
-    price = (self.sqrt_price_x96 / Q96) ** 2
+    def __init__(self):
+        self.scenario_name = "AAVE_Protocol"
+        self.liquidation_threshold = 0.85
+        self.liquidation_bonus = 0.05  # 5%
+        self.liquidation_percentage = 0.5  # 50%
+        # No Uniswap V3 parameters
+
+class AaveProtocolEngine(BaseLendingEngine):  # No Tidal inheritance
+    """Pure AAVE Protocol implementation"""
     
-    # Total liquidity from active positions
-    self.liquidity = self._calculate_total_liquidity()
+    def __init__(self, config: AaveConfig):
+        super().__init__(config)
+        
+        # AAVE uses traditional AMM pools, not Uniswap V3
+        self._setup_aave_liquidation_pools()
+        
+    def _setup_aave_liquidation_pools(self):
+        """Setup AAVE's actual liquidation mechanisms"""
+        # Traditional constant product AMM
+        # 50% liquidation + 5% bonus
+        pass
+        
+    def _execute_aave_liquidation(self, agent, collateral_asset, debt_amount):
+        """Traditional AAVE liquidation: 50% collateral + 5% bonus"""
+        liquidation_amount = debt_amount * 0.5  # 50% max
+        bonus = liquidation_amount * 0.05  # 5% bonus
+        return liquidation_amount + bonus
 ```
 
-### **Testing Requirements**
+### **Phase 4: Fix Comparison Scripts**
 
-#### **1. Unit Tests**
-Create comprehensive tests for:
-- Tick to price conversions
-- Liquidity calculations
-- Swap math accuracy
-- Slippage calculations
+#### **Task 4.1: Update High Tide vs AAVE Comparison**
+```python
+# File: run_high_tide_vs_aave_comparison.py
 
-#### **2. Integration Tests**
-Verify that:
-- Simulation engines still work
-- Chart generation functions properly
-- Agent cost calculations are accurate
-- CSV outputs contain correct data
+from tidal_protocol_sim.simulation.high_tide_engine import HighTideVaultEngine, HighTideConfig
+from tidal_protocol_sim.simulation.aave_engine import AaveProtocolEngine, AaveConfig
 
-#### **3. Accuracy Validation**
-Compare results against known Uniswap V3 behaviors:
-- Price impact for various trade sizes
-- Slippage in different liquidity conditions
-- Fee calculations
+def run_comparison():
+    """Now comparing apples to apples: both use same scenarios but different protocols"""
+    
+    # High Tide: Tidal + Yield Vaults
+    ht_config = HighTideConfig()
+    ht_engine = HighTideVaultEngine(ht_config)  # Gets Uniswap V3 from Tidal base
+    
+    # AAVE: Pure AAVE protocol
+    aave_config = AaveConfig()  # No Tidal dependencies
+    aave_engine = AaveProtocolEngine(aave_config)  # Pure AAVE
+    
+    # Fair comparison: same market conditions, different protocols
+```
 
-### **Implementation Priority**
+#### **Task 4.2: Update Borrow Cap Analysis**
+```python
+# File: moet_yt_borrow_cap_analysis.py
 
-1. **High Priority**: Core math functions (tick conversions, swap calculations)
-2. **Medium Priority**: Pool state management and slippage calculator
-3. **Low Priority**: Visualization updates and legacy compatibility
+from tidal_protocol_sim.simulation.tidal_engine import TidalProtocolEngine, TidalConfig
 
-### **Success Criteria**
+def run_borrow_cap_analysis():
+    """Test Tidal protocol's borrow capacity using proper Uniswap V3 math"""
+    
+    # Use base Tidal engine with Uniswap V3 math
+    tidal_config = TidalConfig()
+    tidal_engine = TidalProtocolEngine(tidal_config)  # Now has Uniswap V3
+    
+    # Test liquidation capacity with proper slippage calculations
+```
 
-Your implementation will be successful when:
-1. ✅ Uses proper Uniswap V3 tick-based math
-2. ✅ Produces accurate slippage calculations
-3. ✅ Maintains backward compatibility with existing simulations
-4. ✅ Updates all visualization components correctly
-5. ✅ Passes comprehensive test suite
+## **File Structure Changes**
 
-### **Resources**
+### **Rename/Move Files:**
+```
+OLD → NEW
+tidal_protocol_sim/simulation/engine.py → tidal_protocol_sim/simulation/tidal_engine.py
+tidal_protocol_sim/simulation/high_tide_engine.py → tidal_protocol_sim/simulation/high_tide_vault_engine.py
+```
 
-Reference the official Uniswap V3 implementation:
-- [Uniswap V3 Core Repository](https://github.com/Uniswap/v3-core)
-- [Uniswap V3 Whitepaper](https://uniswap.org/whitepaper-v3.pdf)
-- Focus on `UniswapV3Pool.sol` and `TickMath.sol`
+### **New Files to Create:**
+```
+tidal_protocol_sim/simulation/base_lending_engine.py
+tidal_protocol_sim/simulation/configs/
+├── base_config.py
+├── tidal_config.py  
+├── high_tide_config.py
+└── aave_config.py
+```
 
-**Remember**: This fix is critical for the accuracy of the High Tide vs AAVE analysis. Incorrect slippage calculations could lead to wrong conclusions about protocol performance.
+## **Migration Steps**
+
+### **Step 1: Create Base Classes**
+1. Create `BaseLendingEngine` with common functionality
+2. Create `BaseLendingConfig` with common parameters
+3. Test base classes work independently
+
+### **Step 2: Migrate Tidal Engine**
+1. Rename `engine.py` → `tidal_engine.py`
+2. Add Uniswap V3 math to base Tidal engine
+3. Update `TidalSimulationEngine` → `TidalProtocolEngine`
+4. Test Tidal engine with Uniswap V3 math
+
+### **Step 3: Fix High Tide Engine**
+1. Change inheritance: `TidalSimulationEngine` → `TidalProtocolEngine`
+2. Remove duplicate Uniswap V3 setup (inherit from Tidal)
+3. Focus on yield token additions only
+4. Test High Tide inherits Tidal functionality
+
+### **Step 4: Rebuild AAVE Engine**
+1. Remove Tidal inheritance
+2. Inherit from `BaseLendingEngine` only
+3. Implement pure AAVE liquidation mechanics
+4. Remove all Uniswap V3 references
+
+### **Step 5: Update Analysis Scripts**
+1. Update imports to use new engine names
+2. Fix comparison logic to use proper engines
+3. Test all analysis scripts work with new architecture
+
+## **Testing Plan**
+
+### **Unit Tests:**
+```python
+def test_tidal_engine_has_uniswap_v3():
+    """Verify base Tidal engine uses Uniswap V3 math"""
+    
+def test_high_tide_inherits_tidal():
+    """Verify High Tide gets Uniswap V3 from Tidal base"""
+    
+def test_aave_independent():
+    """Verify AAVE has no Tidal dependencies"""
+    
+def test_comparison_scripts():
+    """Verify comparison scripts use correct engines"""
+```
+
+### **Integration Tests:**
+```python
+def test_high_tide_vs_aave_comparison():
+    """Test full comparison with proper architectures"""
+    
+def test_borrow_cap_analysis():
+    """Test borrow cap analysis uses Tidal Uniswap V3"""
+```
+
+## **Benefits of This Refactor**
+
+1. **Architectural Clarity**: Each engine has a clear, logical purpose
+2. **Uniswap V3 Utilization**: Your week of work becomes the foundation for all Tidal simulations
+3. **Proper Comparisons**: High Tide vs AAVE compares different protocols, not different variants of the same protocol
+4. **Maintainability**: Clear inheritance hierarchy makes future changes easier
+5. **Extensibility**: Easy to add new protocols or Tidal variants
+

@@ -24,8 +24,7 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.high_tide_engine import HighTideConfig, HighTideSimulationEngine
-from tidal_protocol_sim.simulation.aave_engine import AaveConfig, AaveSimulationEngine
+from tidal_protocol_sim.simulation.tidal_engine import TidalProtocolEngine, TidalConfig
 from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
 from tidal_protocol_sim.agents.aave_agent import AaveAgent
 from tidal_protocol_sim.core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
@@ -701,13 +700,13 @@ def run_borrow_cap_scenario(agent_count: int, hf_scenario: Dict,
             initial_hf, target_hf, agent_count, "high_tide", run_num, profile
         )
         
-        ht_engine = HighTideSimulationEngine(ht_config)
+        ht_engine = HighTideVaultEngine(ht_config)
         ht_engine.protocol = BTCOnyProtocol()  # Enforce BTC-only
         ht_engine.high_tide_agents = tight_ht_agents
         for agent in tight_ht_agents:
             ht_engine.agents[agent.agent_id] = agent
         
-        ht_result = ht_engine.run_high_tide_simulation()
+        ht_result = ht_engine.run_simulation()
         ht_results.append(ht_result)
         
         # Matching Aave scenario
@@ -721,12 +720,12 @@ def run_borrow_cap_scenario(agent_count: int, hf_scenario: Dict,
             initial_hf, target_hf, agent_count, "aave", run_num, profile
         )
         
-        aave_engine = AaveSimulationEngine(aave_config)
+        aave_engine = AaveProtocolEngine(aave_config)
         aave_engine.aave_agents = tight_aave_agents
         for agent in tight_aave_agents:
             aave_engine.agents[agent.agent_id] = agent
         
-        aave_result = aave_engine.run_aave_simulation()
+        aave_result = aave_engine.run_simulation()
         aave_results.append(aave_result)
     
     # Aggregate results

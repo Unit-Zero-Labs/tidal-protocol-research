@@ -16,7 +16,7 @@ class SimulationState:
         # Asset prices
         self.current_prices = {
             Asset.ETH: 4400.0,
-            Asset.BTC: 118_000.0,
+            Asset.BTC: 100_000.0,
             Asset.FLOW: 0.40,
             Asset.USDC: 1.0,
             Asset.MOET: 1.0

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Uniswap V3 Concentrated Liquidity System with Proper Tick-Based Math
+Uniswap V3 Concentrated Liquidity System 
 
 Implements authentic Uniswap V3 mathematics using:
 - Tick-based price system with Q64.96 fixed-point arithmetic
