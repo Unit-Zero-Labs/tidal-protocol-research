@@ -328,8 +328,8 @@ class HighTideAgent(BaseAgent):
                 "yield_only": yield_only
             })
             
-            # NOTE: Health factor will be updated on next decide_action() call
-            # The simulation engine should call agent actions before recording final metrics
+            # NOTE: Health factor updated on next decide_action() call
+            # sim engine should call agent actions before recording final metrics
             
         return moet_raised
     
@@ -339,7 +339,7 @@ class HighTideAgent(BaseAgent):
         """
         Calculate cost of rebalancing for High Tide strategy
         
-        CORRECTED: Since rebalancing uses MOET directly to pay debt (no BTC swap),
+        Since rebalancing uses MOET directly to pay debt (no BTC swap),
         the cost is simply the net debt remaining after yield tokens are considered.
         
         Net Position Value = Collateral - (Debt - Yield Token Value)
@@ -352,7 +352,7 @@ class HighTideAgent(BaseAgent):
         # Net Position Value = Collateral - (Debt - Yield Token Value)
         net_position_value = collateral_value - (self.state.moet_debt - yield_token_value)
         
-        # CORRECTED: Since MOET directly pays debt (no slippage), cost is just net debt remaining
+        # CORRECTION: Since MOET directly pays debt (no slippage), cost is just net debt remaining
         # Cost = max(0, Debt - Yield Token Value)
         base_cost = max(0, self.state.moet_debt - yield_token_value)
         
