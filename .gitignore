@@ -1,8 +1,98 @@
-tidal_protocol_sim/__pycache__/__init__.cpython-311.pyc
-tidal_protocol_sim/stress_testing/__pycache__/runner.cpython-311.pyc
-tidal_protocol_sim/stress_testing/__pycache__/scenarios.cpython-311.pyc
-tidal_protocol_sim/core/__pycache__/protocol.cpython-311.pyc
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-/tidal_protocol_sim/core/__pycache__/
-tidal_protocol_sim/analysis/__pycache__/lp_curve_analysis.cpython-311.pyc
-tidal_protocol_sim/analysis/__pycache__/high_tide_charts.cpython-311.pyc
+# PyInstaller
+*.manifest
+*.spec
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# Environment variables
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Simulation Results (large data files)
+tidal_protocol_sim/results/
+*.json
+!**/config*.json
+!**/package*.json
+
+# Large data files
+*.csv
+!**/small_*.csv
+!**/config*.csv
+
+# Charts and images (optional - uncomment if you don't want to track these)
+# *.png
+# *.jpg
+# *.jpeg
+# *.gif
+# *.svg
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Analysis outputs
+*.pdf
+!**/documentation*.pdf
+!**/whitepaper*.pdf
+
+# Backup files
+*.bak
+*.backup
+*~
