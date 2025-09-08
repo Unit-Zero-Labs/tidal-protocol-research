@@ -18,8 +18,7 @@ import seaborn as sns
 from dataclasses import dataclass
 import math
 
-# Import the concentrated liquidity system from uniswap_v3_math
-from ..core.uniswap_v3_math import UniswapV3Pool, LiquidityBin
+from ..core.uniswap_v3_math import UniswapV3Pool
 
 
 @dataclass

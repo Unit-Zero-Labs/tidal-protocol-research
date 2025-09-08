@@ -323,15 +323,6 @@ class Position:
     tick_upper: int  # Upper tick of the position  
     liquidity: int   # Amount of liquidity in this position
     
-# Backward compatibility - represents a "bin" as a tick for visualization
-@dataclass
-class LiquidityBin:
-    """Backward compatibility: represents a tick as a bin for visualization"""
-    price: float  # Price at this tick
-    liquidity: float  # Amount of liquidity at this tick
-    bin_index: int  # Sequential index (tick-based)
-    is_active: bool = True  # Whether this tick has active liquidity
-    tick: int = 0  # The actual tick number
 
 
 @dataclass
@@ -356,8 +347,6 @@ class UniswapV3Pool:
     # Legacy fields for backward compatibility
     token0_reserve: Optional[float] = None  # MOET reserve (calculated from ticks)
     token1_reserve: Optional[float] = None  # BTC reserve (calculated from ticks)
-    num_bins: int = 100  # For visualization compatibility
-    bins: List[LiquidityBin] = None  # For backward compatibility
     
     def __post_init__(self):
         """Initialize Uniswap V3 pool with proper tick-based math"""
@@ -422,9 +411,6 @@ class UniswapV3Pool:
         
         # Initialize concentrated liquidity positions
         self._initialize_concentrated_positions()
-        
-        # Create backward compatibility bins for visualization
-        self._create_visualization_bins()
         
         # Calculate legacy fields for backward compatibility
         self._update_legacy_fields()
@@ -705,43 +691,6 @@ class UniswapV3Pool:
                 # No more ticks above - return MAX_TICK to signal boundary
                 return MAX_TICK
     
-    def _create_visualization_bins(self):
-        """Create backward compatibility bins for visualization from tick data"""
-        self.bins = []
-        
-        # Get all ticks sorted by value
-        sorted_ticks = sorted(self.ticks.keys())
-        
-        if not sorted_ticks:
-            return
-        
-        # Create bins representing tick ranges
-        for i, tick in enumerate(sorted_ticks):
-            price = (tick_to_sqrt_price_x96(tick) / Q96) ** 2
-            
-            # Calculate liquidity at this tick (sum of all positions that include this tick)
-            liquidity_at_tick = 0
-            for position in self.positions:
-                if position.tick_lower <= tick < position.tick_upper:
-                    liquidity_at_tick += position.liquidity
-            
-            # Convert back to USD for visualization
-            liquidity_usd = liquidity_at_tick / 1e6
-            
-            self.bins.append(LiquidityBin(
-                price=price,
-                liquidity=liquidity_usd,
-                bin_index=i,
-                is_active=liquidity_usd > 1000,  # $1k threshold
-                tick=tick
-            ))
-        
-        # Sort bins by price for proper visualization
-        self.bins.sort(key=lambda b: b.price)
-        
-        # Re-assign bin indices after sorting
-        for i, bin in enumerate(self.bins):
-            bin.bin_index = i
     
     def get_price(self) -> float:
         """Get current price from sqrt_price_x96 using exact calculation"""
@@ -770,31 +719,63 @@ class UniswapV3Pool:
     
     def get_liquidity_distribution(self) -> Tuple[List[float], List[float]]:
         """Get price and liquidity arrays for charting"""
-        if not self.bins:
+        # Get all ticks sorted by value
+        sorted_ticks = sorted(self.ticks.keys())
+        
+        if not sorted_ticks:
             return [], []
         
-        active_bins = [bin for bin in self.bins if bin.is_active]
-        prices = [bin.price for bin in active_bins]
-        liquidity = [bin.liquidity for bin in active_bins]
+        prices = []
+        liquidity = []
+        
+        for tick in sorted_ticks:
+            price = (tick_to_sqrt_price_x96(tick) / Q96) ** 2
+            
+            # Calculate liquidity at this tick
+            liquidity_at_tick = 0
+            for position in self.positions:
+                if position.tick_lower <= tick < position.tick_upper:
+                    liquidity_at_tick += position.liquidity
+            
+            # Convert back to USD and only include active liquidity
+            liquidity_usd = liquidity_at_tick / 1e6
+            if liquidity_usd > 1000:  # $1k threshold
+                prices.append(price)
+                liquidity.append(liquidity_usd)
+        
         return prices, liquidity
-    
-    def get_bin_data_for_charts(self) -> List[Dict]:
-        """Get bin data formatted for bar chart visualization (backward compatibility)"""
-        return [
-            {
-                "bin_index": bin.bin_index,
-                "price": bin.price,
-                "liquidity": bin.liquidity,
-                "is_active": bin.is_active,
-                "price_label": self._format_price_label(bin.price),
-                "tick": bin.tick
-            }
-            for bin in self.bins
-        ]
     
     def get_tick_data_for_charts(self) -> List[Dict]:
         """Get tick data formatted for bar chart visualization"""
-        return self.get_bin_data_for_charts()  # Same format for compatibility
+        # Get all ticks sorted by value
+        sorted_ticks = sorted(self.ticks.keys())
+        
+        if not sorted_ticks:
+            return []
+        
+        tick_data = []
+        for i, tick in enumerate(sorted_ticks):
+            price = (tick_to_sqrt_price_x96(tick) / Q96) ** 2
+            
+            # Calculate liquidity at this tick
+            liquidity_at_tick = 0
+            for position in self.positions:
+                if position.tick_lower <= tick < position.tick_upper:
+                    liquidity_at_tick += position.liquidity
+            
+            # Convert back to USD
+            liquidity_usd = liquidity_at_tick / 1e6
+            
+            tick_data.append({
+                "tick_index": i,
+                "price": price,
+                "liquidity": liquidity_usd,
+                "is_active": liquidity_usd > 1000,  # $1k threshold
+                "price_label": self._format_price_label(price),
+                "tick": tick
+            })
+        
+        return tick_data
     
     def _format_price_label(self, price: float) -> str:
         """Format price for display labels"""
@@ -965,7 +946,6 @@ class UniswapV3SlippageCalculator:
                 "current_price": current_price,
                 "new_price": new_price,
                 "effective_liquidity": self.pool.get_total_active_liquidity(),
-                "bins_consumed": []  # For backward compatibility
             }
             
         finally:
@@ -1033,7 +1013,6 @@ class UniswapV3SlippageCalculator:
                 "current_price": current_price_btc_per_moet,
                 "new_price": new_price_btc_per_moet,
                 "effective_liquidity": self.pool.get_total_active_liquidity(),
-                "bins_consumed": []  # For backward compatibility
             }
             
         finally:
@@ -1166,28 +1145,7 @@ class UniswapV3SlippageCalculator:
         return result
 
     def update_pool_state(self, swap_result: Dict[str, float]):
-        """Update pool state after a swap by consuming liquidity from bins"""
-        
-        # Update bin liquidity based on consumption
-        if "bins_consumed" in swap_result:
-            for bin_consumption in swap_result["bins_consumed"]:
-                bin_index = bin_consumption["bin_index"]
-                if bin_index < len(self.pool.bins):
-                    bin = self.pool.bins[bin_index]
-                    
-                    # Reduce bin liquidity based on actual consumption
-                    # Since we consumed from one side, reduce total liquidity by 2x the consumed amount
-                    if swap_result["token_in"] == "MOET":
-                        liquidity_consumed = bin_consumption["moet_consumed"] * 2
-                    else:
-                        liquidity_consumed = bin_consumption.get("btc_consumed", 0) * 2
-                    
-                    # Update bin liquidity
-                    bin.liquidity = max(0, bin.liquidity - liquidity_consumed)
-                    
-                    # Deactivate bin if liquidity too low
-                    if bin.liquidity < 1000:  # Minimum $1k threshold
-                        bin.is_active = False
+        """Update pool state after a swap - simplified without bin consumption tracking"""
         
         # Update pool's current price based on the swap impact
         if "new_price" in swap_result and swap_result["new_price"] > 0:
@@ -1207,7 +1165,7 @@ class UniswapV3SlippageCalculator:
 
 def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.80) -> UniswapV3Pool:
     """
-    Create a MOET:BTC Uniswap v3 pool with discrete liquidity bins
+    Create a MOET:BTC Uniswap v3 pool with concentrated liquidity
     
     Args:
         pool_size_usd: Total pool size in USD
@@ -1215,14 +1173,13 @@ def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, con
         concentration: Liquidity concentration level (0.80 = 80% at peg)
         
     Returns:
-        UniswapV3Pool instance with discrete bins
+        UniswapV3Pool instance with concentrated liquidity positions
     """
     
     return UniswapV3Pool(
         pool_name="MOET:BTC",
         total_liquidity=pool_size_usd,
         btc_price=btc_price,
-        num_bins=100,
         concentration=concentration
         # fee_tier and tick_spacing will be set automatically based on pool type
     )
@@ -1230,7 +1187,7 @@ def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, con
 
 def create_yield_token_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.95) -> UniswapV3Pool:
     """
-    Create a MOET:Yield Token Uniswap v3 pool with discrete liquidity bins
+    Create a MOET:Yield Token Uniswap v3 pool with concentrated liquidity
     
     Args:
         pool_size_usd: Total pool size in USD
@@ -1238,28 +1195,18 @@ def create_yield_token_pool(pool_size_usd: float, btc_price: float = 100_000.0, 
         concentration: Liquidity concentration level (0.95 = 95% at peg)
         
     Returns:
-        UniswapV3Pool instance with discrete bins
+        UniswapV3Pool instance with concentrated liquidity positions
     """
     
     return UniswapV3Pool(
         pool_name="MOET:Yield_Token",
         total_liquidity=pool_size_usd,
         btc_price=btc_price,
-        num_bins=100,
         concentration=concentration
         # fee_tier and tick_spacing will be set automatically based on pool type
     )
 
 
-# Legacy factory function for backward compatibility
-def create_moet_btc_concentrated_pool(pool_size_usd: float, btc_price: float = 100_000.0) -> UniswapV3Pool:
-    """Legacy function - redirects to create_moet_btc_pool"""
-    return create_moet_btc_pool(pool_size_usd, btc_price)
-
-
-def create_yield_token_concentrated_pool(pool_size_usd: float, btc_price: float = 100_000.0) -> UniswapV3Pool:
-    """Legacy function - redirects to create_yield_token_pool"""
-    return create_yield_token_pool(pool_size_usd, btc_price)
 
 
 def calculate_rebalancing_cost_with_slippage(
