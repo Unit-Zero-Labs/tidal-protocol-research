@@ -1,7 +1,7 @@
 # High Tide vs AAVE Protocol Comparison
 ## Technical Whitepaper: Automated Rebalancing vs Traditional Liquidation Analysis
 
-**Analysis Date:** September 06, 2025  
+**Analysis Date:** September 08, 2025  
 **Protocol Comparison:** High Tide Automated Rebalancing vs AAVE Traditional Liquidation  
 **Market Scenario:** BTC Price Decline Analysis (23.66% decline)
 
@@ -129,8 +129,8 @@ Protocol_Fees = Variable based on pool utilization
 | Metric | High Tide | AAVE | Improvement |
 |--------|-----------|------|-------------|
 | Mean Survival Rate | 100.0% | 100.0% | +0.0% |
-| Mean Total Cost | $86 | $7,309 | -98.8% |
-| Cost per Agent | $6 | $487 | Cost Efficient |
+| Mean Total Cost | $86 | $7,446 | -98.8% |
+| Cost per Agent | $6 | $496 | Cost Efficient |
 
 
 ### 3.2 Scenario-by-Scenario Performance Analysis
@@ -143,7 +143,7 @@ Protocol_Fees = Variable based on pool utilization
 - **AAVE Survival:** 100.0%
 - **Survival Improvement:** +0.0%
 - **High Tide Cost:** $81
-- **AAVE Cost:** $23,361
+- **AAVE Cost:** $23,762
 - **Cost Reduction:** 99.7%
 - **Win Rate:** 0.0%
 
@@ -154,7 +154,7 @@ Protocol_Fees = Variable based on pool utilization
 - **AAVE Survival:** 100.0%
 - **Survival Improvement:** +0.0%
 - **High Tide Cost:** $62
-- **AAVE Cost:** $1,626
+- **AAVE Cost:** $1,633
 - **Cost Reduction:** 96.2%
 - **Win Rate:** 0.0%
 
@@ -176,8 +176,8 @@ Protocol_Fees = Variable based on pool utilization
 - **AAVE Survival:** 100.0%
 - **Survival Improvement:** +0.0%
 - **High Tide Cost:** $101
-- **AAVE Cost:** $7,890
-- **Cost Reduction:** 98.7%
+- **AAVE Cost:** $8,095
+- **Cost Reduction:** 98.8%
 - **Win Rate:** 0.0%
 
 #### Scenario 5: Balanced 1.1
@@ -187,8 +187,8 @@ Protocol_Fees = Variable based on pool utilization
 - **AAVE Survival:** 100.0%
 - **Survival Improvement:** +0.0%
 - **High Tide Cost:** $106
-- **AAVE Cost:** $3,666
-- **Cost Reduction:** 97.1%
+- **AAVE Cost:** $3,741
+- **Cost Reduction:** 97.2%
 - **Win Rate:** 0.0%
 
 
@@ -220,7 +220,7 @@ Protocol_Fees = Variable based on pool utilization
 **AAVE Cost Breakdown:**
 - **Mean Liquidation Penalty:** $458
 - **Mean Collateral Loss:** $0
-- **Mean Protocol Fees:** $29
+- **Mean Protocol Fees:** $38
 - **Total Mean Cost:** $458
 
 
@@ -233,7 +233,7 @@ Protocol_Fees = Variable based on pool utilization
 
 **AAVE Capital Efficiency:**
 - **Position Preservation Rate:** 100.0%
-- **Average Cost per Liquidated Position:** $7,309
+- **Average Cost per Liquidated Position:** $7,446
 - **Capital Utilization:** Forced deleveraging during market stress
 
 ### 4.3 Risk-Adjusted Returns
