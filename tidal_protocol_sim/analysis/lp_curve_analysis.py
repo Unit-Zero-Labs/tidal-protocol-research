@@ -560,29 +560,60 @@ Key Insights:
     
     def _get_concentrated_liquidity(self, pool: UniswapV3Pool, pool_name: str) -> float:
         """Get total liquidity in the concentrated range for a pool"""
-        if not pool or not pool.bins:
+        if not pool or not pool.positions:
             return 0.0
         
+        # Import required functions for tick-price conversion
+        from ..core.uniswap_v3_math import tick_to_sqrt_price_x96, Q96
+        import math
+        
         if "MOET:BTC" in pool_name:
-            # For MOET:BTC, concentrated liquidity is the SINGLE peg bin
+            # For MOET:BTC, concentrated liquidity is around the peg price
             peg_price = 0.00001  # BTC per MOET
-            # Find the bin at the exact peg price
-            for bin in pool.bins:
-                if bin.is_active and abs(bin.price - peg_price) < 1e-8:  # Very close to exact peg
-                    return bin.liquidity
-            return 0.0
-        else:
-            # For yield tokens, concentrated range is tight peg
-            peg_price = 1.0
-            concentrated_min = peg_price * 0.999999
-            concentrated_max = peg_price * 1.000001
+            
+            # Convert peg price to tick for comparison
+            sqrt_peg_price = math.sqrt(peg_price)
+            peg_sqrt_price_x96 = int(sqrt_peg_price * Q96)
+            
+            # Find the tick closest to peg price
+            from ..core.uniswap_v3_math import sqrt_price_x96_to_tick
+            peg_tick = sqrt_price_x96_to_tick(peg_sqrt_price_x96)
+            
+            # Define concentrated range around peg (±100 ticks ≈ ±1%)
+            concentrated_tick_range = 100
+            concentrated_min_tick = peg_tick - concentrated_tick_range
+            concentrated_max_tick = peg_tick + concentrated_tick_range
             
             concentrated_liquidity = 0.0
-            for bin in pool.bins:
-                if bin.is_active and concentrated_min <= bin.price <= concentrated_max:
-                    concentrated_liquidity += bin.liquidity
+            for position in pool.positions:
+                # Check if position overlaps with concentrated range
+                if (position.tick_lower <= concentrated_max_tick and 
+                    position.tick_upper >= concentrated_min_tick):
+                    # Add the liquidity from this position
+                    concentrated_liquidity += position.liquidity
             
-            return concentrated_liquidity
+            return concentrated_liquidity / 1e6  # Convert back to USD
+        else:
+            # For yield tokens, concentrated range is very tight around 1:1 peg
+            peg_price = 1.0
+            
+            # Convert peg price to tick (tick 0 = price 1.0)
+            peg_tick = 0
+            
+            # Define very tight concentrated range around peg (±10 ticks ≈ ±0.1%)
+            concentrated_tick_range = 10
+            concentrated_min_tick = peg_tick - concentrated_tick_range
+            concentrated_max_tick = peg_tick + concentrated_tick_range
+            
+            concentrated_liquidity = 0.0
+            for position in pool.positions:
+                # Check if position overlaps with concentrated range
+                if (position.tick_lower <= concentrated_max_tick and 
+                    position.tick_upper >= concentrated_min_tick):
+                    # Add the liquidity from this position
+                    concentrated_liquidity += position.liquidity
+            
+            return concentrated_liquidity / 1e6  # Convert back to USD
 
     def _create_tick_comparison_chart(self, ax, tight_final: PoolSnapshot, conservative_final: PoolSnapshot, price_label: str):
         """Create tick comparison chart for concentration comparison with proper scaling"""
