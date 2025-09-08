@@ -210,7 +210,7 @@ def compute_swap_step(
     
     if exact_in:
         # Calculate amount after fees
-        amount_remaining_less_fee = mul_div(amount_remaining, 1000000 - fee_pips, 1000000)
+        amount_remaining_less_fee = mul_div_rounding_up(amount_remaining, 1000000 - fee_pips, 1000000)
         
         # Calculate how much input is needed to reach target price
         amount_in = get_amount0_delta(
@@ -341,7 +341,7 @@ class UniswapV3Pool:
     total_liquidity: float  # Total pool size in USD
     btc_price: float = 100_000.0  # BTC price in USD
     fee_tier: float = None  # Will be set based on pool type
-    concentration: float = 0.80  # Concentration level (0.80 = 80% at peg)
+    concentration: float = None  # Will be set based on pool type
     tick_spacing: int = None  # Will be set based on pool type
     
     # Core Uniswap V3 state
@@ -365,21 +365,25 @@ class UniswapV3Pool:
         self.ticks = {} if self.ticks is None else self.ticks
         self.positions = [] if self.positions is None else self.positions
         
-        # Set fee tier and tick spacing based on pool type (following Uniswap V3 conventions)
+        # Set fee tier, tick spacing, and concentration based on pool type (following Uniswap V3 conventions)
         if "MOET:BTC" in self.pool_name:
             # MOET:BTC pairs use 0.3% fee tier (more volatile, less correlated assets)
             if self.fee_tier is None:
                 self.fee_tier = 0.003  # 0.3% fee tier
             if self.tick_spacing is None:
                 self.tick_spacing = TICK_SPACING_0_3_PERCENT  # 60
+            if self.concentration is None:
+                self.concentration = 0.80  # 80% concentration for volatile pairs
         else:
             # MOET:YieldToken pairs use 0.05% fee tier (stable, highly correlated assets)
             if self.fee_tier is None:
                 self.fee_tier = 0.0005  # 0.05% fee tier  
             if self.tick_spacing is None:
                 self.tick_spacing = TICK_SPACING_0_0_5_PERCENT  # 10
+            if self.concentration is None:
+                self.concentration = 0.95  # 95% concentration for stable pairs
         
-        # Determine pool type and calculate dynamic pricing using proper Uniswap V3 math
+        # Determine pool type and calculate dynamic pricing Uniswap V3 math
         if "MOET:BTC" in self.pool_name:
             self.concentration_type = "moet_btc"
             
@@ -387,7 +391,7 @@ class UniswapV3Pool:
             # MOET = $1, BTC = self.btc_price, so price = MOET_value / BTC_value = 1 / btc_price
             market_price = 1.0 / self.btc_price  # This gives us BTC per MOET (token1/token0)
             
-            # Convert market price to sqrt_price_x96 using proper Uniswap V3 math
+            # Convert market price to sqrt_price_x96  Uniswap V3 math
             # sqrt_price_x96 = sqrt(price) * 2^96
             sqrt_price = math.sqrt(market_price)
             self.sqrt_price_x96 = int(sqrt_price * Q96)
