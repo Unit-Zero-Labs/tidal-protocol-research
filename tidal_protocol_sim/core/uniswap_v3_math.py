@@ -21,7 +21,10 @@ from dataclasses import dataclass
 MIN_TICK = -887272
 MAX_TICK = 887272
 Q96 = 2 ** 96
-TICK_SPACING_0_3_PERCENT = 60  # For 0.3% fee tier
+# Uniswap V3 Fee Tiers and Tick Spacings (Official Values)
+TICK_SPACING_0_0_5_PERCENT = 10   # For 0.05% fee tier (stable pairs like MOET/YT)
+TICK_SPACING_0_3_PERCENT = 60     # For 0.3% fee tier (standard pairs like MOET/BTC)
+TICK_SPACING_1_PERCENT = 200      # For 1% fee tier (exotic/volatile pairs)
 MIN_SQRT_RATIO = 4295128739  # sqrt(1.0001^-887272) * 2^96
 MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342  # sqrt(1.0001^887272) * 2^96
 
@@ -337,9 +340,9 @@ class UniswapV3Pool:
     pool_name: str  # "MOET:BTC" or "MOET:Yield_Token"
     total_liquidity: float  # Total pool size in USD
     btc_price: float = 100_000.0  # BTC price in USD
-    fee_tier: float = 0.003  # 0.3% fee tier
+    fee_tier: float = None  # Will be set based on pool type
     concentration: float = 0.80  # Concentration level (0.80 = 80% at peg)
-    tick_spacing: int = TICK_SPACING_0_3_PERCENT  # Tick spacing for this fee tier
+    tick_spacing: int = None  # Will be set based on pool type
     
     # Core Uniswap V3 state
     sqrt_price_x96: int = Q96  # Current sqrt price in Q64.96 format
@@ -362,22 +365,55 @@ class UniswapV3Pool:
         self.ticks = {} if self.ticks is None else self.ticks
         self.positions = [] if self.positions is None else self.positions
         
-        # Determine pool type and peg price using exact calculations
+        # Set fee tier and tick spacing based on pool type (following Uniswap V3 conventions)
+        if "MOET:BTC" in self.pool_name:
+            # MOET:BTC pairs use 0.3% fee tier (more volatile, less correlated assets)
+            if self.fee_tier is None:
+                self.fee_tier = 0.003  # 0.3% fee tier
+            if self.tick_spacing is None:
+                self.tick_spacing = TICK_SPACING_0_3_PERCENT  # 60
+        else:
+            # MOET:YieldToken pairs use 0.05% fee tier (stable, highly correlated assets)
+            if self.fee_tier is None:
+                self.fee_tier = 0.0005  # 0.05% fee tier  
+            if self.tick_spacing is None:
+                self.tick_spacing = TICK_SPACING_0_0_5_PERCENT  # 10
+        
+        # Determine pool type and calculate dynamic pricing using proper Uniswap V3 math
         if "MOET:BTC" in self.pool_name:
             self.concentration_type = "moet_btc"
-            # For MOET:BTC, we want a small price (1 BTC = 100,000 MOET)
-            # This corresponds to approximately tick -115129 for 0.00001 price
-            self.tick_current = -115129  # Exact tick for ~0.00001 price
-            self.tick_current = max(MIN_TICK + 1000, min(MAX_TICK - 1000, self.tick_current))
+            
+            # Calculate the actual market price: MOET/BTC ratio
+            # MOET = $1, BTC = self.btc_price, so price = MOET_value / BTC_value = 1 / btc_price
+            market_price = 1.0 / self.btc_price  # This gives us BTC per MOET (token1/token0)
+            
+            # Convert market price to sqrt_price_x96 using proper Uniswap V3 math
+            # sqrt_price_x96 = sqrt(price) * 2^96
+            sqrt_price = math.sqrt(market_price)
+            self.sqrt_price_x96 = int(sqrt_price * Q96)
+            
+            # Ensure sqrt_price_x96 is within valid bounds
+            self.sqrt_price_x96 = max(MIN_SQRT_RATIO, min(MAX_SQRT_RATIO, self.sqrt_price_x96))
+            
+            # Convert sqrt_price_x96 to tick using our existing function
+            self.tick_current = sqrt_price_x96_to_tick(self.sqrt_price_x96)
+            
+            # Align tick to proper tick spacing for this fee tier
+            self.tick_current = (self.tick_current // self.tick_spacing) * self.tick_spacing
+            
+            # Recalculate sqrt_price_x96 from the aligned tick for consistency
             self.sqrt_price_x96 = tick_to_sqrt_price_x96(self.tick_current)
-            # Calculate exact peg price from sqrt_price_x96
-            sqrt_price = self.sqrt_price_x96 / Q96
-            self.peg_price = sqrt_price * sqrt_price
+            
+            # Calculate peg price from the final sqrt_price_x96
+            sqrt_price_final = self.sqrt_price_x96 / Q96
+            self.peg_price = sqrt_price_final * sqrt_price_final
+            
         else:
             self.concentration_type = "yield_token"
-            # Set current price to exact 1:1 peg
+            # For yield tokens, both MOET and YieldToken are worth $1, so price = 1.0
+            # Tick 0 corresponds to price = 1.0001^0 = 1.0 (perfect 1:1 peg)
             self.tick_current = 0
-            self.sqrt_price_x96 = Q96
+            self.sqrt_price_x96 = tick_to_sqrt_price_x96(0)  # Use our function for consistency
             self.peg_price = 1.0
         
         # Initialize concentrated liquidity positions
@@ -827,10 +863,6 @@ class UniswapV3Pool:
         self.token0_reserve = total_active_liquidity / 2  # MOET reserve in USD
         self.token1_reserve = total_active_liquidity / 2  # BTC reserve in USD
     
-# Old bin-based methods removed - now using proper tick-based positions
-
-
-# Old methods cleaned up - using proper Uniswap V3 implementation above
 
 
 class UniswapV3SlippageCalculator:
@@ -1187,8 +1219,8 @@ def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, con
         total_liquidity=pool_size_usd,
         btc_price=btc_price,
         num_bins=100,
-        fee_tier=0.003,  # 0.3% fee tier
         concentration=concentration
+        # fee_tier and tick_spacing will be set automatically based on pool type
     )
 
 
@@ -1210,8 +1242,8 @@ def create_yield_token_pool(pool_size_usd: float, btc_price: float = 100_000.0, 
         total_liquidity=pool_size_usd,
         btc_price=btc_price,
         num_bins=100,
-        fee_tier=0.003,  # 0.3% fee tier
         concentration=concentration
+        # fee_tier and tick_spacing will be set automatically based on pool type
     )
 
 
