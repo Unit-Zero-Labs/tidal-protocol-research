@@ -197,88 +197,139 @@ def compute_swap_step(
     fee_pips: int
 ) -> Tuple[int, int, int, int]:
     """
-    Compute a single swap step using exact Uniswap V3 logic
+    Enhanced compute swap step with proper cross-tick handling
+    
+    Implements two-scenario logic:
+    1. Range has enough liquidity (stays within current range)
+    2. Range needs cross-tick transition (moves to next tick)
+    
     Returns: (sqrt_price_next_x96, amount_in, amount_out, fee_amount)
     """
+    if liquidity == 0:
+        return sqrt_price_current_x96, 0, 0, 0
+    
     zero_for_one = sqrt_price_current_x96 >= sqrt_price_target_x96
     exact_in = amount_remaining >= 0
     
-    sqrt_price_next_x96 = 0
-    amount_in = 0
-    amount_out = 0
-    fee_amount = 0
+    # Validate inputs
+    if exact_in and amount_remaining <= 0:
+        return sqrt_price_current_x96, 0, 0, 0
+    if not exact_in and amount_remaining >= 0:
+        return sqrt_price_current_x96, 0, 0, 0
+    
+    # Calculate amount after fees for exact input
+    amount_remaining_less_fee = 0
+    if exact_in:
+        if fee_pips >= 1000000:
+            raise ValueError("Fee too high")
+        amount_remaining_less_fee = mul_div(amount_remaining, 1000000 - fee_pips, 1000000)
+        if amount_remaining_less_fee <= 0:
+            return sqrt_price_current_x96, 0, 0, 0
+    
+    # Scenario 1: Calculate required input to reach target price
+    try:
+        if zero_for_one:
+            amount_in_required = get_amount0_delta(
+                sqrt_price_target_x96, sqrt_price_current_x96, liquidity, True
+            )
+        else:
+            amount_in_required = get_amount1_delta(
+                sqrt_price_current_x96, sqrt_price_target_x96, liquidity, True
+            )
+    except (ValueError, ZeroDivisionError):
+        # Math error - return current state
+        return sqrt_price_current_x96, 0, 0, 0
+    
+    # Scenario 2: Check if we can reach target with available amount
+    sqrt_price_next_x96 = sqrt_price_current_x96
     
     if exact_in:
-        # Calculate amount after fees
-        amount_remaining_less_fee = mul_div_rounding_up(amount_remaining, 1000000 - fee_pips, 1000000)
-        
-        # Calculate how much input is needed to reach target price
-        amount_in = get_amount0_delta(
-            sqrt_price_target_x96, sqrt_price_current_x96, liquidity, True
-        ) if zero_for_one else get_amount1_delta(
-            sqrt_price_current_x96, sqrt_price_target_x96, liquidity, True
-        )
-        
-        if amount_remaining_less_fee >= amount_in:
-            # We can reach the target price
+        if amount_remaining_less_fee >= amount_in_required:
+            # Scenario 1: We can reach the target price
             sqrt_price_next_x96 = sqrt_price_target_x96
         else:
-            # We cannot reach target price with remaining amount
-            sqrt_price_next_x96 = get_next_sqrt_price_from_input(
-                sqrt_price_current_x96, liquidity, amount_remaining_less_fee, zero_for_one
-            )
+            # Scenario 2: We cannot reach target, calculate achievable price
+            try:
+                sqrt_price_next_x96 = get_next_sqrt_price_from_input(
+                    sqrt_price_current_x96, liquidity, amount_remaining_less_fee, zero_for_one
+                )
+            except (ValueError, ZeroDivisionError):
+                return sqrt_price_current_x96, 0, 0, 0
     else:
         # Exact output case
-        amount_out = get_amount1_delta(
-            sqrt_price_target_x96, sqrt_price_current_x96, liquidity, False
-        ) if zero_for_one else get_amount0_delta(
-            sqrt_price_current_x96, sqrt_price_target_x96, liquidity, False
-        )
+        try:
+            if zero_for_one:
+                amount_out_available = get_amount1_delta(
+                    sqrt_price_target_x96, sqrt_price_current_x96, liquidity, False
+                )
+            else:
+                amount_out_available = get_amount0_delta(
+                    sqrt_price_current_x96, sqrt_price_target_x96, liquidity, False
+                )
+            
+            if -amount_remaining >= amount_out_available:
+                # We can reach the target price
+                sqrt_price_next_x96 = sqrt_price_target_x96
+            else:
+                # We cannot reach target, calculate achievable price
+                sqrt_price_next_x96 = get_next_sqrt_price_from_output(
+                    sqrt_price_current_x96, liquidity, -amount_remaining, zero_for_one
+                )
+        except (ValueError, ZeroDivisionError):
+            return sqrt_price_current_x96, 0, 0, 0
+    
+    # Validate price bounds
+    sqrt_price_next_x96 = max(MIN_SQRT_RATIO, min(MAX_SQRT_RATIO, sqrt_price_next_x96))
+    
+    # Check if we made progress
+    if sqrt_price_next_x96 == sqrt_price_current_x96:
+        return sqrt_price_current_x96, 0, 0, 0
+    
+    # Calculate actual amounts based on price change
+    try:
+        max_price_reached = (sqrt_price_target_x96 == sqrt_price_next_x96)
         
-        if -amount_remaining >= amount_out:
-            # We can reach the target price
-            sqrt_price_next_x96 = sqrt_price_target_x96
-        else:
-            # We cannot reach target price with remaining amount
-            sqrt_price_next_x96 = get_next_sqrt_price_from_output(
-                sqrt_price_current_x96, liquidity, -amount_remaining, zero_for_one
+        if zero_for_one:
+            # Token0 -> Token1 swap
+            amount_in = get_amount0_delta(
+                sqrt_price_next_x96, sqrt_price_current_x96, liquidity, True
             )
-    
-    max_price_reached = sqrt_price_target_x96 == sqrt_price_next_x96
-    
-    # Calculate actual amounts based on the price change
-    if zero_for_one:
-        amount_in = get_amount0_delta(
-            sqrt_price_next_x96, sqrt_price_current_x96, liquidity, True
-        ) if not max_price_reached or not exact_in else get_amount0_delta(
-            sqrt_price_next_x96, sqrt_price_current_x96, liquidity, False
-        )
+            amount_out = get_amount1_delta(
+                sqrt_price_next_x96, sqrt_price_current_x96, liquidity, False
+            )
+        else:
+            # Token1 -> Token0 swap
+            amount_in = get_amount1_delta(
+                sqrt_price_current_x96, sqrt_price_next_x96, liquidity, True
+            )
+            amount_out = get_amount0_delta(
+                sqrt_price_current_x96, sqrt_price_next_x96, liquidity, False
+            )
         
-        amount_out = get_amount1_delta(
-            sqrt_price_next_x96, sqrt_price_current_x96, liquidity, False
-        )
-    else:
-        amount_in = get_amount1_delta(
-            sqrt_price_current_x96, sqrt_price_next_x96, liquidity, True
-        ) if not max_price_reached or not exact_in else get_amount1_delta(
-            sqrt_price_current_x96, sqrt_price_next_x96, liquidity, False
-        )
+        # Cap output amount for exact output swaps
+        if not exact_in and amount_out > -amount_remaining:
+            amount_out = -amount_remaining
         
-        amount_out = get_amount0_delta(
-            sqrt_price_current_x96, sqrt_price_next_x96, liquidity, False
-        )
-    
-    # Cap output amount if exact output
-    if not exact_in and amount_out > -amount_remaining:
-        amount_out = -amount_remaining
-    
-    # Calculate fees
-    if exact_in and sqrt_price_next_x96 != sqrt_price_target_x96:
-        # Not all input was used, so fee is on remaining amount
-        fee_amount = amount_remaining - amount_in
-    else:
-        # Standard fee calculation
-        fee_amount = mul_div_rounding_up(amount_in, fee_pips, 1000000 - fee_pips)
+        # Enhanced fee calculation
+        if exact_in:
+            if max_price_reached:
+                # We reached target - fee on actual input used
+                fee_amount = mul_div_rounding_up(amount_in, fee_pips, 1000000 - fee_pips)
+            else:
+                # We didn't reach target - fee on remaining amount
+                fee_amount = amount_remaining - amount_in
+        else:
+            # Exact output - fee on input amount
+            fee_amount = mul_div_rounding_up(amount_in, fee_pips, 1000000 - fee_pips)
+        
+        # Ensure non-negative values
+        amount_in = max(0, amount_in)
+        amount_out = max(0, amount_out)
+        fee_amount = max(0, fee_amount)
+        
+    except (ValueError, ZeroDivisionError):
+        # Return safe values on calculation error
+        return sqrt_price_current_x96, 0, 0, 0
     
     return sqrt_price_next_x96, amount_in, amount_out, fee_amount
 
@@ -315,6 +366,125 @@ class TickInfo:
     liquidity_gross: int = 0  # Total liquidity referencing this tick
     liquidity_net: int = 0   # Net liquidity change at this tick
     initialized: bool = False  # Whether this tick has been initialized
+
+
+@dataclass
+class TickBitmap:
+    """Efficient tick finding using bitmap approach (O(1) instead of O(n))"""
+    bitmap: Dict[int, int] = None  # word_index -> bitmap_word
+    
+    def __post_init__(self):
+        if self.bitmap is None:
+            self.bitmap = {}
+    
+    def next_initialized_tick(self, tick: int, tick_spacing: int, zero_for_one: bool) -> int:
+        """
+        Find next initialized tick using bitmap lookup
+        
+        Args:
+            tick: Current tick
+            tick_spacing: Tick spacing for the pool
+            zero_for_one: Direction of search
+            
+        Returns:
+            Next initialized tick or boundary tick
+        """
+        if zero_for_one:
+            # Moving down (decreasing price) - find next tick below current
+            return self._next_initialized_tick_within_one_word(tick, tick_spacing, zero_for_one)
+        else:
+            # Moving up (increasing price) - find next tick above current
+            return self._next_initialized_tick_within_one_word(tick, tick_spacing, zero_for_one)
+    
+    def _next_initialized_tick_within_one_word(self, tick: int, tick_spacing: int, zero_for_one: bool) -> int:
+        """Find next initialized tick within one word (256 ticks)"""
+        # Compress tick to word position
+        compressed = tick // tick_spacing
+        
+        if zero_for_one:
+            # Moving left (decreasing tick)
+            word_pos = compressed >> 8  # Divide by 256
+            bit_pos = compressed & 0xFF  # Modulo 256
+            
+            # Get bitmap word
+            word = self.bitmap.get(word_pos, 0)
+            
+            # Mask off bits at or above the current position
+            mask = (1 << bit_pos) - 1
+            masked = word & mask
+            
+            if masked != 0:
+                # Found initialized tick in current word
+                most_significant_bit = self._most_significant_bit(masked)
+                return (word_pos * 256 + most_significant_bit) * tick_spacing
+            else:
+                # Search previous words
+                word_pos -= 1
+                while word_pos >= (MIN_TICK // tick_spacing) >> 8:
+                    word = self.bitmap.get(word_pos, 0)
+                    if word != 0:
+                        most_significant_bit = self._most_significant_bit(word)
+                        return (word_pos * 256 + most_significant_bit) * tick_spacing
+                    word_pos -= 1
+                
+                # No more ticks - return minimum
+                return MIN_TICK
+        else:
+            # Moving right (increasing tick)
+            word_pos = compressed >> 8
+            bit_pos = compressed & 0xFF
+            
+            # Get bitmap word
+            word = self.bitmap.get(word_pos, 0)
+            
+            # Mask off bits at or below the current position
+            mask = ~((1 << (bit_pos + 1)) - 1)
+            masked = word & mask
+            
+            if masked != 0:
+                # Found initialized tick in current word
+                least_significant_bit = self._least_significant_bit(masked)
+                return (word_pos * 256 + least_significant_bit) * tick_spacing
+            else:
+                # Search next words
+                word_pos += 1
+                while word_pos <= (MAX_TICK // tick_spacing) >> 8:
+                    word = self.bitmap.get(word_pos, 0)
+                    if word != 0:
+                        least_significant_bit = self._least_significant_bit(word)
+                        return (word_pos * 256 + least_significant_bit) * tick_spacing
+                    word_pos += 1
+                
+                # No more ticks - return maximum
+                return MAX_TICK
+    
+    def flip_tick(self, tick: int, tick_spacing: int):
+        """Flip tick state in bitmap when liquidity is added/removed"""
+        compressed = tick // tick_spacing
+        word_pos = compressed >> 8  # Divide by 256
+        bit_pos = compressed & 0xFF  # Modulo 256
+        
+        if word_pos not in self.bitmap:
+            self.bitmap[word_pos] = 0
+        
+        # Flip the bit
+        self.bitmap[word_pos] ^= (1 << bit_pos)
+        
+        # Clean up empty words
+        if self.bitmap[word_pos] == 0:
+            del self.bitmap[word_pos]
+    
+    def _most_significant_bit(self, x: int) -> int:
+        """Find the most significant bit position (0-indexed from right)"""
+        if x == 0:
+            return -1
+        return x.bit_length() - 1
+    
+    def _least_significant_bit(self, x: int) -> int:
+        """Find the least significant bit position (0-indexed from right)"""
+        if x == 0:
+            return -1
+        return (x & -x).bit_length() - 1
     
 @dataclass
 class Position:
@@ -343,6 +513,13 @@ class UniswapV3Pool:
     # Tick and position data
     ticks: Dict[int, TickInfo] = None  # tick -> TickInfo
     positions: List[Position] = None  # List of liquidity positions
+    tick_bitmap: TickBitmap = None  # Efficient tick finding
+    
+    # Enhanced features
+    use_enhanced_cross_tick: bool = True
+    use_tick_bitmap: bool = True
+    max_swap_iterations: int = 1000
+    debug_cross_tick: bool = False
     
     # Legacy fields for backward compatibility
     token0_reserve: Optional[float] = None  # MOET reserve (calculated from ticks)
@@ -353,6 +530,7 @@ class UniswapV3Pool:
         # Initialize tick and position data structures
         self.ticks = {} if self.ticks is None else self.ticks
         self.positions = [] if self.positions is None else self.positions
+        self.tick_bitmap = TickBitmap() if self.tick_bitmap is None else self.tick_bitmap
         
         # Set fee tier, tick spacing, and concentration based on pool type (following Uniswap V3 conventions)
         if "MOET:BTC" in self.pool_name:
@@ -446,19 +624,33 @@ class UniswapV3Pool:
         if remaining_liquidity > 0:
             wide_tick_range = 1000  # Approximately 10% price range
             
-            # Create 3 positions in wider range
-            for i in range(3):
-                range_multiplier = (i + 2) // 4  # 0.5, 0.75, 1.0
-                inner_tick_range = wide_tick_range * range_multiplier
-                
-                pos_tick_lower = ((peg_tick - inner_tick_range) // self.tick_spacing) * self.tick_spacing
-                pos_tick_upper = ((peg_tick + inner_tick_range) // self.tick_spacing) * self.tick_spacing
-                
-                pos_tick_lower = max(MIN_TICK + self.tick_spacing, pos_tick_lower)
-                pos_tick_upper = min(MAX_TICK - self.tick_spacing, pos_tick_upper)
-                
-                if pos_tick_lower < pos_tick_upper:
-                    self._add_position(pos_tick_lower, pos_tick_upper, remaining_liquidity // 3)
+            # Create 3 positions in wider range with better distribution
+            position_liquidity = remaining_liquidity // 3
+            
+            # Position 2a: Medium range
+            med_tick_lower = ((peg_tick - wide_tick_range // 2) // self.tick_spacing) * self.tick_spacing
+            med_tick_upper = ((peg_tick + wide_tick_range // 2) // self.tick_spacing) * self.tick_spacing
+            med_tick_lower = max(MIN_TICK + self.tick_spacing, med_tick_lower)
+            med_tick_upper = min(MAX_TICK - self.tick_spacing, med_tick_upper)
+            if med_tick_lower < med_tick_upper:
+                self._add_position(med_tick_lower, med_tick_upper, position_liquidity)
+            
+            # Position 2b: Wide range
+            wide_tick_lower = ((peg_tick - wide_tick_range) // self.tick_spacing) * self.tick_spacing
+            wide_tick_upper = ((peg_tick + wide_tick_range) // self.tick_spacing) * self.tick_spacing
+            wide_tick_lower = max(MIN_TICK + self.tick_spacing, wide_tick_lower)
+            wide_tick_upper = min(MAX_TICK - self.tick_spacing, wide_tick_upper)
+            if wide_tick_lower < wide_tick_upper:
+                self._add_position(wide_tick_lower, wide_tick_upper, position_liquidity)
+            
+            # Position 2c: Very wide range
+            very_wide_range = wide_tick_range * 2
+            vwide_tick_lower = ((peg_tick - very_wide_range) // self.tick_spacing) * self.tick_spacing
+            vwide_tick_upper = ((peg_tick + very_wide_range) // self.tick_spacing) * self.tick_spacing
+            vwide_tick_lower = max(MIN_TICK + self.tick_spacing, vwide_tick_lower)
+            vwide_tick_upper = min(MAX_TICK - self.tick_spacing, vwide_tick_upper)
+            if vwide_tick_lower < vwide_tick_upper:
+                self._add_position(vwide_tick_lower, vwide_tick_upper, remaining_liquidity - 2 * position_liquidity)
     
     def _initialize_yield_token_positions(self):
         """Initialize MOET:Yield Token concentrated liquidity positions using exact tick math"""
@@ -503,6 +695,9 @@ class UniswapV3Pool:
         self.positions.append(position)
         
         # Update tick data
+        lower_was_initialized = tick_lower in self.ticks and self.ticks[tick_lower].initialized
+        upper_was_initialized = tick_upper in self.ticks and self.ticks[tick_upper].initialized
+        
         if tick_lower not in self.ticks:
             self.ticks[tick_lower] = TickInfo()
         if tick_upper not in self.ticks:
@@ -516,6 +711,13 @@ class UniswapV3Pool:
         self.ticks[tick_upper].liquidity_net -= liquidity
         self.ticks[tick_upper].liquidity_gross += liquidity
         self.ticks[tick_upper].initialized = True
+        
+        # Update bitmap for newly initialized ticks
+        if self.use_tick_bitmap:
+            if not lower_was_initialized:
+                self.tick_bitmap.flip_tick(tick_lower, self.tick_spacing)
+            if not upper_was_initialized:
+                self.tick_bitmap.flip_tick(tick_upper, self.tick_spacing)
         
         # Update current liquidity if position includes current tick
         if tick_lower <= self.tick_current < tick_upper:
@@ -561,67 +763,77 @@ class UniswapV3Pool:
         # Convert fee to pips (0.003 = 3000 pips)
         fee_pips = int(self.fee_tier * 1000000)
         
-        # Continue swapping until amount is exhausted or price limit is reached
-        # Add safety counter to prevent infinite loops
-        max_iterations = 1000
+        # Enhanced cross-tick swap loop
         iteration_count = 0
-        
-        # Debug flag - can be enabled for troubleshooting
-        debug_swap = False
         
         while (abs(state['amount_specified_remaining']) > 1 and  # Use tolerance instead of exact 0
                state['sqrt_price_x96'] != sqrt_price_limit_x96 and
-               iteration_count < max_iterations):
+               iteration_count < self.max_swap_iterations):
             
             iteration_count += 1
             
-            if debug_swap and iteration_count % 100 == 0:
-                print(f"Swap iteration {iteration_count}: remaining={state['amount_specified_remaining']}, price={state['sqrt_price_x96']}")
+            if self.debug_cross_tick and iteration_count % 100 == 0:
+                print(f"Cross-tick swap iteration {iteration_count}: remaining={state['amount_specified_remaining']}, price={state['sqrt_price_x96']}")
             
-            # Store previous state to detect if we're making progress
+            # Store previous state to detect progress
             prev_amount_remaining = state['amount_specified_remaining']
             prev_sqrt_price = state['sqrt_price_x96']
+            prev_liquidity = state['liquidity']
             
-            # Find the next initialized tick
-            tick_next = self._next_initialized_tick(state['tick'], zero_for_one)
-            
-            # Check if we have no more liquidity to trade through
-            if ((zero_for_one and tick_next == MIN_TICK) or 
-                (not zero_for_one and tick_next == MAX_TICK)):
-                # No more initialized ticks in this direction - exit
-                if debug_swap:
-                    print(f"No more initialized ticks, exiting swap at iteration {iteration_count}")
-                break
-                
-            sqrt_price_next_x96 = tick_to_sqrt_price_x96(tick_next)
-            
-            # Ensure we don't exceed the price limit
-            if zero_for_one:
-                sqrt_price_target_x96 = max(sqrt_price_next_x96, sqrt_price_limit_x96)
+            # Find the next initialized tick using enhanced bitmap or fallback
+            if self.use_tick_bitmap and self.use_enhanced_cross_tick:
+                tick_next = self._next_initialized_tick_enhanced(state['tick'], zero_for_one)
             else:
-                sqrt_price_target_x96 = min(sqrt_price_next_x96, sqrt_price_limit_x96)
+                tick_next = self._next_initialized_tick(state['tick'], zero_for_one)
             
-            # Compute the swap step
+            # Boundary check - no more ticks available
+            if ((zero_for_one and tick_next <= MIN_TICK) or 
+                (not zero_for_one and tick_next >= MAX_TICK)):
+                if self.debug_cross_tick:
+                    print(f"Reached tick boundary, exiting swap at iteration {iteration_count}")
+                break
+            
+            # Calculate target price for this step
+            sqrt_price_next_tick = tick_to_sqrt_price_x96(tick_next)
+            
+            # Determine target price (either next tick or price limit)
+            if zero_for_one:
+                sqrt_price_target_x96 = max(sqrt_price_next_tick, sqrt_price_limit_x96)
+            else:
+                sqrt_price_target_x96 = min(sqrt_price_next_tick, sqrt_price_limit_x96)
+            
+            # Enhanced cross-tick computation
             try:
-                sqrt_price_next_x96, amount_in, amount_out, fee_amount = compute_swap_step(
-                    state['sqrt_price_x96'],
-                    sqrt_price_target_x96,
-                    state['liquidity'],
-                    state['amount_specified_remaining'],
-                    fee_pips
-                )
-            except (ValueError, ZeroDivisionError):
-                # Exit on math errors
+                if self.use_enhanced_cross_tick:
+                    sqrt_price_after_step, amount_in, amount_out, fee_amount = compute_swap_step(
+                        state['sqrt_price_x96'],
+                        sqrt_price_target_x96,
+                        state['liquidity'],
+                        state['amount_specified_remaining'],
+                        fee_pips
+                    )
+                else:
+                    # Fallback to original implementation
+                    sqrt_price_after_step, amount_in, amount_out, fee_amount = compute_swap_step(
+                        state['sqrt_price_x96'],
+                        sqrt_price_target_x96,
+                        state['liquidity'],
+                        state['amount_specified_remaining'],
+                        fee_pips
+                    )
+            except (ValueError, ZeroDivisionError) as e:
+                if self.debug_cross_tick:
+                    print(f"Math error in swap step: {e}")
                 break
             
-            # Check if we made no progress (stuck in infinite loop)
+            # Progress validation - ensure we're making meaningful progress
             if (amount_in == 0 and amount_out == 0 and 
-                state['sqrt_price_x96'] == prev_sqrt_price):
-                if debug_swap:
-                    print(f"No progress made, exiting swap at iteration {iteration_count}")
+                sqrt_price_after_step == state['sqrt_price_x96']):
+                if self.debug_cross_tick:
+                    print(f"No progress in swap step, exiting at iteration {iteration_count}")
                 break
             
-            # Update amounts
+            # Update swap state
             if exact_input:
                 state['amount_specified_remaining'] -= (amount_in + fee_amount)
                 state['amount_calculated'] -= amount_out
@@ -630,30 +842,46 @@ class UniswapV3Pool:
                 state['amount_calculated'] += (amount_in + fee_amount)
             
             # Update price
-            state['sqrt_price_x96'] = sqrt_price_next_x96
+            state['sqrt_price_x96'] = sqrt_price_after_step
             
-            # If we've reached the next tick, update liquidity
-            if sqrt_price_next_x96 == tick_to_sqrt_price_x96(tick_next):
+            # Enhanced cross-tick liquidity transition
+            if sqrt_price_after_step == sqrt_price_next_tick:
+                # We've crossed to the next tick - update liquidity
                 if tick_next in self.ticks and self.ticks[tick_next].initialized:
                     liquidity_net = self.ticks[tick_next].liquidity_net
+                    
+                    # Apply liquidity change based on direction (CORRECTED LOGIC)
                     if zero_for_one:
-                        liquidity_net = -liquidity_net
-                    state['liquidity'] += liquidity_net
+                        # Moving down (price decreasing): when crossing a tick downward,
+                        # we subtract the liquidity_net of that tick
+                        state['liquidity'] -= liquidity_net
+                    else:
+                        # Moving up (price increasing): when crossing a tick upward,
+                        # we add the liquidity_net of that tick
+                        state['liquidity'] += liquidity_net
+                    
+                    if self.debug_cross_tick:
+                        print(f"Crossed tick {tick_next}, liquidity: {prev_liquidity} -> {state['liquidity']}")
                 
+                # Update current tick
                 state['tick'] = tick_next
             else:
-                # We didn't reach the next tick, update tick to current price
-                state['tick'] = sqrt_price_x96_to_tick(sqrt_price_next_x96)
+                # We didn't reach the next tick - update tick based on current price
+                new_tick = sqrt_price_x96_to_tick(sqrt_price_after_step)
+                state['tick'] = new_tick
             
-            # Additional safety check: if liquidity becomes 0, we can't continue
+            # Safety check: ensure liquidity remains positive
             if state['liquidity'] <= 0:
-                if debug_swap:
-                    print(f"Liquidity exhausted, exiting swap at iteration {iteration_count}")
-                break
+                if self.debug_cross_tick:
+                    print(f"Liquidity exhausted ({state['liquidity']}), exiting swap at iteration {iteration_count}")
+                # Try to find liquidity at current position
+                state['liquidity'] = max(1, self._calculate_liquidity_at_tick(state['tick']))
+                if state['liquidity'] <= 1:
+                    break
         
         # Warn if we hit the iteration limit
-        if iteration_count >= max_iterations:
-            print(f"⚠️  Swap hit maximum iterations ({max_iterations}) - potential infinite loop prevented")
+        if iteration_count >= self.max_swap_iterations:
+            print(f"⚠️  Swap hit maximum iterations ({self.max_swap_iterations}) - potential infinite loop prevented")
         
         # Update pool state
         self.sqrt_price_x96 = state['sqrt_price_x96']
@@ -690,6 +918,25 @@ class UniswapV3Pool:
             else:
                 # No more ticks above - return MAX_TICK to signal boundary
                 return MAX_TICK
+    
+    def _next_initialized_tick_enhanced(self, tick: int, zero_for_one: bool) -> int:
+        """Enhanced tick finding using bitmap when available"""
+        if self.use_tick_bitmap and self.tick_bitmap:
+            return self.tick_bitmap.next_initialized_tick(tick, self.tick_spacing, zero_for_one)
+        else:
+            # Fallback to linear search
+            return self._next_initialized_tick(tick, zero_for_one)
+    
+    def _calculate_liquidity_at_tick(self, tick: int) -> int:
+        """Calculate available liquidity at a specific tick"""
+        liquidity_at_tick = 0
+        
+        # Sum liquidity from all positions that include this tick
+        for position in self.positions:
+            if position.tick_lower <= tick < position.tick_upper:
+                liquidity_at_tick += position.liquidity
+        
+        return max(0, liquidity_at_tick)
     
     
     def get_price(self) -> float:
