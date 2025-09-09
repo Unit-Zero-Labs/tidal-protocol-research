@@ -305,9 +305,15 @@ class HighTideAgent(BaseAgent):
         debt_value = self.state.moet_debt * asset_prices.get(Asset.MOET, 1.0)
         
         if debt_value <= 0:
+            # If no debt, health factor is infinite (perfect health)
             self.state.health_factor = float('inf')
         else:
+            # Normal health factor calculation
             self.state.health_factor = collateral_value / debt_value
+            
+        # Ensure health factor is never negative or zero (unless debt is zero)
+        if self.state.health_factor <= 0 and debt_value > 0:
+            self.state.health_factor = 0.001  # Small positive value to indicate critical state
     
     def _calculate_effective_collateral_value(self, asset_prices: Dict[Asset, float]) -> float:
         """Calculate effective collateral value using BTC collateral factor"""
@@ -384,22 +390,42 @@ class HighTideAgent(BaseAgent):
                                      pool_size_usd: float = 500_000, 
                                      concentrated_range: float = 0.2) -> float:
         """
-        Calculate cost of rebalancing for High Tide strategy
+        Calculate Cost of Rebalancing = Current BTC Price - Net Position Value
         
-        Cost of Rebalancing = Net Position Value - Real Collateral Value
-        Net Position Value = Real Collateral Value + (Yield Token Value - MOET Debt)
+        Where Net Position Value = Current Collateral + (Current Yield Token Value - Current Debt)
+        
+        This represents the opportunity cost of not being able to liquidate at current BTC price.
         """
-        # Real collateral value (no collateral factor)
-        real_collateral_value = self.state.btc_amount * final_btc_price
-        yield_token_value = self.state.yield_token_manager.calculate_total_value(current_minute)
+        # Current collateral value (BTC at current price)
+        current_collateral = self.state.btc_amount * final_btc_price
         
-        # Net Position Value = Real Collateral Value + (Yield Token Value - MOET Debt)
-        net_position_value = real_collateral_value + (yield_token_value - self.state.moet_debt)
+        # Current yield token value (including appreciation)
+        current_yield_token_value = self.state.yield_token_manager.calculate_total_value(current_minute)
         
-        # Cost of Rebalancing = Net Position Value - Real Collateral Value
-        cost_of_rebalancing = net_position_value - real_collateral_value
+        # Current debt
+        current_debt = self.state.moet_debt
+        
+        # Net Position Value = Current Collateral + (Current Yield Token Value - Current Debt)
+        net_position_value = current_collateral + (current_yield_token_value - current_debt)
+        
+        # Cost of Rebalancing = Current BTC Price - Net Position Value
+        cost_of_rebalancing = final_btc_price - net_position_value
         
         return cost_of_rebalancing
+    
+    def calculate_total_transaction_costs(self) -> float:
+        """
+        Calculate total transaction costs from all rebalancing events
+        
+        Returns:
+            Total slippage costs + trading fees from all rebalancing events
+        """
+        total_costs = 0.0
+        
+        for event in self.state.rebalancing_events:
+            total_costs += event.get("slippage_cost", 0.0)
+            
+        return total_costs
     
     def get_detailed_portfolio_summary(self, asset_prices: Dict[Asset, float], current_minute: int,
                                       pool_size_usd: float = 500_000, 
@@ -413,12 +439,14 @@ class HighTideAgent(BaseAgent):
         if btc_price is None:
             raise ValueError("BTC price not provided in asset_prices for portfolio summary")
             
-        cost_of_rebalancing = self.calculate_cost_of_rebalancing(
+        pnl_from_rebalancing = self.calculate_cost_of_rebalancing(
             btc_price, 
             current_minute,
             pool_size_usd,
             concentrated_range
         )
+        
+        total_transaction_costs = self.calculate_total_transaction_costs()
         
         high_tide_metrics = {
             "risk_profile": self.risk_profile,
@@ -433,8 +461,9 @@ class HighTideAgent(BaseAgent):
             "total_yield_sold": self.state.total_yield_sold,
             "rebalancing_events_count": len(self.state.rebalancing_events),
             "emergency_liquidations": self.state.emergency_liquidations,
-            "cost_of_rebalancing": cost_of_rebalancing,
-            "net_position_value": (self.state.btc_amount * btc_price) - cost_of_rebalancing,
+            "cost_of_rebalancing": pnl_from_rebalancing,  # PnL from rebalancing strategy
+            "total_slippage_costs": total_transaction_costs,  # Transaction costs (slippage + fees)
+            "net_position_value": (self.state.btc_amount * btc_price) - pnl_from_rebalancing,
             "automatic_rebalancing": self.state.automatic_rebalancing
         }
         

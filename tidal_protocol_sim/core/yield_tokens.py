@@ -28,10 +28,11 @@ class YieldToken:
             return self.initial_value
             
         minutes_elapsed = current_minute - self.creation_minute
-        # Convert APR to per-minute rate: (1 + APR)^(1/525600) - 1
-        # For 10% APR over 60 minutes, this should be very small
-        minute_rate = (1 + self.apr) ** (1 / 525600) - 1
-        return self.initial_value * (1 + minute_rate) ** minutes_elapsed
+        # Convert APR to per-minute rate: APR * (minutes_elapsed / minutes_per_year)
+        # For 10% APR over 60 minutes: 0.10 * (60 / 525600) = 0.0000114
+        minutes_per_year = 365 * 24 * 60  # 525,600 minutes per year
+        minute_rate = self.apr * (minutes_elapsed / minutes_per_year)
+        return self.initial_value * (1 + minute_rate)
         
     def get_sellable_value(self, current_minute: int) -> float:
         """Get value that can be sold (with minimal slippage)"""
@@ -90,36 +91,43 @@ class YieldTokenManager:
         if amount_needed <= 0 or not self.yield_tokens:
             return 0.0
         
-        # Calculate total value of all tokens
+        # Calculate total value of all tokens (including yield appreciation)
         total_token_value = sum(token.get_current_value(current_minute) for token in self.yield_tokens)
         
         if total_token_value <= 0:
             return 0.0
         
-        # Calculate how many tokens we need to sell (as a fraction)
-        # We need to account for slippage, so we might need to sell slightly more
+        # Calculate what fraction of our total token value we need to sell
         tokens_to_sell_fraction = min(1.0, amount_needed / total_token_value)
         
-        # Calculate actual number of tokens to sell
-        num_tokens_to_sell = int(len(self.yield_tokens) * tokens_to_sell_fraction)
-        
-        if num_tokens_to_sell <= 0:
-            return 0.0
-        
-        # Calculate the total value of tokens we're selling
-        tokens_to_sell = self.yield_tokens[:num_tokens_to_sell]
-        total_value_to_sell = sum(token.get_current_value(current_minute) for token in tokens_to_sell)
+        # Calculate the total value to sell (fractional)
+        total_value_to_sell = total_token_value * tokens_to_sell_fraction
         
         # Use real Uniswap V3 slippage calculation for the batch
+        # This gives us the ACTUAL MOET amount based on pool math
         moet_raised = self._calculate_real_slippage(total_value_to_sell)
         
-        # Remove sold tokens
-        for token in tokens_to_sell:
-            self.yield_tokens.remove(token)
-            self.total_initial_value_invested -= token.initial_value
+        # Update token values proportionally (fractional sale)
+        for token in self.yield_tokens:
+            # Reduce the token's value by the fraction sold
+            token.initial_value *= (1 - tokens_to_sell_fraction)
+            # If token value becomes very small, remove it entirely
+            if token.initial_value < 0.01:  # Less than 1 cent
+                self.yield_tokens.remove(token)
+                self.total_initial_value_invested -= token.initial_value
             
         return moet_raised
+    
+    def calculate_total_yield_earned(self, current_minute: int) -> float:
+        """
+        Calculate total yield earned from all yield tokens
         
+        This is the actual profit from yield accrual, separate from
+        the principal value of the tokens.
+        """
+        total_original_value = sum(token.initial_value for token in self.yield_tokens)
+        total_current_value = sum(token.get_current_value(current_minute) for token in self.yield_tokens)
+        return total_current_value - total_original_value
         
     def calculate_total_value(self, current_minute: int) -> float:
         """Calculate total current value of all yield tokens"""

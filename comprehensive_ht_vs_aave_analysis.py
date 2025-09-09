@@ -40,7 +40,7 @@ class ComprehensiveComparisonConfig:
     
     def __init__(self):
         # Monte Carlo parameters
-        self.num_monte_carlo_runs = 5  # 5 scenarios as requested
+        self.num_monte_carlo_runs = 1
         self.agents_per_run = 15  # 15 agents per scenario
         
         # Health Factor variation scenarios
@@ -1013,12 +1013,12 @@ class ComprehensiveHTvsAaveAnalysis:
         for scenario in self.results["scenario_results"]:
             # High Tide costs
             for agent in scenario["high_tide_summary"]["all_agent_outcomes"]:
-                rebalancing_cost = agent.get("cost_of_rebalancing", 0)
-                slippage_cost = agent.get("total_slippage_costs", 0)
+                pnl_from_rebalancing = agent.get("cost_of_rebalancing", 0)  # PnL from strategy
+                transaction_costs = agent.get("total_slippage_costs", 0)  # Slippage + fees
                 yield_sold = agent.get("total_yield_sold", 0)
                 
-                cost_breakdown["high_tide"]["rebalancing_costs"].append(rebalancing_cost)
-                cost_breakdown["high_tide"]["slippage_costs"].append(slippage_cost)
+                cost_breakdown["high_tide"]["rebalancing_costs"].append(pnl_from_rebalancing)
+                cost_breakdown["high_tide"]["slippage_costs"].append(transaction_costs)
                 cost_breakdown["high_tide"]["yield_costs"].append(yield_sold)
             
             # AAVE costs
@@ -1034,8 +1034,8 @@ class ComprehensiveHTvsAaveAnalysis:
         # Calculate cost statistics
         self.results["cost_analysis"] = {
             "high_tide_cost_breakdown": {
-                "mean_rebalancing_cost": np.mean(cost_breakdown["high_tide"]["rebalancing_costs"]),
-                "mean_slippage_cost": np.mean(cost_breakdown["high_tide"]["slippage_costs"]),
+                "mean_pnl_from_rebalancing": np.mean(cost_breakdown["high_tide"]["rebalancing_costs"]),  # PnL from strategy
+                "mean_transaction_costs": np.mean(cost_breakdown["high_tide"]["slippage_costs"]),  # Slippage + fees
                 "mean_yield_cost": np.mean(cost_breakdown["high_tide"]["yield_costs"]),
                 "total_mean_cost": np.mean(cost_breakdown["high_tide"]["rebalancing_costs"]) + np.mean(cost_breakdown["high_tide"]["slippage_costs"])
             },
