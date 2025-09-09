@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides a comprehensive breakdown of the `uniswap_v3_math.py` script, which implements a complete Uniswap V3 concentrated liquidity system for the Tidal Protocol simulation. The implementation uses authentic Uniswap V3 mathematics with tick-based pricing, Q64.96 fixed-point arithmetic, and sophisticated cross-tick swap functionality.
+This document provides a comprehensive breakdown of the `uniswap_v3_math.py` script, which implements a Uniswap V3 concentrated liquidity system suitable for simulation in the Tidal Protocol. The implementation uses Uniswap V3 mathematics with tick-based pricing, Q64.96 fixed-point arithmetic, and sophisticated cross-tick swap functionality. Tick-to-price conversions use float math and are clamped to official bounds for validity.
 
 ## Table of Contents
 
@@ -62,6 +62,8 @@ def sqrt_price_x96_to_tick(sqrt_price_x96: int) -> int:
     """Convert sqrt price X96 to tick using binary search"""
     # Binary search implementation for precision
 ```
+
+Note: In the implementation we clamp to Uniswap's bounds using `MIN_SQRT_RATIO` and `MAX_SQRT_RATIO` to ensure validity.
 
 ## Core Math Functions
 
@@ -315,9 +317,9 @@ def swap(self, zero_for_one: bool, amount_specified: int, sqrt_price_limit_x96: 
 ```
 
 This ensures that:
-- **Visualization accuracy**: Charts and analytics reflect actual pool state
-- **State consistency**: Legacy fields match the sophisticated tick-based calculations
-- **Real-time updates**: Reserve values accurately represent swap impact
+- **Visualization compatibility**: Charts and analytics relying on legacy fields continue to work
+- **State consistency**: Legacy fields are updated alongside tick-based calculations
+- Note: Legacy reserve fields use a simple 50/50 split of active liquidity for backward compatibility and are approximate. For precise reserves, use tick/position data.
 
 ## Slippage Calculation
 
@@ -369,7 +371,7 @@ def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, con
 ### Yield Token Pool Configuration
 
 ```python
-def create_yield_token_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.95):
+def create_yield_token_pool(pool_size_usd: float, concentration: float = 0.95):
     """
     Create a MOET:Yield Token Uniswap v3 pool with concentrated liquidity
     
@@ -404,7 +406,7 @@ yt_pool = create_yield_token_pool(
 # Execute a large swap that will cross multiple ticks
 amount_in, amount_out = pool.swap(
     zero_for_one=True,  # MOET -> BTC
-    amount_specified=100_000,  # $100k swap
+    amount_specified=100_000 * 1_000_000,  # $100k (scaled 1e6)
     sqrt_price_limit_x96=0  # No price limit
 )
 
@@ -519,8 +521,7 @@ def calculate_liquidation_cost_with_slippage(
     btc_price: float,
     liquidation_percentage: float = 0.5,
     liquidation_bonus: float = 0.05,
-    pool_size_usd: float = 500_000,
-    concentrated_range: float = 0.2
+    pool_size_usd: float = 500_000
 ) -> Dict[str, float]:
     """
     Calculate total liquidation cost including:
@@ -538,13 +539,13 @@ def calculate_liquidation_cost_with_slippage(
     calculator = UniswapV3SlippageCalculator(pool)
     
     # Calculate swap (BTC -> MOET for debt repayment)
-    swap_result = calculator.calculate_swap_slippage(btc_value_to_liquidate, "BTC", concentrated_range)
+    swap_result = calculator.calculate_swap_slippage(btc_value_to_liquidate, "BTC")
     
-    # Liquidation bonus cost
-    bonus_cost = btc_value_to_liquidate * liquidation_bonus
+    # Liquidation bonus is applied on debt repaid value
+    bonus_value = debt_repaid * liquidation_bonus
     
     # Total liquidation cost includes slippage, fees, and bonus
-    total_cost = swap_result["slippage_amount"] + swap_result["trading_fees"] + bonus_cost
+    total_cost = swap_result["slippage_amount"] + swap_result["trading_fees"] + bonus_value
     
     return {
         "btc_liquidated": btc_to_liquidate,
@@ -553,7 +554,7 @@ def calculate_liquidation_cost_with_slippage(
         "expected_moet_without_slippage": swap_result["expected_amount_out"],
         "slippage_cost": swap_result["slippage_amount"],
         "trading_fees": swap_result["trading_fees"],
-        "liquidation_bonus_cost": bonus_cost,
+        "liquidation_bonus_cost": bonus_value,
         "total_liquidation_cost": total_cost,
         "slippage_percentage": swap_result["slippage_percentage"],
         "price_impact_percentage": swap_result["price_impact_percentage"],
