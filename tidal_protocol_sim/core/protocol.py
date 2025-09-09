@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tidal Protocol Implementation
+Streamlined Tidal Protocol Implementation
 
 This module contains the core TidalProtocol class focused on lending mechanics,
 following the refactoring guidelines to simplify and eliminate generic framework complexity.
@@ -88,9 +88,6 @@ class AssetPool:
         borrow_rate = self.calculate_borrow_rate()
         return borrow_rate * self.utilization_rate * (1 - self.reserve_factor)
 
-
-
-
 class TidalProtocol:
     """Streamlined Tidal Protocol implementation focused on lending mechanics"""
     
@@ -122,10 +119,10 @@ class TidalProtocol:
     def _initialize_asset_pools(self) -> Dict[Asset, AssetPool]:
         """Initialize asset pools with Tidal-specific parameters"""
         return {
-            Asset.ETH: AssetPool(Asset.ETH, 7_000_000),   # $7M initial
-            Asset.BTC: AssetPool(Asset.BTC, 3_500_000),   # $3.5M initial
-            Asset.FLOW: AssetPool(Asset.FLOW, 2_100_000), # $2.1M initial
-            Asset.USDC: AssetPool(Asset.USDC, 1_400_000), # $1.4M initial
+            Asset.ETH: AssetPool(Asset.ETH, 0.0),   
+            Asset.BTC: AssetPool(Asset.BTC, 0.0),   
+            Asset.FLOW: AssetPool(Asset.FLOW, 0.0), 
+            Asset.USDC: AssetPool(Asset.USDC, 0.0), 
         }
     
     
