@@ -380,7 +380,7 @@ class HighTideVaultEngine(TidalProtocolEngine):
             
             # Check if liquidation is needed (HF ≤ 1.0)
             if agent.state.health_factor <= 1.0:
-                liquidation_event = agent.execute_high_tide_liquidation(minute, self.state.current_prices)
+                liquidation_event = agent.execute_high_tide_liquidation(minute, self.state.current_prices, self)
                 
                 if liquidation_event:
                     self.liquidation_events.append(liquidation_event)

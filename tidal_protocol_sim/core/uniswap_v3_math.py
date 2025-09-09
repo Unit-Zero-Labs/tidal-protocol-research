@@ -1505,11 +1505,16 @@ def calculate_liquidation_cost_with_slippage(
     btc_price: float,
     liquidation_percentage: float = 0.5,
     liquidation_bonus: float = 0.05,
-    pool_size_usd: float = 500_000,
-    concentrated_range: float = 0.2
+    pool_size_usd: float = 500_000
 ) -> Dict[str, float]:
     """
     Calculate the total cost of AAVE-style liquidation including Uniswap v3 slippage
+    
+    This function simulates the liquidator's perspective:
+    1. Seizes BTC collateral
+    2. Swaps BTC -> MOET through Uniswap V3
+    3. Uses MOET to repay debt
+    4. Keeps liquidation bonus
     
     Args:
         collateral_btc_amount: Amount of BTC collateral to liquidate
@@ -1517,7 +1522,6 @@ def calculate_liquidation_cost_with_slippage(
         liquidation_percentage: Percentage of collateral to liquidate (0.5 = 50%)
         liquidation_bonus: Liquidation bonus rate (0.05 = 5%)
         pool_size_usd: Total MOET:BTC pool size in USD
-        concentrated_range: Liquidity concentration range
         
     Returns:
         Dict with liquidation cost breakdown including slippage
@@ -1532,23 +1536,29 @@ def calculate_liquidation_cost_with_slippage(
     calculator = UniswapV3SlippageCalculator(pool)
     
     # Calculate swap (BTC -> MOET for debt repayment)
-    swap_result = calculator.calculate_swap_slippage(btc_value_to_liquidate, "BTC", concentrated_range)
+    swap_result = calculator.calculate_swap_slippage(btc_value_to_liquidate, "BTC")
     
-    # Liquidation bonus cost
-    bonus_cost = btc_value_to_liquidate * liquidation_bonus
+    # Calculate debt that can be repaid (MOET received from swap)
+    debt_repaid = swap_result["amount_out"]
     
-    # Total liquidation cost includes slippage, fees, and bonus
-    total_cost = swap_result["slippage_amount"] + swap_result["trading_fees"] + bonus_cost
+    # Calculate liquidation bonus (5% of debt repaid, in BTC value)
+    liquidation_bonus_value = debt_repaid * liquidation_bonus
+    liquidation_bonus_btc = liquidation_bonus_value / btc_price
+    
+    # Total cost to agent = BTC seized (including bonus)
+    total_cost_to_agent = btc_to_liquidate + liquidation_bonus_btc
     
     return {
         "btc_liquidated": btc_to_liquidate,
         "btc_value_liquidated": btc_value_to_liquidate,
         "moet_received": swap_result["amount_out"],
         "expected_moet_without_slippage": swap_result["expected_amount_out"],
+        "debt_repaid": debt_repaid,
+        "liquidation_bonus_value": liquidation_bonus_value,
+        "liquidation_bonus_btc": liquidation_bonus_btc,
         "slippage_cost": swap_result["slippage_amount"],
         "trading_fees": swap_result["trading_fees"],
-        "liquidation_bonus_cost": bonus_cost,
-        "total_liquidation_cost": total_cost,
+        "total_cost_to_agent": total_cost_to_agent,
         "slippage_percentage": swap_result["slippage_percentage"],
         "price_impact_percentage": swap_result["price_impact_percentage"],
         "effective_liquidity": swap_result["effective_liquidity"]

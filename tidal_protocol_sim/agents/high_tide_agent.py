@@ -235,8 +235,8 @@ class HighTideAgent(BaseAgent):
         self.state.emergency_liquidations += 1
         return (AgentAction.HOLD, {"emergency": True})
     
-    def execute_high_tide_liquidation(self, current_minute: int, asset_prices: Dict[Asset, float]) -> Optional[Dict]:
-        """Execute High Tide liquidation similar to Aave style"""
+    def execute_high_tide_liquidation(self, current_minute: int, asset_prices: Dict[Asset, float], simulation_engine) -> Optional[Dict]:
+        """Execute High Tide liquidation with Uniswap V3 BTC→MOET swap"""
         
         # Ensure we have BTC price from simulation engine
         btc_price = asset_prices.get(Asset.BTC)
@@ -252,19 +252,32 @@ class HighTideAgent(BaseAgent):
         if debt_to_repay <= 0:
             return None
         
-        # Calculate BTC to seize (with 5% penalty)
-        collateral_value_needed = debt_to_repay * 1.05  # 5% liquidation penalty
-        btc_to_seize = collateral_value_needed / btc_price
-        
-        # Check if we have enough BTC collateral
+        # Step 1: Calculate BTC needed for debt repayment
+        btc_to_repay_debt = debt_to_repay / btc_price
         available_btc = self.state.supplied_balances.get(Asset.BTC, 0.0)
-        if btc_to_seize > available_btc:
-            btc_to_seize = available_btc
-            debt_to_repay = (btc_to_seize * btc_price) / 1.05
         
-        # Execute liquidation
-        self.state.moet_debt -= debt_to_repay
-        self.state.supplied_balances[Asset.BTC] -= btc_to_seize
+        if btc_to_repay_debt > available_btc:
+            btc_to_repay_debt = available_btc
+        
+        # Step 2: Swap BTC → MOET through Uniswap V3 pool
+        swap_result = simulation_engine.slippage_calculator.calculate_swap_slippage(
+            btc_to_repay_debt, "BTC"
+        )
+        actual_moet_received = swap_result["amount_out"]
+        slippage_amount = swap_result["slippage_amount"]
+        slippage_percent = swap_result["slippage_percent"]
+        
+        # Step 3: Repay debt with actual MOET received
+        actual_debt_repaid = min(actual_moet_received, self.state.moet_debt)
+        self.state.moet_debt -= actual_debt_repaid
+        
+        # Step 4: Calculate and seize bonus (5% of actual debt repaid)
+        liquidation_bonus = actual_debt_repaid * 0.05
+        btc_bonus = liquidation_bonus / btc_price
+        total_btc_seized = btc_to_repay_debt + btc_bonus
+        
+        # Step 5: Update BTC collateral
+        self.state.supplied_balances[Asset.BTC] -= total_btc_seized
         
         # Update health factor
         self._update_health_factor(asset_prices)
@@ -275,10 +288,14 @@ class HighTideAgent(BaseAgent):
             "agent_id": self.agent_id,
             "health_factor_before": self.state.health_factor,
             "health_factor_after": self.state.health_factor,
-            "debt_repaid_value": debt_to_repay,
-            "btc_seized": btc_to_seize,
-            "btc_value_seized": btc_to_seize * btc_price,
-            "liquidation_bonus_value": debt_to_repay * 0.05,
+            "debt_repaid_value": actual_debt_repaid,
+            "btc_seized_for_debt": btc_to_repay_debt,
+            "btc_seized_for_bonus": btc_bonus,
+            "total_btc_seized": total_btc_seized,
+            "btc_value_seized": total_btc_seized * btc_price,
+            "liquidation_bonus_value": liquidation_bonus,
+            "swap_slippage_amount": slippage_amount,
+            "swap_slippage_percent": slippage_percent,
             "liquidation_type": "high_tide_emergency"
         }
         
@@ -374,35 +391,20 @@ class HighTideAgent(BaseAgent):
         """
         Calculate cost of rebalancing for High Tide strategy
         
-        Since rebalancing uses MOET directly to pay debt (no BTC swap),
-        the cost is simply the net debt remaining after yield tokens are considered.
-        
-        Net Position Value = Collateral - (Debt - Yield Token Value)
-        Cost of Rebalancing = Final Collateral Value - Final Net Position Value
+        Cost of Rebalancing = Net Position Value - Real Collateral Value
+        Net Position Value = Real Collateral Value + (Yield Token Value - MOET Debt)
         """
-        # Calculate current position values
-        collateral_value = self.state.btc_amount * final_btc_price
+        # Real collateral value (no collateral factor)
+        real_collateral_value = self.state.btc_amount * final_btc_price
         yield_token_value = self.state.yield_token_manager.calculate_total_value(current_minute)
         
-        # Net Position Value = Collateral - (Debt - Yield Token Value)
-        net_position_value = collateral_value - (self.state.moet_debt - yield_token_value)
+        # Net Position Value = Real Collateral Value + (Yield Token Value - MOET Debt)
+        net_position_value = real_collateral_value + (yield_token_value - self.state.moet_debt)
         
-        # CORRECTION: Since MOET directly pays debt (no slippage), cost is just net debt remaining
-        # Cost = max(0, Debt - Yield Token Value)
-        base_cost = max(0, self.state.moet_debt - yield_token_value)
+        # Cost of Rebalancing = Net Position Value - Real Collateral Value
+        cost_of_rebalancing = net_position_value - real_collateral_value
         
-        # Only minimal slippage from MOET:YT pool trading (0.1% fee)
-        total_yield_trading_fees = 0.0
-        for event in self.state.rebalancing_events:
-            moet_amount = event["moet_raised"]
-            if moet_amount > 0:
-                # Only 0.1% trading fee for yield token sales (no BTC swap slippage)
-                total_yield_trading_fees += moet_amount * 0.001
-        
-        # Total cost is base cost plus minimal trading fees
-        total_cost = base_cost + total_yield_trading_fees
-        
-        return total_cost
+        return cost_of_rebalancing
     
     def get_detailed_portfolio_summary(self, asset_prices: Dict[Asset, float], current_minute: int,
                                       pool_size_usd: float = 500_000, 

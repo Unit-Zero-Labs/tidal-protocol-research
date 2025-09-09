@@ -147,12 +147,14 @@ class AaveAgent(BaseAgent):
         
         return len(new_tokens) > 0
     
-    def execute_aave_liquidation(self, current_minute: int, asset_prices: Dict[Asset, float]) -> dict:
+    def execute_aave_liquidation(self, current_minute: int, asset_prices: Dict[Asset, float], 
+                                pool_size_usd: float = 500_000) -> dict:
         """
-        Execute AAVE-style liquidation:
-        - Reduce debt by 50%
-        - Liquidator receives: Debt Repaid * (1 + Liquidation Bonus)
-        - Agent continues with reduced position
+        Execute AAVE-style liquidation with proper Uniswap V3 math:
+        1. Seize 50% of collateral (BTC)
+        2. Swap BTC -> MOET through Uniswap V3 pool
+        3. Use MOET to pay down debt
+        4. Liquidator receives 5% bonus on debt repaid (in BTC value)
         """
         if self.state.health_factor >= 1.0:
             return {}  # No liquidation needed
@@ -166,41 +168,68 @@ class AaveAgent(BaseAgent):
         # 1. Debt reduction: 50% of current debt
         debt_reduction = current_debt * 0.50
         
-        # 2. Liquidator receives: Debt Repaid * (1 + Liquidation Bonus) worth of collateral
+        # 2. Calculate how much BTC to seize to get enough MOET to repay debt
+        # We need to account for the 5% liquidation bonus
         liquidation_bonus_rate = 0.05  # 5% bonus
         debt_repaid_value = debt_reduction  # MOET debt value (assuming 1:1 with USD)
-        liquidator_receives_value = debt_repaid_value * (1 + liquidation_bonus_rate)
         
-        # 3. Convert to BTC collateral seized: Liquidator gets liquidator_receives_value worth of BTC
-        total_btc_seized = liquidator_receives_value / btc_price
+        # 3. Calculate BTC needed: debt_repaid_value * (1 + bonus) / btc_price
+        # This gives us the BTC value needed to get enough MOET after the bonus
+        btc_value_needed = debt_repaid_value * (1 + liquidation_bonus_rate)
+        btc_to_seize = btc_value_needed / btc_price
         
         # 4. Ensure we don't seize more than available collateral
-        total_btc_seized = min(total_btc_seized, current_btc_collateral)
+        btc_to_seize = min(btc_to_seize, current_btc_collateral)
         
-        # Execute liquidation
-        self.state.supplied_balances[Asset.BTC] -= total_btc_seized
-        self.state.moet_debt -= debt_reduction
+        if btc_to_seize <= 0:
+            return {}  # No collateral to liquidate
         
-        # Calculate liquidation bonus in USD
-        liquidation_bonus_value = debt_repaid_value * liquidation_bonus_rate
+        # 5. Use Uniswap V3 math to calculate actual MOET received from BTC swap
+        from ..core.uniswap_v3_math import create_moet_btc_pool, UniswapV3SlippageCalculator
         
-        # Track liquidation event
+        # Create pool and calculator
+        pool = create_moet_btc_pool(pool_size_usd, btc_price)
+        calculator = UniswapV3SlippageCalculator(pool)
+        
+        # Calculate BTC -> MOET swap with slippage
+        btc_value_to_swap = btc_to_seize * btc_price
+        swap_result = calculator.calculate_swap_slippage(btc_value_to_swap, "BTC")
+        
+        # Actual MOET received from swap (after slippage and fees)
+        actual_moet_received = swap_result["amount_out"]
+        
+        # 6. Calculate actual debt that can be repaid (limited by MOET received)
+        actual_debt_repaid = min(debt_reduction, actual_moet_received)
+        
+        # 7. Calculate liquidation bonus (5% of debt repaid, in BTC value)
+        liquidation_bonus_value = actual_debt_repaid * liquidation_bonus_rate
+        liquidation_bonus_btc = liquidation_bonus_value / btc_price
+        
+        # 8. Execute liquidation
+        self.state.supplied_balances[Asset.BTC] -= btc_to_seize
+        self.state.moet_debt -= actual_debt_repaid
+        
+        # Track liquidation event with Uniswap V3 details
         liquidation_event = {
             "minute": current_minute,
-            "btc_seized": total_btc_seized,
-            "btc_value_seized": total_btc_seized * btc_price,
-            "debt_reduced": debt_reduction,
-            "debt_repaid_value": debt_repaid_value,
+            "btc_seized": btc_to_seize,
+            "btc_value_seized": btc_to_seize * btc_price,
+            "debt_reduced": actual_debt_repaid,
+            "debt_repaid_value": actual_debt_repaid,
             "liquidation_bonus_rate": liquidation_bonus_rate,
             "liquidation_bonus_value": liquidation_bonus_value,
-            "liquidator_receives_value": liquidator_receives_value,
+            "liquidation_bonus_btc": liquidation_bonus_btc,
+            "moet_received_from_swap": actual_moet_received,
+            "swap_slippage": swap_result["slippage_amount"],
+            "swap_fees": swap_result["trading_fees"],
+            "price_impact": swap_result["price_impact_percentage"],
             "health_factor_before": self.state.health_factor,
             "remaining_collateral": self.state.supplied_balances.get(Asset.BTC, 0.0),
             "remaining_debt": self.state.moet_debt
         }
         
         self.state.liquidation_events.append(liquidation_event)
-        self.state.total_liquidated_collateral += total_btc_seized * btc_price
+        self.state.total_liquidated_collateral += btc_to_seize * btc_price
         self.state.liquidation_penalties += liquidation_bonus_value
         
         # Update health factor after liquidation
@@ -215,32 +244,17 @@ class AaveAgent(BaseAgent):
     
     def calculate_cost_of_liquidation(self, final_btc_price: float, current_minute: int) -> float:
         """
-        Calculate cost of liquidation for AAVE strategy including Uniswap v3 slippage
+        Calculate cost of liquidation for AAVE strategy
         
-        For AAVE, the cost includes liquidation penalties plus slippage costs from liquidator swaps.
+        The cost is simply the total BTC value seized (including bonus) across all liquidation events.
+        This represents the actual cost to the agent from liquidations.
         """
-        # Base liquidation penalties (5% bonus to liquidators)
-        base_penalties = self.state.liquidation_penalties
+        total_cost = 0.0
         
-        # Calculate slippage costs for all liquidation events
-        total_slippage_cost = 0.0
         for event in self.state.liquidation_events:
-            btc_seized = event["btc_seized"]
-            btc_price_at_liquidation = event["btc_value_seized"] / btc_seized if btc_seized > 0 else final_btc_price
-            
-            if btc_seized > 0:
-                slippage_result = calculate_liquidation_cost_with_slippage(
-                    btc_seized,
-                    btc_price_at_liquidation,
-                    liquidation_percentage=1.0,  # Using full amount seized
-                    liquidation_bonus=0.05,      # 5% bonus
-                    pool_size_usd=500_000,       # $500K total pool
-                    concentrated_range=0.2       # 20% concentration range
-                )
-                total_slippage_cost += slippage_result["slippage_cost"] + slippage_result["trading_fees"]
-        
-        # Total cost includes base penalties plus all slippage costs
-        total_cost = base_penalties + total_slippage_cost
+            # Cost is the BTC value seized (this includes the liquidation bonus)
+            btc_value_seized = event["btc_value_seized"]
+            total_cost += btc_value_seized
         
         return total_cost
     
