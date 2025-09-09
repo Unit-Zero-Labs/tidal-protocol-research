@@ -434,7 +434,7 @@ def _check_high_tide_liquidations(self, minute: int):
         
         # Check if liquidation is needed (HF ≤ 1.0)
         if agent.state.health_factor <= 1.0:
-            liquidation_event = agent.execute_high_tide_liquidation(minute, self.state.current_prices)
+            liquidation_event = agent.execute_high_tide_liquidation(minute, self.state.current_prices, self)
             
             if liquidation_event:
                 self.liquidation_events.append(liquidation_event)
@@ -448,11 +448,11 @@ def _check_high_tide_liquidations(self, minute: int):
 
 ### Emergency Liquidation
 
-The engine handles emergency liquidation scenarios:
+The engine handles emergency liquidation scenarios with full Uniswap V3 integration:
 
 ```python
-def execute_high_tide_liquidation(self, current_minute: int, asset_prices: Dict[Asset, float]) -> Optional[Dict]:
-    """Execute High Tide liquidation similar to Aave style"""
+def execute_high_tide_liquidation(self, current_minute: int, asset_prices: Dict[Asset, float], simulation_engine) -> Optional[Dict]:
+    """Execute High Tide liquidation with Uniswap V3 BTC->MOET swap"""
     
     # Ensure we have BTC price from simulation engine
     btc_price = asset_prices.get(Asset.BTC)
@@ -468,16 +468,39 @@ def execute_high_tide_liquidation(self, current_minute: int, asset_prices: Dict[
     if debt_to_repay <= 0:
         return None
     
-    # Calculate BTC to seize (with 5% penalty)
-    collateral_value_needed = debt_to_repay * 1.05  # 5% liquidation penalty
-    btc_to_seize = collateral_value_needed / btc_price
+    # Step 1: Seize BTC for debt repayment
+    btc_to_repay_debt = debt_to_repay / btc_price
+    
+    # Step 2: Execute BTC->MOET swap through Uniswap V3 pool
+    swap_result = simulation_engine.slippage_calculator.calculate_swap_slippage(
+        amount_in=btc_to_repay_debt,
+        token_in="BTC",
+        concentrated_range=simulation_engine.moet_btc_pool.concentration_range
+    )
+    
+    actual_moet_received = swap_result["amount_out"]
+    slippage_amount = swap_result["slippage_amount"]
+    slippage_percent = swap_result["slippage_percent"]
+    
+    # Step 3: Repay debt with actual MOET received
+    actual_debt_repaid = min(actual_moet_received, self.state.moet_debt)
+    self.state.moet_debt -= actual_debt_repaid
+    
+    # Step 4: Calculate and seize liquidation bonus (5% of debt repaid)
+    liquidation_bonus = actual_debt_repaid * 0.05
+    btc_bonus = liquidation_bonus / btc_price
+    total_btc_seized = btc_to_repay_debt + btc_bonus
+    
+    # Update agent state
+    self.state.supplied_balances[Asset.BTC] -= total_btc_seized
 ```
 
 **Liquidation Mechanics:**
 - **Target Health Factor**: 1.1 (safety buffer above liquidation threshold)
-- **Liquidation Penalty**: 5% bonus to liquidator
-- **BTC Seizure**: Calculated based on current BTC price (not hardcoded)
-- **Debt Repayment**: Reduces agent's MOET debt
+- **Two-Step BTC Seizure**: First for debt repayment, second for 5% liquidator bonus
+- **Uniswap V3 Integration**: BTC->MOET swap through MOET:BTC pool with real slippage
+- **Slippage-Aware Bonus**: 5% bonus calculated on actual debt repaid (post-slippage)
+- **Real Market Conditions**: Liquidation flows through trading mechanism for realistic pricing
 
 ## Performance Analytics and Reporting
 
