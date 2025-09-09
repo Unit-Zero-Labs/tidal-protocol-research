@@ -9,6 +9,7 @@ Inherits sophisticated Uniswap V3 math from TidalProtocolEngine.
 import random
 from typing import Dict, List, Optional
 from .tidal_engine import TidalProtocolEngine, TidalConfig
+from .btc_price_manager import BTCPriceDeclineManager
 from ..core.protocol import Asset
 from ..core.yield_tokens import YieldTokenPool
 from ..analysis.lp_curve_analysis import LPCurveTracker
@@ -45,78 +46,6 @@ class HighTideConfig(TidalConfig):
         self.price_update_frequency = 1  # Update every minute
 
 
-class BTCPriceDeclineManager:
-    """Manages gradual BTC price decline with historical volatility"""
-    
-    def __init__(self, config: HighTideConfig):
-        self.config = config
-        self.initial_price = config.btc_initial_price
-        self.duration = config.btc_decline_duration
-        
-        # Historical decline rates
-        self.decline_rates = [-0.0054, -0.0053, -0.0046, -0.0043, -0.0040]
-        self.max_decline = -0.0095
-        
-        # Calculate target final price
-        final_price_min, final_price_max = config.btc_final_price_range
-        self.target_final_price = random.uniform(final_price_min, final_price_max)
-        
-        # Calculate required decline per minute
-        total_decline_needed = (self.target_final_price - self.initial_price) / self.initial_price
-        self.base_decline_per_minute = total_decline_needed / self.duration
-        
-        # Track price history
-        self.price_history = [self.initial_price]
-        self.current_price = self.initial_price
-        
-    def update_btc_price(self, minute: int) -> float:
-        """Update BTC price for current minute"""
-        if minute == 0:
-            return self.initial_price
-            
-        # Use historical volatility pattern
-        base_decline = random.choice(self.decline_rates)
-        variation = random.uniform(-0.0005, 0.0005)
-        
-        # Occasionally use maximum decline (5% probability)
-        if random.random() < 0.05:
-            decline_rate = self.max_decline
-        else:
-            decline_rate = base_decline + variation
-            
-        # Adjust to meet target final price
-        progress = minute / self.duration
-        if progress > 0.8:  # In final 20% of decline, converge to target
-            current_decline = (self.current_price - self.initial_price) / self.initial_price
-            remaining_decline_needed = (self.target_final_price - self.initial_price) / self.initial_price - current_decline
-            remaining_minutes = self.duration - minute
-            if remaining_minutes > 0:
-                target_decline = remaining_decline_needed / remaining_minutes
-                decline_rate = (decline_rate + target_decline) / 2
-        
-        self.current_price *= (1 + decline_rate)
-        self.current_price = max(self.current_price, self.initial_price * 0.5)
-        
-        self.price_history.append(self.current_price)
-        return self.current_price
-        
-    def get_decline_statistics(self) -> Dict[str, float]:
-        """Get statistics about the price decline"""
-        if len(self.price_history) < 2:
-            return {}
-            
-        final_price = self.price_history[-1]
-        total_decline = (final_price - self.initial_price) / self.initial_price
-        
-        return {
-            "initial_price": self.initial_price,
-            "final_price": final_price,
-            "total_decline_percent": total_decline * 100,
-            "target_final_price": self.target_final_price,
-            "duration_minutes": len(self.price_history) - 1
-        }
-
-
 class HighTideVaultEngine(TidalProtocolEngine):
     """High Tide Yield Vaults built on Tidal Protocol"""
     
@@ -138,7 +67,11 @@ class HighTideVaultEngine(TidalProtocolEngine):
         # Use YieldTokenPool's built-in slippage calculator
         # No need to create a separate one - YieldTokenPool already has one
         
-        self.btc_price_manager = BTCPriceDeclineManager(config)
+        self.btc_price_manager = BTCPriceDeclineManager(
+            initial_price=config.btc_initial_price,
+            duration=config.btc_decline_duration,
+            final_price_range=config.btc_final_price_range
+        )
         
         # Replace agents with High Tide agents
         self.high_tide_agents = create_high_tide_agents(
