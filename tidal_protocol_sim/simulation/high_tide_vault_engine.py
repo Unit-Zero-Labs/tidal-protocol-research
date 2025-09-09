@@ -11,7 +11,6 @@ from typing import Dict, List, Optional
 from .tidal_engine import TidalProtocolEngine, TidalConfig
 from ..core.protocol import Asset
 from ..core.yield_tokens import YieldTokenPool
-from ..core.uniswap_v3_math import create_yield_token_pool, UniswapV3SlippageCalculator
 from ..analysis.lp_curve_analysis import LPCurveTracker
 from ..agents.high_tide_agent import HighTideAgent, create_high_tide_agents
 from ..agents.base_agent import BaseAgent, AgentAction
@@ -130,7 +129,15 @@ class HighTideVaultEngine(TidalProtocolEngine):
         self._setup_yield_token_pools()
         
         # Initialize High Tide specific components
-        self.yield_token_pool = YieldTokenPool(config.moet_btc_pool_size)
+        self.yield_token_pool = YieldTokenPool(
+            initial_moet_reserve=config.moet_btc_pool_size,
+            btc_price=config.btc_initial_price,
+            concentration=config.yield_token_concentration
+        )
+        
+        # Use YieldTokenPool's built-in slippage calculator
+        # No need to create a separate one - YieldTokenPool already has one
+        
         self.btc_price_manager = BTCPriceDeclineManager(config)
         
         # Replace agents with High Tide agents
@@ -144,6 +151,13 @@ class HighTideVaultEngine(TidalProtocolEngine):
         for agent in self.high_tide_agents:
             self.agents[agent.agent_id] = agent
             
+        # Initialize LP curve tracking for yield tokens using YieldTokenPool data
+        yield_pool_size = config.moet_btc_pool_size * 2
+        self.moet_yield_tracker = LPCurveTracker(
+            yield_pool_size, config.yield_token_concentration, 
+            "MOET:Yield_Token", config.btc_initial_price
+        )
+        
         # Initialize position tracker
         self.position_tracker = AgentPositionTracker(self.high_tide_agents[0].agent_id)
         self.position_tracker.start_tracking()
@@ -159,22 +173,9 @@ class HighTideVaultEngine(TidalProtocolEngine):
         
     def _setup_yield_token_pools(self):
         """Add yield token functionality to existing Tidal base"""
-        yield_pool_size = getattr(self.config, 'moet_yield_pool_size', 250_000) * 2
-        btc_price = getattr(self.config, 'btc_initial_price', 100_000.0)
-        
-        self.yield_token_pool_v3 = create_yield_token_pool(
-            yield_pool_size, btc_price, self.config.yield_token_concentration
-        )
-        
-        self.yield_token_slippage_calculator = UniswapV3SlippageCalculator(
-            self.yield_token_pool_v3
-        )
-        
-        # Initialize LP curve tracking for yield tokens
-        self.moet_yield_tracker = LPCurveTracker(
-            yield_pool_size, self.config.yield_token_concentration, 
-            "MOET:Yield_Token", btc_price
-        )
+        # No longer needed - YieldTokenPool handles everything internally
+        # The yield_token_pool is created in __init__ and contains its own Uniswap V3 pool
+        pass
         
     def _setup_high_tide_positions(self):
         """Set up initial High Tide agent positions"""
@@ -347,12 +348,14 @@ class HighTideVaultEngine(TidalProtocolEngine):
             # Update yield token pool
             self.yield_token_pool.execute_yield_token_sale(moet_raised)
             
-            # Calculate slippage using proper Uniswap V3 math
-            slippage_result = self.yield_token_slippage_calculator.calculate_swap_slippage(
-                amount_needed, "Yield_Token"
+            # Calculate slippage using YieldTokenPool's built-in calculator
+            slippage_result = self.yield_token_pool.slippage_calculator.calculate_swap_slippage(
+                amount_in=amount_needed,
+                token_in="Yield_Token",
+                concentrated_range=self.yield_token_pool.concentration_range
             )
             
-            self.yield_token_slippage_calculator.update_pool_state(slippage_result)
+            self.yield_token_pool.slippage_calculator.update_pool_state(slippage_result)
             
             slippage_cost = slippage_result["slippage_amount"] + slippage_result["trading_fees"]
             
@@ -515,6 +518,13 @@ class HighTideVaultEngine(TidalProtocolEngine):
             "btc_price_history": self.btc_price_history,
             "rebalancing_events": self.rebalancing_events,
             "yield_token_trades": self.yield_token_trades
+        }
+        
+        # Add LP curve tracking data
+        high_tide_results["lp_curve_data"] = {
+            "moet_yield_tracker_snapshots": self.moet_yield_tracker.get_snapshots(),
+            "pool_name": "MOET:Yield_Token",
+            "concentration_range": self.config.yield_token_concentration
         }
         
         # Merge with base results

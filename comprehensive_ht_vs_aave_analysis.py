@@ -163,6 +163,7 @@ class ComprehensiveHTvsAaveAnalysis:
         if self.config.generate_charts:
             print("📊 Generating charts...")
             self._generate_comprehensive_charts()
+            self._generate_lp_curve_analysis_charts()
         
         if self.config.save_detailed_data:
             print("📄 Generating CSV extracts...")
@@ -817,6 +818,51 @@ class ComprehensiveHTvsAaveAnalysis:
         # This would create charts showing confidence intervals and statistical significance
         # Implementation would use the statistical significance data from comparisons
         pass
+    
+    def _generate_lp_curve_analysis_charts(self):
+        """Generate LP curve analysis charts for High Tide scenarios"""
+        
+        output_dir = Path("tidal_protocol_sim/results") / self.config.scenario_name / "charts"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        print("📊 Generating LP curve analysis charts...")
+        
+        # Import the LP curve analyzer
+        from tidal_protocol_sim.analysis.lp_curve_analysis import LPCurveAnalyzer
+        
+        analyzer = LPCurveAnalyzer()
+        
+        # Process each High Tide scenario
+        for scenario in self.results["scenario_results"]:
+            scenario_name = scenario["scenario_name"]
+            
+            # Extract LP curve data from High Tide runs
+            ht_runs = scenario["detailed_runs"]["high_tide_runs"]
+            
+            for run_idx, run in enumerate(ht_runs):
+                lp_curve_data = run.get("lp_curve_data")
+                if lp_curve_data and lp_curve_data.get("moet_yield_tracker_snapshots"):
+                    # Create LPCurveTracker from snapshots
+                    snapshots = lp_curve_data["moet_yield_tracker_snapshots"]
+                    concentration_range = lp_curve_data["concentration_range"]
+                    pool_name = lp_curve_data["pool_name"]
+                    
+                    # Create a temporary tracker with the snapshots
+                    from tidal_protocol_sim.analysis.lp_curve_analysis import LPCurveTracker
+                    tracker = LPCurveTracker(
+                        initial_pool_size=500_000,  # Approximate from config
+                        concentration_range=concentration_range,
+                        pool_name=pool_name,
+                        btc_price=100_000.0
+                    )
+                    tracker.snapshots = snapshots
+                    
+                    # Generate LP curve evolution chart
+                    chart_path = analyzer.create_lp_curve_evolution_chart(tracker, output_dir)
+                    if chart_path:
+                        print(f"   Generated LP curve chart for {scenario_name} run {run_idx + 1}")
+        
+        print(f"📊 LP curve analysis charts saved to: {output_dir}")
     
     def _generate_csv_extracts(self):
         """Generate CSV files with detailed data extracts"""

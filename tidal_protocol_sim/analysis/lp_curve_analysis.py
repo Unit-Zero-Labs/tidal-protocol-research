@@ -492,54 +492,69 @@ Key Insights:
         ax.grid(True, alpha=0.3)
     
     def _create_concentration_efficiency_chart(self, ax, snapshots: List[PoolSnapshot], pool_name: str):
-        """Create chart showing concentration efficiency over time"""
+        """Create chart showing how trade volume moves price through the concentrated range"""
         
         minutes = [s.minute for s in snapshots]
-        utilization_rates = []
+        price_utilizations = []
+        cumulative_volumes = []
+        
+        # Determine correct peg value based on pool type
+        if "MOET:BTC" in pool_name:
+            correct_peg = 0.00001  # BTC per MOET
+        else:
+            correct_peg = 1.0  # 1:1 for yield tokens
         
         for i, snapshot in enumerate(snapshots):
             if i == 0:
-                utilization_rates.append(0)
+                price_utilizations.append(0)
+                cumulative_volumes.append(0)
             else:
-                # Calculate concentration efficiency based on cumulative trade volume
-                # This represents how much of the concentrated liquidity has been utilized
-                if hasattr(snapshots[0], 'concentrated_pool') and snapshots[0].concentrated_pool:
-                    # Get initial concentrated liquidity
-                    initial_concentrated_liquidity = self._get_concentrated_liquidity(snapshots[0].concentrated_pool, pool_name)
-                    
-                    # Calculate cumulative trade volume up to this point
-                    cumulative_volume = 0.0
-                    for j in range(i + 1):  # Include current snapshot
-                        if j < len(snapshots) and hasattr(snapshots[j], 'trade_amount'):
-                            cumulative_volume += snapshots[j].trade_amount
-                    
-                    # Calculate utilization as percentage of concentrated liquidity that has been traded
-                    if initial_concentrated_liquidity > 0:
-                        # Assume that trades consume liquidity from concentrated range first
-                        # Scale factor to make utilization visible (concentrated liquidity is typically much larger than individual trades)
-                        utilization_rate = min(100.0, (cumulative_volume / initial_concentrated_liquidity) * 100 * 2)
-                    else:
-                        utilization_rate = 0.0
-                else:
-                    # Fallback: calculate based on trade activity
-                    if snapshot.trade_amount > 0:
-                        # Estimate utilization based on trade size relative to pool size
-                        pool_size = snapshot.moet_reserve + snapshot.btc_reserve
-                        utilization_rate = min(100.0, (snapshot.trade_amount / pool_size) * 100 * 10)  # Scale factor
-                    else:
-                        utilization_rate = 0.0
+                # Calculate price-based utilization (how much of concentrated range we've moved through)
+                price_change = abs(snapshot.price - correct_peg)
+                util = min(100, (price_change / (snapshot.concentration_range / 2)) * 100)
+                price_utilizations.append(util)
                 
-                utilization_rates.append(utilization_rate)
+                # Track cumulative trade volume
+                cumulative_volume = sum(s.trade_amount for s in snapshots[:i+1])
+                cumulative_volumes.append(cumulative_volume)
         
-        ax.fill_between(minutes, utilization_rates, alpha=0.6, color='#9370DB', 
-                        label="Concentration Utilization")
+        # Create dual y-axis plot
+        ax2 = ax.twinx()
+        
+        # Plot price utilization over time
+        line1 = ax.plot(minutes, price_utilizations, color='#2E8B57', linewidth=2, 
+                       label="Price Range Utilization (%)")
         ax.axhline(y=100, color='red', linestyle='--', alpha=0.7, 
-                   label="Full Concentration Range")
+                   label="Concentrated Range Exhausted")
         
+        # Plot cumulative trade volume over time
+        line2 = ax2.plot(minutes, cumulative_volumes, color='#4169E1', linewidth=2, 
+                        linestyle='--', alpha=0.8, label="Cumulative Trade Volume ($)")
+        
+        # Find when we hit 100% utilization (range exhausted)
+        exhaustion_point = None
+        for i, util in enumerate(price_utilizations):
+            if util >= 100 and exhaustion_point is None:
+                exhaustion_point = (minutes[i], cumulative_volumes[i])
+                break
+        
+        if exhaustion_point:
+            ax.axvline(x=exhaustion_point[0], color='red', alpha=0.5, linestyle=':')
+            ax.annotate(f"Range exhausted at ${exhaustion_point[1]:,.0f}", 
+                       xy=exhaustion_point[0], xytext=(10, 10),
+                       textcoords='offset points', fontsize=10,
+                       bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7))
+        
+        # Style the plot
         ax.set_xlabel("Time (minutes)")
-        ax.set_ylabel("Concentration Utilization (%)")
-        ax.set_title(f"LP Concentration Efficiency ({snapshots[0].concentration_range*100:.0f}% range)")
-        ax.legend()
+        ax.set_ylabel("Price Range Utilization (%)", color='#2E8B57')
+        ax2.set_ylabel("Cumulative Trade Volume ($)", color='#4169E1')
+        ax.set_title(f"Concentrated Range Exhaustion Analysis ({snapshots[0].concentration_range*100:.0f}% range)")
+        
+        # Combine legends
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax.legend(lines, labels, loc='upper left')
         ax.grid(True, alpha=0.3)
         ax.set_ylim(0, 120)
     

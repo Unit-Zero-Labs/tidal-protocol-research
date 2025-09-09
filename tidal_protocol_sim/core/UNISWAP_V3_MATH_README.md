@@ -623,5 +623,3 @@ This Uniswap V3 implementation is specifically designed for the Tidal Protocol s
 - Liquidation cost analysis
 - Rebalancing calculations
 - Advanced cross-tick swap functionality for complex scenarios
-
-The system integrates seamlessly with the broader Tidal Protocol simulation framework, providing accurate DEX functionality for comprehensive protocol analysis, including the sophisticated cross-tick swap mechanics needed for realistic market simulations.
