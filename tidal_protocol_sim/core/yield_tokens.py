@@ -17,7 +17,7 @@ from .uniswap_v3_math import create_yield_token_pool, UniswapV3SlippageCalculato
 class YieldToken:
     """Individual yield token with continuous yield accrual"""
     
-    def __init__(self, principal_amount: float, apr: float = 0.05, creation_minute: int = 0):
+    def __init__(self, principal_amount: float, apr: float = 0.10, creation_minute: int = 0):
         self.principal = principal_amount
         self.apr = apr
         self.creation_minute = creation_minute
@@ -56,12 +56,14 @@ class YieldTokenManager:
         if moet_amount <= 0:
             return []
             
+        if not self.yield_token_pool:
+            raise ValueError("YieldTokenManager requires a YieldTokenPool for minting yield tokens")
+            
         # Use Uniswap V3 pool to get actual yield tokens for MOET
-        if self.yield_token_pool:
-            actual_yield_tokens_received = self.yield_token_pool.execute_yield_token_purchase(moet_amount)
-        else:
-            # Fallback to 1:1 ratio if no pool available
-            actual_yield_tokens_received = moet_amount
+        actual_yield_tokens_received = self.yield_token_pool.execute_yield_token_purchase(moet_amount)
+        
+        if actual_yield_tokens_received <= 0:
+            raise ValueError(f"Failed to mint yield tokens for MOET amount {moet_amount}")
             
         # Create yield tokens based on actual amount received from pool
         num_tokens = int(actual_yield_tokens_received)  # Floor to whole tokens
@@ -177,8 +179,11 @@ class YieldTokenManager:
     
     def _calculate_real_slippage(self, yield_token_value: float) -> float:
         """Calculate real slippage using Uniswap V3 math"""
-        if not self.yield_token_pool or yield_token_value <= 0:
-            return yield_token_value * 0.999  # Fallback to hardcoded if no pool
+        if not self.yield_token_pool:
+            raise ValueError("YieldTokenManager requires a YieldTokenPool for accurate slippage calculations")
+        
+        if yield_token_value <= 0:
+            raise ValueError(f"Invalid yield token value for slippage calculation: {yield_token_value}")
         
         # Use Uniswap V3 slippage calculator for real pricing
         swap_result = self.yield_token_pool.slippage_calculator.calculate_swap_slippage(
@@ -187,8 +192,12 @@ class YieldTokenManager:
             concentrated_range=self.yield_token_pool.concentration_range
         )
         
+        # Validate the swap result
+        if "amount_out" not in swap_result or swap_result["amount_out"] is None:
+            raise ValueError(f"Uniswap V3 slippage calculation failed for yield token value {yield_token_value}: {swap_result}")
+        
         # Return the actual MOET amount after slippage
-        return swap_result.get("amount_out", yield_token_value * 0.999)
+        return swap_result["amount_out"]
 
 
 class YieldTokenPool:

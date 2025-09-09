@@ -397,6 +397,40 @@ print(f"Yield raised: ${yield_raised:.2f}")
 
 # Sell tokens to raise specific amount using real Uniswap V3 slippage
 moet_raised = manager.sell_yield_tokens(5_000, 60)
+```
+
+### Error Handling Example
+
+```python
+# The system will fail fast with clear error messages
+try:
+    # This will work - proper setup with pool
+    pool = YieldTokenPool(initial_moet_reserve=500_000)
+    manager = YieldTokenManager(yield_token_pool=pool)
+    tokens = manager.mint_yield_tokens(1000, 0)
+    
+except ValueError as e:
+    print(f"Error: {e}")
+    # Handle the error appropriately
+
+# This will fail - no pool provided
+try:
+    manager = YieldTokenManager()  # No pool!
+    manager.mint_yield_tokens(1000, 0)
+except ValueError as e:
+    print(f"Expected error: {e}")
+    # Output: "YieldTokenManager requires a YieldTokenPool for minting yield tokens"
+```
+
+### Pool Integration Example
+
+```python
+# Proper integration with High Tide agents
+pool = YieldTokenPool(initial_moet_reserve=500_000)
+manager = YieldTokenManager(yield_token_pool=pool)
+
+# All operations now use real Uniswap V3 math
+moet_raised = manager.sell_yield_tokens(5_000, 60)
 print(f"MOET raised: ${moet_raised:.2f}")
 
 # Get detailed portfolio analysis
@@ -477,25 +511,44 @@ class HighTideAgent:
 
 ## Error Handling
 
-The system includes comprehensive error handling:
+The system implements **fail-fast error handling** to ensure data integrity and prevent silent failures:
+
+### Core Principle: Fail Fast, Fail Clear
+
+Instead of using hardcoded fallbacks, the system throws descriptive errors when Uniswap V3 math fails:
 
 ```python
-try:
-    # Execute Uniswap V3 swap
-    amount_in_actual, amount_out_actual = self.uniswap_pool.swap(...)
-    return amount_out_actual / 1e6
+def _calculate_real_slippage(self, yield_token_value: float) -> float:
+    """Calculate real slippage using Uniswap V3 math"""
+    if not self.yield_token_pool:
+        raise ValueError("YieldTokenManager requires a YieldTokenPool for accurate slippage calculations")
     
-except (ValueError, ZeroDivisionError) as e:
-    print(f"Warning: Yield token operation failed: {e}")
-    return 0.0
+    if yield_token_value <= 0:
+        raise ValueError(f"Invalid yield token value for slippage calculation: {yield_token_value}")
+    
+    # Use Uniswap V3 slippage calculator for real pricing
+    swap_result = self.yield_token_pool.slippage_calculator.calculate_swap_slippage(...)
+    
+    # Validate the swap result
+    if "amount_out" not in swap_result or swap_result["amount_out"] is None:
+        raise ValueError(f"Uniswap V3 slippage calculation failed for yield token value {yield_token_value}: {swap_result}")
+    
+    return swap_result["amount_out"]
 ```
 
-### Error Scenarios Handled
+### Error Scenarios That Cause System Failure
 
-- **Invalid amounts**: Zero or negative input validation
-- **Mathematical errors**: Division by zero and overflow protection
-- **Trading failures**: Graceful handling of swap failures
-- **State inconsistencies**: Robust state management
+- **Missing YieldTokenPool**: `YieldTokenManager` requires a pool for all operations
+- **Invalid input values**: Zero or negative amounts are rejected
+- **Uniswap V3 calculation failures**: Invalid swap results cause immediate failure
+- **State inconsistencies**: Missing or corrupted pool state triggers errors
+
+### Benefits of Fail-Fast Approach
+
+- **Data Integrity**: Prevents incorrect calculations from propagating
+- **Clear Debugging**: Descriptive error messages pinpoint exact issues
+- **No Silent Failures**: All problems are immediately visible
+- **Consistent State**: Ensures all operations use valid Uniswap V3 math
 
 ## Integration with Tidal Protocol
 
@@ -526,11 +579,12 @@ The system integrates seamlessly with the broader Tidal Protocol simulation fram
 - Real-time slippage calculation based on actual pool state
 - Cross-tick trading support for complex scenarios
 - State consistency between agent portfolios and pool state
+- **Fail-fast error handling** ensures data integrity and prevents silent failures
 
 ### 4. Flexible Trading Operations
 - MOET ↔ Yield Token conversions using real Uniswap V3 swaps
 - Quote and execute operations with accurate pricing
-- Comprehensive error handling and fallback mechanisms
+- **Fail-fast error handling** with descriptive error messages
 
 ### 5. High Tide Agent Support
 - Surplus MOET investment

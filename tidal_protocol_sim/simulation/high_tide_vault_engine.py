@@ -25,10 +25,8 @@ class HighTideConfig(TidalConfig):
         self.scenario_name = "High_Tide_Vault"
         
         # High Tide specific parameters
-        self.yield_apr = 0.10  # 10% APR for yield tokens
         self.moet_yield_pool_size = 250_000  # $250K each side
         self.btc_decline_duration = 60  # 60 minutes
-        self.rebalancing_enabled = True
         
         # Yield Token Pool Configuration (Internal protocol trading)
         self.yield_token_concentration = 0.95  # 95% concentration for MOET:Yield Tokens
@@ -42,7 +40,6 @@ class HighTideConfig(TidalConfig):
         
         # Override base simulation parameters
         self.simulation_steps = self.btc_decline_duration
-        self.price_update_frequency = 1  # Update every minute
 
 
 class BTCPriceDeclineManager:
@@ -143,7 +140,8 @@ class HighTideVaultEngine(TidalProtocolEngine):
         # Replace agents with High Tide agents
         self.high_tide_agents = create_high_tide_agents(
             config.num_high_tide_agents,
-            config.monte_carlo_agent_variation
+            config.monte_carlo_agent_variation,
+            self.yield_token_pool
         )
         
         # Add High Tide agents to main agents dict

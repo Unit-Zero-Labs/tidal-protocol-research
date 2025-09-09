@@ -17,7 +17,7 @@ from ..core.uniswap_v3_math import calculate_rebalancing_cost_with_slippage
 class HighTideAgentState(AgentState):
     """Extended agent state for High Tide scenario"""
     
-    def __init__(self, agent_id: str, initial_balance: float, initial_hf: float, target_hf: float):
+    def __init__(self, agent_id: str, initial_balance: float, initial_hf: float, target_hf: float, yield_token_pool=None):
         # Initialize with BTC collateral focus
         super().__init__(agent_id, initial_balance, "high_tide_agent")
         
@@ -56,8 +56,8 @@ class HighTideAgentState(AgentState):
         # MOET borrowed based on initial health factor
         self.borrowed_balances = {Asset.MOET: moet_to_borrow}
         
-        # Initialize yield token manager
-        self.yield_token_manager = YieldTokenManager()
+        # Initialize yield token manager with pool
+        self.yield_token_manager = YieldTokenManager(yield_token_pool)
         
         # Rebalancing tracking
         self.rebalancing_events = []
@@ -79,11 +79,11 @@ class HighTideAgent(BaseAgent):
     High Tide agent with automatic yield token purchase and rebalancing
     """
     
-    def __init__(self, agent_id: str, initial_hf: float, target_hf: float, initial_balance: float = 100_000.0):
+    def __init__(self, agent_id: str, initial_hf: float, target_hf: float, initial_balance: float = 100_000.0, yield_token_pool=None):
         super().__init__(agent_id, "high_tide_agent", initial_balance)
         
         # Replace state with HighTideAgentState
-        self.state = HighTideAgentState(agent_id, initial_balance, initial_hf, target_hf)
+        self.state = HighTideAgentState(agent_id, initial_balance, initial_hf, target_hf, yield_token_pool)
         
         # Risk profile based on initial health factor
         if initial_hf >= 2.1:
@@ -411,7 +411,7 @@ class HighTideAgent(BaseAgent):
         return self.state.rebalancing_events.copy()
 
 
-def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True) -> list:
+def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True, yield_token_pool = None) -> list:
     """
     Create High Tide agents with varied risk profiles
     
@@ -445,7 +445,8 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True)
         agent = HighTideAgent(
             f"high_tide_conservative_{agent_id}",
             initial_hf,
-            target_hf
+            target_hf,
+            yield_token_pool=yield_token_pool
         )
         agents.append(agent)
         agent_id += 1
@@ -460,7 +461,8 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True)
         agent = HighTideAgent(
             f"high_tide_moderate_{agent_id}",
             initial_hf,
-            target_hf
+            target_hf,
+            yield_token_pool=yield_token_pool
         )
         agents.append(agent)
         agent_id += 1
@@ -475,7 +477,8 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True)
         agent = HighTideAgent(
             f"high_tide_aggressive_{agent_id}",
             initial_hf,
-            target_hf
+            target_hf,
+            yield_token_pool=yield_token_pool
         )
         agents.append(agent)
         agent_id += 1
