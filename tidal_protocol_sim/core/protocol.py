@@ -105,7 +105,7 @@ class TidalProtocol:
         # Protocol parameters
         self.target_health_factor = 1.2
         self.liquidation_close_factor = 0.5  # Max 50% of debt can be liquidated
-        self.dex_liquidity_allocation = 0.35  # 35% for debt cap calculations
+        self.dex_liquidity_allocation = 0.65  # 65% for debt cap calculations
         self.current_block = 0
         
         # Extreme scenario parameters for debt cap
@@ -163,7 +163,7 @@ class TidalProtocol:
         return 1.5  # Placeholder
     
     def calculate_debt_cap(self, liquidation_capacity: float = 0.0) -> float:
-        """Calculate debt cap using Ebisu-style methodology: A × B × C"""
+        """Calculate debt cap using methodology: A × B × C"""
         # A: Liquidation capacity (provided by simulation engine)
         total_liquidation_capacity = liquidation_capacity
         

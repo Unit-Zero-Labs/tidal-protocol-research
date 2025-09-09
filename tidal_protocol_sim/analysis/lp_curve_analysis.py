@@ -78,32 +78,14 @@ class LPCurveTracker:
                        trade_amount: float = 0.0, trade_type: str = ""):
         """Record a pool state snapshot with updated concentrated liquidity"""
         
-        # Calculate correct price if not provided
-        price = pool_state.get("price")
-        if price is None:
-            if "MOET:BTC" in self.pool_name:
-                # For MOET:BTC pool, calculate price as BTC per MOET
-                # token0_reserve = MOET (in USD), token1_reserve = BTC (in USD)
-                moet_reserve_usd = pool_state.get("token0_reserve", pool_state.get("moet_reserve", 0))
-                btc_reserve_usd = pool_state.get("token1_reserve", pool_state.get("btc_reserve", 0))
-                
-                if moet_reserve_usd > 0 and btc_reserve_usd > 0:
-                    # Convert USD reserves to actual token amounts
-                    moet_tokens = moet_reserve_usd  # MOET is 1:1 with USD
-                    btc_tokens = btc_reserve_usd / self.btc_price  # Convert USD to BTC tokens
-                    price = btc_tokens / moet_tokens  # BTC per MOET
-                else:
-                    price = 0.00001  # Default: 1 BTC = 100,000 MOET
-            else:
-                # For yield token pool, maintain 1:1 with MOET
-                price = 1.0
+        # Use the pool's built-in price calculation for accuracy
+        price = self.concentrated_pool.get_price()
         
         # Update the concentrated liquidity pool if there was a trade
         if trade_amount > 0 and self.concentrated_pool:
             # Track cumulative trade volume for utilization calculation
             self.cumulative_trade_volume += trade_amount
             
-            # Simulate and apply price impact on the concentrated liquidity
             # Determine token being traded in based on trade type and pool
             if trade_type == "rebalance":
                 # Rebalancing typically involves selling yield tokens for MOET
@@ -115,37 +97,40 @@ class LPCurveTracker:
                 # Buy operations - opposite direction
                 token_in = "MOET"
             
-            # Simulate trade impact and apply it to the pool state
-            impact = self.concentrated_pool.simulate_trade_impact(trade_amount, token_in)
+            # Execute actual swap to update pool state properly
+            # Convert USD to scaled amount for Uniswap V3 math
+            amount_in_scaled = int(trade_amount * 1e6)
             
-            # Apply the trade impact to update pool state
-            if impact and "new_price" in impact and impact["new_price"] > 0:
-                # Update the pool's sqrt_price_x96 based on the trade impact
-                import math
-                from ..core.uniswap_v3_math import Q96, sqrt_price_x96_to_tick, tick_to_sqrt_price_x96
-                
-                new_price = impact["new_price"]
-                sqrt_price = math.sqrt(new_price)
-                new_sqrt_price_x96 = int(sqrt_price * Q96)
-                
-                # Ensure bounds and update pool state
+            # Determine swap direction
+            zero_for_one = token_in in ["MOET", "token0"]
+            
+            # Execute the swap to update pool state
+            try:
                 from ..core.uniswap_v3_math import MIN_SQRT_RATIO, MAX_SQRT_RATIO
-                new_sqrt_price_x96 = max(MIN_SQRT_RATIO, min(MAX_SQRT_RATIO, new_sqrt_price_x96))
                 
-                self.concentrated_pool.sqrt_price_x96 = new_sqrt_price_x96
-                self.concentrated_pool.tick_current = sqrt_price_x96_to_tick(new_sqrt_price_x96)
+                sqrt_price_limit = MIN_SQRT_RATIO + 1 if zero_for_one else MAX_SQRT_RATIO - 1
                 
-                # Update legacy fields for backward compatibility
-                self.concentrated_pool._update_legacy_fields()
-            
-            
+                self.concentrated_pool.swap(
+                    zero_for_one=zero_for_one,
+                    amount_specified=amount_in_scaled,
+                    sqrt_price_limit_x96=sqrt_price_limit
+                )
+                
+                # Update price after swap
+                price = self.concentrated_pool.get_price()
+                
+            except (ValueError, ZeroDivisionError) as e:
+                # If swap fails, use current price and continue
+                print(f"Warning: Swap failed in LPCurveTracker: {e}")
+                price = self.concentrated_pool.get_price()
         
+        # Create snapshot using pool's current state for accuracy
         snapshot = PoolSnapshot(
             minute=minute,
-            moet_reserve=pool_state.get("token0_reserve", pool_state.get("moet_reserve", 0)),
-            btc_reserve=pool_state.get("token1_reserve", pool_state.get("btc_reserve", 0)),
+            moet_reserve=self.concentrated_pool.token0_reserve or pool_state.get("token0_reserve", pool_state.get("moet_reserve", 0)),
+            btc_reserve=self.concentrated_pool.token1_reserve or pool_state.get("token1_reserve", pool_state.get("btc_reserve", 0)),
             price=price,
-            liquidity=pool_state.get("liquidity", 0),
+            liquidity=self.concentrated_pool.get_total_active_liquidity() or pool_state.get("liquidity", 0),
             concentration_range=self.concentration_range,
             trade_amount=trade_amount,
             trade_type=trade_type,

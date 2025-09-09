@@ -9,7 +9,7 @@ __version__ = "1.0.0"
 __author__ = "Tidal Protocol Team"
 
 # Core components
-from .core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
+from .core.protocol import TidalProtocol, Asset, AssetPool
 from .core.moet import MoetStablecoin
 from .core.yield_tokens import YieldToken, YieldTokenManager, YieldTokenPool
 # Removed TidalMath - functionality integrated into protocol.py
@@ -37,7 +37,7 @@ from .analysis.metrics import TidalMetricsCalculator
 
 __all__ = [
     # Core
-    "TidalProtocol", "Asset", "AssetPool", "LiquidityPool",
+    "TidalProtocol", "Asset", "AssetPool",
     "MoetStablecoin", "YieldToken", "YieldTokenManager", "YieldTokenPool",
     
     # Agents

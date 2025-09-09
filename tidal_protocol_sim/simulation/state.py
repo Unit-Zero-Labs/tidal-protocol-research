@@ -43,7 +43,7 @@ class SimulationState:
         """Calculate market stress based on price movements"""
         initial_prices = {
             Asset.ETH: 4400.0,
-            Asset.BTC: 118_000.0,
+            Asset.BTC: 100_000.0,
             Asset.FLOW: 0.40,
             Asset.USDC: 1.0
         }
