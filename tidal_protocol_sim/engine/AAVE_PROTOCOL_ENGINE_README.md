@@ -27,7 +27,7 @@ The `AaveProtocolEngine` serves as the central coordination system that:
 - **Manages AAVE Agents**: Orchestrates 10-50 agents with varied risk profiles in Monte Carlo simulations
 - **Coordinates Yield Token Strategies**: Integrates with the [Yield Token System](../core/YIELD_TOKENS_README.md) for passive portfolio management
 - **Simulates Market Stress**: Implements BTC price decline scenarios using realistic volatility patterns
-- **Implements AAVE Liquidations**: Traditional 50% collateral seizure + 5% bonus with Uniswap V3 integration
+- **Implements AAVE Liquidations**: Traditional 50% collateral seizure + 5% bonus mechanics with Uniswap V3 swap integration
 - **Tracks Performance**: Provides comprehensive analytics and reporting across all simulation components
 
 ### System Integration Architecture
@@ -60,7 +60,7 @@ class AaveProtocolEngine(BaseLendingEngine):
         super().__init__(config)
         self.aave_config = config
         
-        # AAVE uses traditional AMM pools, not Uniswap V3
+        # AAVE liquidation parameters setup
         self._setup_aave_liquidation_pools()
 ```
 
@@ -373,6 +373,7 @@ def _check_aave_liquidations(self, minute: int):
         
         # Check if liquidation is needed (HF ≤ 1.0)
         if agent.state.health_factor <= 1.0:
+            # Liquidation is executed by the agent itself using Uniswap V3
             liquidation_event = agent.execute_aave_liquidation(minute, self.state.current_prices)
             
             if liquidation_event:
@@ -387,7 +388,7 @@ def _check_aave_liquidations(self, minute: int):
 
 ### AAVE-Style Liquidation with Uniswap V3 Integration
 
-The engine handles AAVE-style liquidation with proper Uniswap V3 integration:
+The engine handles AAVE-style liquidation mechanics but uses Uniswap V3 for the actual liquidation swaps:
 
 ```python
 def execute_aave_liquidation(self, current_minute: int, asset_prices: Dict[Asset, float], 
@@ -456,10 +457,10 @@ def execute_aave_liquidation(self, current_minute: int, asset_prices: Dict[Asset
 **Liquidation Mechanics:**
 - **Target Debt Reduction**: 50% of current debt (traditional AAVE)
 - **BTC Seizure Calculation**: Accounts for 5% liquidation bonus
-- **Uniswap V3 Integration**: BTC->MOET swap through MOET:BTC pool with real slippage
+- **Uniswap V3 Integration**: BTC->MOET swap through MOET:BTC pool with real slippage and fees
 - **Slippage-Aware Repayment**: Uses actual MOET received (post-slippage) to repay debt
 - **Liquidation Bonus**: 5% bonus calculated on actual debt repaid (post-slippage)
-- **Real Market Conditions**: Liquidation flows through trading mechanism for realistic pricing
+- **Real Market Conditions**: Liquidation flows through Uniswap V3 trading mechanism for realistic pricing
 
 ## Performance Analytics and Reporting
 
@@ -742,10 +743,10 @@ print(f"High Tide Rebalancing Cost: ${high_tide_results['cost_analysis']['total_
 - **Passive Response**: No crisis management or liquidation prevention strategies
 
 ### 5. AAVE-Style Liquidation with Uniswap V3
-- **Traditional Mechanics**: 50% collateral seizure + 5% bonus (classic AAVE)
-- **Uniswap V3 Integration**: BTC->MOET swap through MOET:BTC pool with real slippage
-- **Real Market Conditions**: Liquidation flows through trading mechanism for realistic pricing
-- **Slippage-Aware Calculations**: Accounts for actual slippage and fees in liquidation
+- **Traditional Mechanics**: 50% collateral seizure + 5% bonus (classic AAVE liquidation thresholds)
+- **Uniswap V3 Integration**: BTC->MOET swap through MOET:BTC pool with real slippage and fees
+- **Real Market Conditions**: Liquidation flows through Uniswap V3 trading mechanism for realistic pricing
+- **Slippage-Aware Calculations**: Accounts for actual slippage and fees in liquidation calculations
 
 ### 6. Comprehensive Analytics
 - **Performance Tracking**: Detailed metrics collection throughout simulation lifecycle
@@ -757,5 +758,3 @@ print(f"High Tide Rebalancing Cost: ${high_tide_results['cost_analysis']['total_
 - **Yield Token System**: Complete integration with [Portfolio Management](../core/YIELD_TOKENS_README.md#portfolio-management)
 - **Uniswap V3 Math**: Full access to [Concentrated Liquidity Mathematics](../core/UNISWAP_V3_MATH_README.md#concentrated-liquidity) for liquidation swaps
 - **Protocol State**: Seamless coordination with base lending infrastructure
-
-The AAVE Protocol Engine represents a sophisticated orchestration layer that implements traditional DeFi lending strategies with passive yield token management, realistic liquidation mechanics, and comprehensive analytics to provide deep insights into AAVE-style lending under market stress conditions. It serves as the perfect comparison baseline for evaluating High Tide's active rebalancing approach.

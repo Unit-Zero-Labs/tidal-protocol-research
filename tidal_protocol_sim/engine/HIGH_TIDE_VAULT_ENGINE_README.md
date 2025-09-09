@@ -146,7 +146,7 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True,
     - Moderate (40%): Initial HF = 1.5-1.8, Target HF = Initial - 0.15-0.25
     - Aggressive (30%): Initial HF = 1.3-1.5, Target HF = Initial - 0.15-0.4
     
-    Minimum Target HF = 1.2 for all agents
+    Minimum Target HF = 1.1 for all agents
     """
     if monte_carlo_variation:
         # Randomize agent count between 10-50
@@ -197,16 +197,30 @@ def _execute_high_tide_action(self, agent: HighTideAgent, action_type: AgentActi
         if swap_type == "buy_yield_tokens":
             success = self._execute_yield_token_purchase(agent, params, minute)
             return success, None
-        elif swap_type in ["sell_yield_tokens", "sell_yield_only", "emergency_sell_all_yield"]:
+        elif swap_type in ["sell_yield_tokens", "emergency_sell_all_yield"]:
             success, swap_data = self._execute_yield_token_sale(agent, params, minute)
             return success, swap_data
+    
+    elif action_type == AgentAction.BORROW:
+        if params.get("leverage_increase", False):
+            success = self._execute_leverage_increase_borrow(agent, params, minute)
+            return success, None
+        else:
+            return super()._execute_agent_action(agent, action_type, params)
+            
+    elif action_type == AgentAction.LIQUIDATE:
+        success = self._execute_liquidation(agent, params)
+        return success, None
+        
+    return False, None
 ```
 
 **Supported Actions:**
 - **Yield Token Purchase**: Initial investment and leverage increases
-- **Yield Token Sales**: Rebalancing and emergency liquidation
-- **Leverage Management**: Dynamic borrowing based on health factors
-- **Emergency Actions**: Crisis management and liquidation prevention
+- **Yield Token Sale**: Rebalancing via yield token sales
+- **Emergency Sell All Yield**: Full liquidation of remaining yield tokens
+- **Borrow (Leverage Increase)**: Dynamic borrowing based on health factors
+- **Liquidate**: Emergency liquidation when HF ≤ 1.0
 
 ### Yield Token Purchase Orchestration
 
@@ -251,16 +265,14 @@ def _execute_yield_token_sale(self, agent: HighTideAgent, params: dict, minute: 
         
     # Execute sale through agent
     if swap_type == "emergency_sell_all_yield":
-        moet_raised = agent.execute_yield_token_sale(float('inf'), minute, yield_only=False)
+        moet_raised = agent.execute_yield_token_sale(float('inf'), minute)
     else:
-        yield_only = swap_type == "sell_yield_only"
-        moet_raised = agent.execute_yield_token_sale(amount_needed, minute, yield_only=yield_only)
+        moet_raised = agent.execute_yield_token_sale(amount_needed, minute)
 ```
 
 **Sale Strategies:**
-- **Yield-Only Sales**: Preserves principal using [Yield Selling Strategies](../core/YIELD_TOKENS_README.md#yield-selling-strategies)
-- **Full Token Sales**: Complete liquidation for emergency scenarios
-- **Emergency Sales**: All remaining tokens when health factor critical
+- **Rebalancing Sales**: Sell yield tokens to reduce MOET debt
+- **Emergency Sales**: Sell all remaining yield tokens when health factor is critical
 
 ## BTC Price Decline Simulation
 
@@ -356,30 +368,19 @@ def _execute_rebalancing(self, asset_prices: Dict[Asset, float], current_minute:
     if debt_reduction_needed <= 0:
         return (AgentAction.HOLD, {})
     
-    # First try to sell only accrued yield
-    yield_available = self.state.yield_token_manager.calculate_total_yield_accrued(current_minute)
-    
-    if yield_available >= debt_reduction_needed:
-        # Sell only yield portion
-        return (AgentAction.SWAP, {
-            "action_type": "sell_yield_only",
-            "amount_needed": debt_reduction_needed,
-            "current_minute": current_minute
-        })
-    else:
-        # Need to sell principal yield tokens too
-        return (AgentAction.SWAP, {
-            "action_type": "sell_yield_tokens",
-            "amount_needed": debt_reduction_needed,
-            "current_minute": current_minute
-        })
+    # Sell yield tokens at their current (rebased) value
+    return (AgentAction.SWAP, {
+        "action_type": "sell_yield_tokens",
+        "amount_needed": debt_reduction_needed,
+        "current_minute": current_minute
+    })
 ```
 
 **Rebalancing Logic:**
 - **Health Factor Triggers**: Rebalancing when HF falls below target threshold
-- **Yield-First Strategy**: Attempts to sell only accrued yield to preserve principal
-- **Principal Sales**: Falls back to selling principal tokens if yield insufficient
+- **Direct Yield Token Sales**: Sells yield tokens at their current rebased value
 - **Debt Reduction**: Uses raised MOET to directly repay debt (no BTC swap needed)
+- **Target Restoration**: Aims to restore initial health factor through debt reduction
 
 ### Leverage Management
 
@@ -468,14 +469,16 @@ def execute_high_tide_liquidation(self, current_minute: int, asset_prices: Dict[
     if debt_to_repay <= 0:
         return None
     
-    # Step 1: Seize BTC for debt repayment
+    # Step 1: Calculate BTC needed for debt repayment
     btc_to_repay_debt = debt_to_repay / btc_price
+    available_btc = self.state.supplied_balances.get(Asset.BTC, 0.0)
+    
+    if btc_to_repay_debt > available_btc:
+        btc_to_repay_debt = available_btc
     
     # Step 2: Execute BTC->MOET swap through Uniswap V3 pool
     swap_result = simulation_engine.slippage_calculator.calculate_swap_slippage(
-        amount_in=btc_to_repay_debt,
-        token_in="BTC",
-        concentrated_range=simulation_engine.moet_btc_pool.concentration_range
+        btc_to_repay_debt, "BTC"
     )
     
     actual_moet_received = swap_result["amount_out"]
@@ -627,7 +630,7 @@ class HighTideConfig(TidalConfig):
 
 ### Monte Carlo Customization
 
-The engine supports sophisticated Monte Carlo customization:
+The engine supports Monte Carlo customization:
 
 ```python
 # Agent configuration for High Tide
@@ -761,4 +764,3 @@ generate_high_tide_dashboard(results, save_path="high_tide_analysis.png")
 - **Yield Token System**: Complete integration with [Portfolio Management](../core/YIELD_TOKENS_README.md#portfolio-management)
 - **Protocol State**: Seamless coordination with Tidal Protocol's lending infrastructure
 
-The High Tide Vault Engine represents a sophisticated orchestration layer that brings together advanced DeFi primitives, realistic market simulations, and comprehensive analytics to provide deep insights into yield-bearing token strategies under market stress conditions.
