@@ -187,7 +187,7 @@ $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 - Simple momentum trading (5% price movements)
 - Random market-making (small trades for liquidity)
 
-## Simulation Engines (`tidal_protocol_sim/simulation/`)
+## Simulation Engines (`tidal_protocol_sim/engine/`)
 
 ### 1. `base_lending_engine.py` - Common Simulation Framework
 **Purpose**: Abstract base for all lending protocol simulations

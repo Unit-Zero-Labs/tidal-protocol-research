@@ -8,9 +8,9 @@ and protocol stability as specified in the refactoring requirements.
 
 from typing import Dict, List, Callable
 from ..core.protocol import Asset
-from ..simulation.config import StressTestScenarios
-from ..simulation.tidal_engine import TidalProtocolEngine
-from ..simulation.state import SimulationState
+from ..engine.config import StressTestScenarios
+from ..engine.tidal_engine import TidalProtocolEngine
+from ..engine.state import SimulationState
 
 
 class StressTestScenario:
@@ -238,7 +238,7 @@ class TidalStressTestSuite:
         for scenario in self.scenarios:
             try:
                 # Create fresh engine for each scenario
-                from ..simulation.config import SimulationConfig
+                from ..engine.config import SimulationConfig
                 config = SimulationConfig()
                 engine = TidalProtocolEngine(config)
                 
@@ -262,7 +262,7 @@ class TidalStressTestSuite:
         if not scenario:
             raise ValueError(f"Scenario '{scenario_name}' not found")
         
-        from ..simulation.config import SimulationConfig
+        from ..engine.config import SimulationConfig
         config = SimulationConfig()
         engine = TidalProtocolEngine(config)
         

@@ -11,8 +11,8 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Any, Tuple
 from datetime import datetime
-from ..simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
-from ..simulation.aave_protocol_engine import AaveProtocolEngine, AaveConfig
+from ..engine.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
+from ..engine.aave_protocol_engine import AaveProtocolEngine, AaveConfig
 from ..analysis.results_manager import ResultsManager
 
 

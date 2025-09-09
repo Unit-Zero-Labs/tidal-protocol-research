@@ -75,7 +75,7 @@ Agents (State Only) → Policies (Decisions) → Actions (Universal Primitives) 
 ```
 src/
 ├── core/
-│   ├── simulation/
+│   ├── engine/
 │   │   ├── engine.py          # Main orchestration loop
 │   │   ├── primitives.py      # Action/Event/MarketSnapshot definitions  
 │   │   ├── factory.py         # Routes configs to appropriate engines

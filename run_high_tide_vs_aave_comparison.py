@@ -177,7 +177,7 @@ def test_individual_scenarios():
     # Test High Tide scenario
     print("\n🌊 Testing High Tide scenario...")
     try:
-        from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
+        from tidal_protocol_sim.engine.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
         
         config = HighTideConfig()
         config.num_high_tide_agents = 10  # Small test
@@ -200,7 +200,7 @@ def test_individual_scenarios():
     # Test AAVE scenario
     print("\n🏛️ Testing AAVE scenario...")
     try:
-        from tidal_protocol_sim.simulation.aave_protocol_engine import AaveProtocolEngine, AaveConfig
+        from tidal_protocol_sim.engine.aave_protocol_engine import AaveProtocolEngine, AaveConfig
         
         config = AaveConfig()
         config.num_aave_agents = 10   # Small test

@@ -12,9 +12,9 @@ import numpy as np
 from pathlib import Path
 from .scenarios import TidalStressTestSuite
 from .analyzer import StressTestAnalyzer
-from ..simulation.tidal_engine import TidalProtocolEngine, TidalConfig
-from ..simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
-from ..simulation.config import SimulationConfig
+from ..engine.tidal_engine import TidalProtocolEngine, TidalConfig
+from ..engine.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
+from ..engine.config import SimulationConfig
 from ..core.protocol import Asset
 from ..analysis.results_manager import ResultsManager, RunMetadata
 from ..analysis.scenario_charts import ScenarioChartGenerator

@@ -24,8 +24,8 @@ import random
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
-from tidal_protocol_sim.simulation.aave_protocol_engine import AaveProtocolEngine, AaveConfig
+from tidal_protocol_sim.engine.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
+from tidal_protocol_sim.engine.aave_protocol_engine import AaveProtocolEngine, AaveConfig
 from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
 from tidal_protocol_sim.agents.aave_agent import AaveAgent
 from tidal_protocol_sim.core.protocol import TidalProtocol

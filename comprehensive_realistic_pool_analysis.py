@@ -19,8 +19,8 @@ import seaborn as sns
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.high_tide_vault_engine import HighTideConfig, HighTideVaultEngine
-from tidal_protocol_sim.simulation.aave_protocol_engine import AaveConfig, AaveProtocolEngine
+from tidal_protocol_sim.engine.high_tide_vault_engine import HighTideConfig, HighTideVaultEngine
+from tidal_protocol_sim.engine.aave_protocol_engine import AaveConfig, AaveProtocolEngine
 from tidal_protocol_sim.analysis.high_tide_charts import HighTideChartGenerator
 
 

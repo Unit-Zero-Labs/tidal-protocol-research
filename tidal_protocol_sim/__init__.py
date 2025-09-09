@@ -21,12 +21,12 @@ from .agents.trader import BasicTrader
 from .agents.liquidator import Liquidator
 from .agents.high_tide_agent import HighTideAgent, create_high_tide_agents
 
-# Simulation
-from .simulation.tidal_engine import TidalProtocolEngine, TidalConfig
-from .simulation.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
-from .simulation.aave_protocol_engine import AaveProtocolEngine, AaveConfig
-from .simulation.config import SimulationConfig, StressTestScenarios
-from .simulation.state import SimulationState
+# Engine
+from .engine.tidal_engine import TidalProtocolEngine, TidalConfig
+from .engine.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
+from .engine.aave_protocol_engine import AaveProtocolEngine, AaveConfig
+from .engine.config import SimulationConfig, StressTestScenarios
+from .engine.state import SimulationState
 
 # Stress Testing
 from .stress_testing.runner import StressTestRunner, QuickStressTest

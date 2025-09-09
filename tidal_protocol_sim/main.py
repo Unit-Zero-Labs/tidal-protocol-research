@@ -21,8 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from tidal_protocol_sim.stress_testing.runner import StressTestRunner, QuickStressTest
     from tidal_protocol_sim.stress_testing.scenarios import TidalStressTestSuite  
-    from tidal_protocol_sim.simulation.config import SimulationConfig
-    from tidal_protocol_sim.simulation.tidal_engine import TidalProtocolEngine, TidalConfig
+    from tidal_protocol_sim.engine.config import SimulationConfig
+    from tidal_protocol_sim.engine.tidal_engine import TidalProtocolEngine, TidalConfig
     from tidal_protocol_sim.analysis.metrics import TidalMetricsCalculator
 except ImportError as e:
     print(f"Import error: {e}")

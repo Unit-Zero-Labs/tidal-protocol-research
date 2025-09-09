@@ -24,7 +24,7 @@ from typing import Dict, List, Any
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from tidal_protocol_sim.simulation.tidal_engine import TidalProtocolEngine, TidalConfig
+from tidal_protocol_sim.engine.tidal_engine import TidalProtocolEngine, TidalConfig
 from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
 from tidal_protocol_sim.agents.aave_agent import AaveAgent
 from tidal_protocol_sim.core.protocol import TidalProtocol, Asset, AssetPool, LiquidityPool
