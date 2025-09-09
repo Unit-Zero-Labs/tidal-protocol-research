@@ -294,6 +294,31 @@ The swap function properly handles:
 - **Partially overlapping ranges**: Complex liquidity dynamics
 - **Gap handling**: Proper behavior when no liquidity exists in price range
 
+### Legacy Field Updates
+
+The implementation ensures complete state consistency by automatically updating legacy reserve fields after each swap:
+
+```python
+# After swap execution, legacy fields are updated to reflect actual state
+def swap(self, zero_for_one: bool, amount_specified: int, sqrt_price_limit_x96: int):
+    # ... swap execution logic ...
+    
+    # Update pool state
+    self.sqrt_price_x96 = state['sqrt_price_x96']
+    self.tick_current = state['tick']
+    self.liquidity = state['liquidity']
+    
+    # Update legacy fields to reflect actual swap impact
+    self._update_legacy_fields()
+    
+    return (amount_in_final, amount_out_final)
+```
+
+This ensures that:
+- **Visualization accuracy**: Charts and analytics reflect actual pool state
+- **State consistency**: Legacy fields match the sophisticated tick-based calculations
+- **Real-time updates**: Reserve values accurately represent swap impact
+
 ## Slippage Calculation
 
 ### UniswapV3SlippageCalculator Class

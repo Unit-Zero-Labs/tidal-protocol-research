@@ -101,8 +101,8 @@ class TidalProtocolEngine(BaseLendingEngine):
     def _update_agent_health_factor(self, agent: BaseAgent):
         """Update agent's health factor based on current state"""
         collateral_factors = {
-            Asset.ETH: 0.75,
-            Asset.BTC: 0.75,
+            Asset.ETH: 0.80,
+            Asset.BTC: 0.80,
             Asset.FLOW: 0.50,
             Asset.USDC: 0.90
         }

@@ -888,6 +888,9 @@ class UniswapV3Pool:
         self.tick_current = state['tick']
         self.liquidity = state['liquidity']
         
+        # Update legacy fields to reflect actual swap impact
+        self._update_legacy_fields()
+        
         # Return amounts (input, output)
         if exact_input:
             amount_in_final = amount_specified - state['amount_specified_remaining']
@@ -1432,13 +1435,12 @@ def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, con
     )
 
 
-def create_yield_token_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.95) -> UniswapV3Pool:
+def create_yield_token_pool(pool_size_usd: float, concentration: float = 0.95) -> UniswapV3Pool:
     """
     Create a MOET:Yield Token Uniswap v3 pool with concentrated liquidity
     
     Args:
         pool_size_usd: Total pool size in USD
-        btc_price: Current BTC price in USD (for consistency)
         concentration: Liquidity concentration level (0.95 = 95% at peg)
         
     Returns:
@@ -1448,7 +1450,7 @@ def create_yield_token_pool(pool_size_usd: float, btc_price: float = 100_000.0, 
     return UniswapV3Pool(
         pool_name="MOET:Yield_Token",
         total_liquidity=pool_size_usd,
-        btc_price=btc_price,
+        btc_price=100_000.0,  # Default value, not used for yield tokens
         concentration=concentration
         # fee_tier and tick_spacing will be set automatically based on pool type
     )

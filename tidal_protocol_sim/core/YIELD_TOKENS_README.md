@@ -104,7 +104,7 @@ class YieldTokenManager:
 
 #### Core Portfolio Operations
 
-- `mint_yield_tokens(moet_amount, current_minute)`: Convert MOET to yield tokens using Uniswap V3 pool
+- `mint_yield_tokens(moet_amount, current_minute, use_direct_minting)`: Convert MOET to yield tokens with flexible creation methods
 - `sell_yield_tokens(amount_needed, current_minute)`: Sell tokens to raise MOET with real slippage
 - `sell_yield_above_principal(current_minute)`: Sell only accrued yield with real slippage
 - `calculate_total_value(current_minute)`: Get total portfolio value
@@ -197,6 +197,33 @@ def sell_yield_above_principal(self, current_minute: int) -> float:
 ```
 
 ## Trading and Liquidity Management
+
+### Flexible Yield Token Creation
+
+The system supports two distinct creation methods for yield tokens, providing flexibility for different simulation scenarios:
+
+#### 1. Direct Minting (Minute 0)
+For establishing balanced pool states without affecting liquidity:
+
+```python
+def mint_yield_tokens(self, moet_amount: float, current_minute: int, use_direct_minting: bool = False):
+    """Convert MOET to yield tokens using 1:1 rate at minute 0 or Uniswap V3 pool"""
+    if current_minute == 0 and use_direct_minting:
+        # At minute 0, yield tokens are purchased at 1:1 rate
+        # This establishes the initial $250k:$250k balanced pool
+        actual_yield_tokens_received = moet_amount  # 1:1 rate
+    else:
+        # MINUTE > 0: Use Uniswap V3 pool with real slippage
+        actual_yield_tokens_received = self.yield_token_pool.execute_yield_token_purchase(moet_amount)
+```
+
+#### 2. Uniswap V3 Pool Trading
+For realistic market-based pricing with slippage and fees:
+
+```python
+# All subsequent purchases use Uniswap V3 pool
+actual_yield_tokens_received = self.yield_token_pool.execute_yield_token_purchase(moet_amount)
+```
 
 ### Uniswap V3 Integration
 
@@ -377,15 +404,18 @@ pool_config = {
 pool = YieldTokenPool(initial_moet_reserve=500_000)
 manager = YieldTokenManager(yield_token_pool=pool)
 
-# Convert $10,000 MOET to yield tokens using Uniswap V3 pool
+# Convert $10,000 MOET to yield tokens using direct minting (minute 0)
 current_minute = 0
-yield_tokens = manager.mint_yield_tokens(10_000, current_minute)
+yield_tokens = manager.mint_yield_tokens(10_000, current_minute, use_direct_minting=True)
 
 # Check portfolio after 1 hour (60 minutes)
 portfolio = manager.get_portfolio_summary(60)
 print(f"Total Value: ${portfolio['total_current_value']:.2f}")
 print(f"Yield Accrued: ${portfolio['total_accrued_yield']:.2f}")
 print(f"Yield Percentage: {portfolio['yield_percentage']:.4f}%")
+
+# Subsequent purchases use Uniswap V3 pool with real slippage
+yield_tokens_2 = manager.mint_yield_tokens(5_000, 30, use_direct_minting=False)
 ```
 
 ### Advanced Portfolio Management
@@ -459,21 +489,26 @@ print(f"Pool State: {state}")
 
 ### Complete High Tide Agent Integration
 
-- **Note** : Base simulation assumes MOET:YieldToken LP Pool is balanced at peg after yield tokens are initially purchased via High Tide; thus, mint_yield_tokens is created for simplicity. 
+The system provides flexible yield token creation that adapts to simulation requirements:
 
 ```python
 class HighTideAgent:
-    def __init__(self):
+    def __init__(self, use_direct_minting_for_initial=True):
         self.pool = YieldTokenPool()
         self.yield_manager = YieldTokenManager(yield_token_pool=self.pool)
+        self.use_direct_minting_for_initial = use_direct_minting_for_initial
     
     def invest_surplus_moet(self, moet_amount: float, current_minute: int):
-        """Invest surplus MOET in yield tokens"""
-        # Convert MOET to yield tokens
-        yield_tokens = self.yield_manager.mint_yield_tokens(moet_amount, current_minute)
+        """Invest surplus MOET in yield tokens with flexible creation method"""
+        # Determine creation method based on minute and configuration
+        use_direct_minting = (current_minute == 0 and self.use_direct_minting_for_initial)
         
-        # Log investment
-        print(f"Invested ${moet_amount} in {len(yield_tokens)} yield tokens")
+        # Convert MOET to yield tokens
+        yield_tokens = self.yield_manager.mint_yield_tokens(moet_amount, current_minute, use_direct_minting)
+        
+        # Log investment with method used
+        method = "direct minting" if use_direct_minting else "Uniswap V3 pool"
+        print(f"Invested ${moet_amount} in {len(yield_tokens)} yield tokens using {method}")
         
         return yield_tokens
     
@@ -586,7 +621,13 @@ The system integrates seamlessly with the broader Tidal Protocol simulation fram
 - Quote and execute operations with accurate pricing
 - **Fail-fast error handling** with descriptive error messages
 
-### 5. High Tide Agent Support
+### 5. Adaptive Creation Methods
+- **Direct minting** for establishing balanced pool states
+- **Uniswap V3 trading** for realistic market-based pricing
+- **Configuration-driven** behavior for different simulation scenarios
+- **Seamless integration** with existing portfolio management
+
+### 6. High Tide Agent Support
 - Surplus MOET investment
 - Position rebalancing capabilities
 - Capital efficiency optimization

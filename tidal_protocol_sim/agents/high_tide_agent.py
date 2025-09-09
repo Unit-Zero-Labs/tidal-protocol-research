@@ -115,6 +115,10 @@ class HighTideAgent(BaseAgent):
             len(self.state.yield_token_manager.yield_tokens) == 0):
             return self._initial_yield_token_purchase(current_minute)
         
+        # Check if we can increase leverage (HF > initial HF)
+        if self._check_leverage_opportunity(asset_prices):
+            return self._execute_leverage_increase(asset_prices, current_minute)
+        
         # Check if rebalancing is needed (HF below initial threshold)
         if self._needs_rebalancing():
             action = self._execute_rebalancing(asset_prices, current_minute)
@@ -156,6 +160,30 @@ class HighTideAgent(BaseAgent):
             
         # Rebalance when current HF falls below the TARGET HF (the trigger threshold)
         return self.state.health_factor < self.state.target_health_factor
+    
+    def _check_leverage_opportunity(self, asset_prices: Dict[Asset, float]) -> bool:
+        """Check if agent can increase leverage when HF > initial HF"""
+        if self.state.health_factor > self.state.initial_health_factor:
+            return True
+        return False
+    
+    def _execute_leverage_increase(self, asset_prices: Dict[Asset, float], current_minute: int) -> tuple:
+        """Increase leverage by borrowing more MOET to restore initial HF"""
+        collateral_value = self._calculate_effective_collateral_value(asset_prices)
+        current_debt = self.state.moet_debt
+        
+        # Calculate target debt for initial HF
+        target_debt = collateral_value / self.state.initial_health_factor
+        additional_moet_needed = target_debt - current_debt
+        
+        if additional_moet_needed <= 0:
+            return (AgentAction.HOLD, {})
+        
+        return (AgentAction.BORROW, {
+            "amount": additional_moet_needed,
+            "current_minute": current_minute,
+            "leverage_increase": True
+        })
     
     def _execute_rebalancing(self, asset_prices: Dict[Asset, float], current_minute: int) -> tuple:
         """Execute rebalancing by selling yield tokens"""
@@ -210,6 +238,11 @@ class HighTideAgent(BaseAgent):
     def execute_high_tide_liquidation(self, current_minute: int, asset_prices: Dict[Asset, float]) -> Optional[Dict]:
         """Execute High Tide liquidation similar to Aave style"""
         
+        # Ensure we have BTC price from simulation engine
+        btc_price = asset_prices.get(Asset.BTC)
+        if btc_price is None:
+            raise ValueError(f"BTC price not provided in asset_prices for liquidation at minute {current_minute}")
+        
         # Calculate how much debt to repay to bring HF back to 1.1
         collateral_value = self._calculate_effective_collateral_value(asset_prices)
         target_debt = collateral_value / 1.1  # Target HF of 1.1
@@ -219,16 +252,15 @@ class HighTideAgent(BaseAgent):
         if debt_to_repay <= 0:
             return None
         
-        # Calculate BTC to seize (with 8% penalty)
-        btc_price = asset_prices.get(Asset.BTC, 100_000.0)
-        collateral_value_needed = debt_to_repay * 1.08  # 8% liquidation penalty
+        # Calculate BTC to seize (with 5% penalty)
+        collateral_value_needed = debt_to_repay * 1.05  # 5% liquidation penalty
         btc_to_seize = collateral_value_needed / btc_price
         
         # Check if we have enough BTC collateral
         available_btc = self.state.supplied_balances.get(Asset.BTC, 0.0)
         if btc_to_seize > available_btc:
             btc_to_seize = available_btc
-            debt_to_repay = (btc_to_seize * btc_price) / 1.08
+            debt_to_repay = (btc_to_seize * btc_price) / 1.05
         
         # Execute liquidation
         self.state.moet_debt -= debt_to_repay
@@ -246,7 +278,7 @@ class HighTideAgent(BaseAgent):
             "debt_repaid_value": debt_to_repay,
             "btc_seized": btc_to_seize,
             "btc_value_seized": btc_to_seize * btc_price,
-            "liquidation_bonus_value": debt_to_repay * 0.08,
+            "liquidation_bonus_value": debt_to_repay * 0.05,
             "liquidation_type": "high_tide_emergency"
         }
         
@@ -264,7 +296,10 @@ class HighTideAgent(BaseAgent):
     
     def _calculate_effective_collateral_value(self, asset_prices: Dict[Asset, float]) -> float:
         """Calculate effective collateral value using BTC collateral factor"""
-        btc_price = asset_prices.get(Asset.BTC, 100_000.0)
+        btc_price = asset_prices.get(Asset.BTC)
+        if btc_price is None:
+            raise ValueError("BTC price not provided in asset_prices for collateral value calculation")
+        
         btc_amount = self.state.supplied_balances.get(Asset.BTC, 0.0)
         # Use BTC collateral factor (should be 0.80)
         btc_collateral_factor = 0.80  # This matches what we set in protocol.py
@@ -293,13 +328,13 @@ class HighTideAgent(BaseAgent):
         self.state.total_interest_accrued += interest_accrued
         self.state.last_interest_update_minute = current_minute
     
-    def execute_yield_token_purchase(self, moet_amount: float, current_minute: int) -> bool:
+    def execute_yield_token_purchase(self, moet_amount: float, current_minute: int, use_direct_minting: bool = False) -> bool:
         """Execute yield token purchase"""
         if moet_amount <= 0:
             return False
             
         # Purchase yield tokens
-        new_tokens = self.state.yield_token_manager.mint_yield_tokens(moet_amount, current_minute)
+        new_tokens = self.state.yield_token_manager.mint_yield_tokens(moet_amount, current_minute, use_direct_minting)
         
         # Update MOET debt (it's already borrowed, now used for yield tokens)
         # Debt remains the same, but MOET is now in yield tokens
@@ -377,8 +412,12 @@ class HighTideAgent(BaseAgent):
         
         # Add High Tide specific metrics
         yield_summary = self.state.yield_token_manager.get_portfolio_summary(current_minute)
+        btc_price = asset_prices.get(Asset.BTC)
+        if btc_price is None:
+            raise ValueError("BTC price not provided in asset_prices for portfolio summary")
+            
         cost_of_rebalancing = self.calculate_cost_of_rebalancing(
-            asset_prices.get(Asset.BTC, 100_000.0), 
+            btc_price, 
             current_minute,
             pool_size_usd,
             concentrated_range
@@ -398,7 +437,7 @@ class HighTideAgent(BaseAgent):
             "rebalancing_events_count": len(self.state.rebalancing_events),
             "emergency_liquidations": self.state.emergency_liquidations,
             "cost_of_rebalancing": cost_of_rebalancing,
-            "net_position_value": 100_000.0 - cost_of_rebalancing,
+            "net_position_value": (self.state.btc_amount * btc_price) - cost_of_rebalancing,
             "automatic_rebalancing": self.state.automatic_rebalancing
         }
         

@@ -39,6 +39,9 @@ class HighTideConfig(TidalConfig):
         # BTC price decline parameters
         self.btc_final_price_range = (75_000.0, 85_000.0)  # 15-25% decline
         
+        # Yield Token Creation Method
+        self.use_direct_minting_for_initial = True  # True = 1:1 minting at minute 0, False = Uniswap purchases
+        
         # Override base simulation parameters
         self.simulation_steps = self.btc_decline_duration
 
@@ -50,19 +53,13 @@ class HighTideVaultEngine(TidalProtocolEngine):
         # Initialize with High Tide config - gets all Uniswap V3 functionality from Tidal
         super().__init__(config)
         self.high_tide_config = config
-        
-        # Add yield token pools ON TOP of existing Tidal functionality
-        self._setup_yield_token_pools()
-        
+                
         # Initialize High Tide specific components
         self.yield_token_pool = YieldTokenPool(
-            initial_moet_reserve=config.moet_btc_pool_size,
-            btc_price=config.btc_initial_price,
+            initial_moet_reserve=config.moet_yield_pool_size,
             concentration=config.yield_token_concentration
         )
-        
-        # Use YieldTokenPool's built-in slippage calculator
-        # No need to create a separate one - YieldTokenPool already has one
+        # BTC Price Manager is used for BTC price decline
         
         self.btc_price_manager = BTCPriceDeclineManager(
             initial_price=config.btc_initial_price,
@@ -102,11 +99,6 @@ class HighTideVaultEngine(TidalProtocolEngine):
         self.agent_health_history = []
         self.btc_price_history = []
         
-    def _setup_yield_token_pools(self):
-        """Add yield token functionality to existing Tidal base"""
-        # No longer needed - YieldTokenPool handles everything internally
-        # The yield_token_pool is created in __init__ and contains its own Uniswap V3 pool
-        pass
         
     def _setup_high_tide_positions(self):
         """Set up initial High Tide agent positions"""
@@ -216,11 +208,40 @@ class HighTideVaultEngine(TidalProtocolEngine):
                 success, swap_data = self._execute_yield_token_sale(agent, params, minute)
                 return success, swap_data
                 
+        elif action_type == AgentAction.BORROW:
+            if params.get("leverage_increase", False):
+                success = self._execute_leverage_increase_borrow(agent, params, minute)
+                return success, None
+            else:
+                # Handle regular borrows
+                return super()._execute_agent_action(agent, action_type, params)
+                
         elif action_type == AgentAction.LIQUIDATE:
             success = self._execute_liquidation(agent, params)
             return success, None
             
         return False, None
+        
+    def _execute_leverage_increase_borrow(self, agent: HighTideAgent, params: dict, minute: int) -> bool:
+        """Execute additional MOET borrowing for leverage increase"""
+        amount = params.get("amount", 0.0)
+        
+        if amount <= 0:
+            return False
+        
+        # Borrow additional MOET
+        if self.protocol.borrow(agent.agent_id, amount):
+            agent.state.borrowed_balances[Asset.MOET] += amount
+            agent.state.moet_debt += amount
+            agent.state.token_balances[Asset.MOET] += amount
+            
+            # Determine if we should use direct minting (minute 0 + config enabled)
+            use_direct_minting = (minute == 0 and self.high_tide_config.use_direct_minting_for_initial)
+            
+            # Use new MOET to buy more yield tokens
+            return agent.execute_yield_token_purchase(amount, minute, use_direct_minting)
+        
+        return False
         
     def _execute_yield_token_purchase(self, agent: HighTideAgent, params: dict, minute: int) -> bool:
         """Execute yield token purchase for agent"""
@@ -228,18 +249,31 @@ class HighTideVaultEngine(TidalProtocolEngine):
         
         if moet_amount <= 0:
             return False
-            
-        success = agent.execute_yield_token_purchase(moet_amount, minute)
+        
+        # Determine if we should use direct minting (minute 0 + config enabled)
+        use_direct_minting = (minute == 0 and self.high_tide_config.use_direct_minting_for_initial)
+        
+        success = agent.execute_yield_token_purchase(moet_amount, minute, use_direct_minting)
         
         if success:
-            self.yield_token_pool.execute_yield_token_purchase(moet_amount)
+            # Only update pool state if NOT using direct minting at minute 0
+            if not use_direct_minting:
+                self.yield_token_pool.execute_yield_token_purchase(moet_amount)
+            
+            # Calculate yield tokens received for tracking
+            if use_direct_minting:
+                yield_tokens_received = moet_amount  # 1:1 rate
+            else:
+                yield_tokens_received = self.yield_token_pool.quote_yield_token_purchase(moet_amount)
             
             self.yield_token_trades.append({
                 "minute": minute,
                 "agent_id": agent.agent_id,
                 "action": "purchase",
                 "moet_amount": moet_amount,
-                "agent_health_factor": agent.state.health_factor
+                "yield_tokens_received": yield_tokens_received,
+                "agent_health_factor": agent.state.health_factor,
+                "use_direct_minting": use_direct_minting
             })
             
         return success

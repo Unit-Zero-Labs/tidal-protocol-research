@@ -51,21 +51,27 @@ class YieldTokenManager:
         self.total_principal_invested = 0.0
         self.yield_token_pool = yield_token_pool
         
-    def mint_yield_tokens(self, moet_amount: float, current_minute: int) -> List[YieldToken]:
-        """Convert MOET to yield tokens using Uniswap V3 pool"""
+    def mint_yield_tokens(self, moet_amount: float, current_minute: int, use_direct_minting: bool = False) -> List[YieldToken]:
+        """Convert MOET to yield tokens using 1:1 rate at minute 0 or Uniswap V3 pool"""
         if moet_amount <= 0:
             return []
             
         if not self.yield_token_pool:
             raise ValueError("YieldTokenManager requires a YieldTokenPool for minting yield tokens")
-            
-        # Use Uniswap V3 pool to get actual yield tokens for MOET
-        actual_yield_tokens_received = self.yield_token_pool.execute_yield_token_purchase(moet_amount)
+        
+        # MINUTE 0: Use 1:1 rate to establish balanced pool
+        if current_minute == 0 and use_direct_minting:
+            # At minute 0, yield tokens are purchased at 1:1 rate
+            # This establishes the initial $250k:$250k balanced pool
+            actual_yield_tokens_received = moet_amount  # 1:1 rate
+        else:
+            # MINUTE > 0: Use Uniswap V3 pool with real slippage
+            actual_yield_tokens_received = self.yield_token_pool.execute_yield_token_purchase(moet_amount)
         
         if actual_yield_tokens_received <= 0:
             raise ValueError(f"Failed to mint yield tokens for MOET amount {moet_amount}")
             
-        # Create yield tokens based on actual amount received from pool
+        # Create yield tokens based on actual amount received
         num_tokens = int(actual_yield_tokens_received)  # Floor to whole tokens
         new_tokens = []
         
@@ -209,12 +215,11 @@ class YieldTokenPool:
     Now leverages sophisticated Uniswap V3 concentrated liquidity mathematics.
     """
     
-    def __init__(self, initial_moet_reserve: float = 250_000.0, btc_price: float = 100_000.0, concentration: float = 0.95):
+    def __init__(self, initial_moet_reserve: float = 250_000.0, concentration: float = 0.95):
         # Create the underlying Uniswap V3 pool
         pool_size_usd = initial_moet_reserve * 2  # Total pool size (both sides)
         self.uniswap_pool = create_yield_token_pool(
             pool_size_usd=pool_size_usd,
-            btc_price=btc_price,
             concentration=concentration
         )
         
