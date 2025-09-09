@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Streamlined Tidal Protocol Implementation
+Tidal Protocol Implementation
 
 This module contains the core TidalProtocol class focused on lending mechanics,
 following the refactoring guidelines to simplify and eliminate generic framework complexity.

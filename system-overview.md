@@ -159,6 +159,9 @@ debt_reduction_needed = current_debt - (effective_collateral_value / initial_hea
 4. Borrow if can do safely (target HF 1.5)
 
 ### 5. `liquidator.py` - Liquidation Bot
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+ THIS SHOULD BE BUILT INTO THE AAVE ENGINE AND THE TIDAL ENGINE RESPECTIVELY, SINCE EACH HAVE DIFFERENT LIQUIDATION MECHANICS. WE DO NOT WANT A LIQUIDATOR AGENT, BUT RATHER THE LIQUIDATION IS BUILT INTO THE AAVE ENGINE AND THE TIDAL ENGINE
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 **Purpose**: Identifies and executes liquidation opportunities
 
 **Strategy**:
