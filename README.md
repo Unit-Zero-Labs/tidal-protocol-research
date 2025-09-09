@@ -247,6 +247,3 @@ This is a research repository focused on DeFi protocol analysis. The modular arc
 - Enhanced analysis metrics
 - Alternative protocol implementations
 
-## 📄 License
-
-[Add your license information here]
