@@ -46,7 +46,7 @@ def get_current_value(self, current_minute: int) -> float:
     minutes_elapsed = current_minute - self.creation_minute
     # Convert APR to per-minute rate: (1 + APR)^(1/525600) - 1
     minute_rate = (1 + self.apr) ** (1 / 525600) - 1
-    return self.principal * (1 + minute_rate) ** minutes_elapsed
+    return self.initial_value * (1 + minute_rate) ** minutes_elapsed
 ```
 
 ### Key Mathematical Constants
@@ -54,15 +54,15 @@ def get_current_value(self, current_minute: int) -> float:
 - **APR**: 10% (0.10) annual percentage rate
 - **Minutes per year**: 525,600 (365.25 days × 24 hours × 60 minutes)
 - **Per-minute rate**: `(1 + 0.10)^(1/525600) - 1 ≈ 0.0000181%`
-- **Slippage factor**: 0.1% (0.999) for trading operations
+- **Slippage factor**: 0.1% (0.999) used only by `YieldToken.get_sellable_value`; portfolio operations use Uniswap V3 pricing
 
 ### Yield Calculation Formula
 
-For a yield token with principal `P`, APR `r`, and time elapsed `t` minutes:
+For a yield token with initial value `initial_value`, APR `r`, and time elapsed `t` minutes:
 
 ```
-Value = P × (1 + r)^(t/525600)
-Yield = Value - P
+Value = initial_value × (1 + r)^(t/525600)
+Yield = Value - initial_value
 ```
 
 ## Core Classes and Components
@@ -97,7 +97,7 @@ class YieldTokenManager:
     
     def __init__(self, yield_token_pool: Optional['YieldTokenPool'] = None):
         self.yield_tokens: List[YieldToken] = []
-        self.total_principal_invested = 0.0
+        self.total_initial_value_invested = 0.0
         self.yield_token_pool = yield_token_pool
 ```
 
@@ -139,12 +139,12 @@ The system implements true continuous compound interest with minute-level precis
 def get_current_value(self, current_minute: int) -> float:
     """Calculate current value including accrued yield"""
     if current_minute < self.creation_minute:
-        return self.principal
+        return self.initial_value
         
     minutes_elapsed = current_minute - self.creation_minute
     # Convert APR to per-minute rate: (1 + APR)^(1/525600) - 1
     minute_rate = (1 + self.apr) ** (1 / 525600) - 1
-    return self.principal * (1 + minute_rate) ** minutes_elapsed
+    return self.initial_value * (1 + minute_rate) ** minutes_elapsed
 ```
 
 ### Yield Accrual Examples
@@ -178,7 +178,7 @@ def sell_yield_tokens(self, amount_needed: float, current_minute: int) -> float:
     real_moet_value = self._calculate_real_slippage(token_value)
 ```
 
-**Key Concept**: Since yield tokens are rebasing, there's no distinction between "principal" and "yield" - each token simply has a current value that includes all accrued yield. When you sell tokens, you're selling them at their current (higher) value.
+**Key Concept**: Since yield tokens are rebasing, there's no distinction between "initial value" and "yield" - each token simply has a current value that includes all accrued yield. When you sell tokens, you're selling them at their current (higher) value.
 
 ## Trading and Liquidity Management
 
@@ -201,6 +201,8 @@ def mint_yield_tokens(self, moet_amount: float, current_minute: int, use_direct_
         actual_yield_tokens_received = self.yield_token_pool.execute_yield_token_purchase(moet_amount)
 ```
 
+Note: Minting floors to whole $1 tokens (fractions are discarded during creation).
+
 #### 2. Uniswap V3 Pool Trading
 For realistic market-based pricing with slippage and fees:
 
@@ -214,12 +216,11 @@ actual_yield_tokens_received = self.yield_token_pool.execute_yield_token_purchas
 The yield token system leverages sophisticated Uniswap V3 mathematics throughout:
 
 ```python
-def __init__(self, initial_moet_reserve: float = 250_000.0, btc_price: float = 100_000.0, concentration: float = 0.95):
+def __init__(self, initial_moet_reserve: float = 250_000.0, concentration: float = 0.95):
     # Create the underlying Uniswap V3 pool
     pool_size_usd = initial_moet_reserve * 2  # Total pool size (both sides)
     self.uniswap_pool = create_yield_token_pool(
         pool_size_usd=pool_size_usd,
-        btc_price=btc_price,
         concentration=concentration
     )
     
@@ -227,10 +228,12 @@ def __init__(self, initial_moet_reserve: float = 250_000.0, btc_price: float = 1
     self.slippage_calculator = UniswapV3SlippageCalculator(self.uniswap_pool)
 ```
 
-The system ensures complete state consistency by using Uniswap V3 math for all trading operations, including:
+The system uses Uniswap V3 math for trading operations, including:
 - Real-time slippage calculation based on actual pool liquidity
 - Accurate pricing that reflects current market conditions
-- State updates that maintain consistency between agent portfolios and pool state
+- Purchases that update both agent portfolios and pool state; sales priced via quotes in `YieldTokenManager` do not mutate pool state
+
+Note: To mutate pool state on sales, use `YieldTokenPool.execute_yield_token_sale(...)` instead of the manager's quoted pricing path.
 
 ### Trading Operations
 
@@ -285,8 +288,11 @@ def quote_yield_token_purchase(self, moet_amount: float) -> float:
 
 def _calculate_real_slippage(self, yield_token_value: float) -> float:
     """Calculate real slippage using Uniswap V3 math"""
-    if not self.yield_token_pool or yield_token_value <= 0:
-        return yield_token_value * 0.999  # Fallback if no pool available
+    if not self.yield_token_pool:
+        raise ValueError("YieldTokenManager requires a YieldTokenPool for accurate slippage calculations")
+    
+    if yield_token_value <= 0:
+        raise ValueError(f"Invalid yield token value for slippage calculation: {yield_token_value}")
     
     # Use Uniswap V3 slippage calculator for real pricing
     swap_result = self.yield_token_pool.slippage_calculator.calculate_swap_slippage(
@@ -295,8 +301,14 @@ def _calculate_real_slippage(self, yield_token_value: float) -> float:
         concentrated_range=self.yield_token_pool.concentration_range
     )
     
-    return swap_result.get("amount_out", yield_token_value * 0.999)
+    # Validate the swap result
+    if "amount_out" not in swap_result or swap_result["amount_out"] is None:
+        raise ValueError(f"Uniswap V3 slippage calculation failed for yield token value {yield_token_value}: {swap_result}")
+    
+    return swap_result["amount_out"]
 ```
+
+Note: The pool exposes `concentration_range = 1.0 - concentration` and this value is passed to the slippage calculator as `concentrated_range`.
 
 ### Both Directions Available:
 
@@ -338,22 +350,39 @@ def get_portfolio_summary(self, current_minute: int) -> Dict[str, float]:
     
     return {
         "num_tokens": len(self.yield_tokens),
-        "total_principal": self.total_principal_invested,
+        "total_initial_value": self.total_initial_value_invested,
         "total_current_value": total_value,
         "total_accrued_yield": total_yield,
-        "yield_percentage": (total_yield / self.total_principal_invested * 100) if self.total_principal_invested > 0 else 0.0,
+        "yield_percentage": (total_yield / self.total_initial_value_invested * 100) if self.total_initial_value_invested > 0 else 0.0,
         "average_token_age_minutes": self._calculate_average_age(current_minute)
     }
 ```
 
 ### Portfolio Metrics
 
-- **Total Principal**: Sum of all token principals
+- **Total Initial Value**: Sum of all token initial values
 - **Total Current Value**: Sum of all token current values
 - **Total Accrued Yield**: Sum of all accrued yield
-- **Yield Percentage**: Total yield as percentage of principal
+- **Yield Percentage**: Total yield as percentage of initial value
 - **Average Token Age**: Average age of tokens in minutes
 - **Number of Tokens**: Count of active yield tokens
+
+### Pool State
+
+`YieldTokenPool.get_pool_state()` returns the following fields:
+
+```python
+{
+    "moet_reserve": float,
+    "yield_token_reserve": float,
+    "exchange_rate": float,      # equals current_price
+    "total_liquidity": float,
+    "concentration": float,
+    "fee_tier": float,
+    "current_price": float,
+    "tick_current": int
+}
+```
 
 ## Integration with Uniswap V3
 
@@ -370,14 +399,6 @@ pool_config = {
     "price_range": "±0.1%"    # Tight range around 1:1 peg
 }
 ```
-
-### Advanced Features
-
-- **Concentrated Liquidity**: 95% of liquidity concentrated at 1:1 peg
-- **Low Fees**: 0.05% fee tier for stable pairs
-- **Tight Price Control**: 10 tick spacing for precise pricing
-- **Cross-Tick Support**: Handles complex trading scenarios
-- **Slippage Calculation**: Real-time cost analysis
 
 ## Usage Examples
 
@@ -402,41 +423,6 @@ print(f"Yield Percentage: {portfolio['yield_percentage']:.4f}%")
 yield_tokens_2 = manager.mint_yield_tokens(5_000, 30, use_direct_minting=False)
 ```
 
-### Advanced Portfolio Management
-
-```python
-# Sell tokens at their current (rebased) value to raise specific amount
-moet_raised = manager.sell_yield_tokens(5_000, 60)
-print(f"MOET raised: ${moet_raised:.2f}")
-
-# Get portfolio summary to see current value vs initial value
-summary = manager.get_portfolio_summary(60)
-print(f"Total current value: ${summary['total_current_value']:.2f}")
-print(f"Total yield accrued: ${summary['total_accrued_yield']:.2f}")
-```
-
-### Error Handling Example
-
-```python
-# The system will fail fast with clear error messages
-try:
-    # This will work - proper setup with pool
-    pool = YieldTokenPool(initial_moet_reserve=500_000)
-    manager = YieldTokenManager(yield_token_pool=pool)
-    tokens = manager.mint_yield_tokens(1000, 0)
-    
-except ValueError as e:
-    print(f"Error: {e}")
-    # Handle the error appropriately
-
-# This will fail - no pool provided
-try:
-    manager = YieldTokenManager()  # No pool!
-    manager.mint_yield_tokens(1000, 0)
-except ValueError as e:
-    print(f"Expected error: {e}")
-    # Output: "YieldTokenManager requires a YieldTokenPool for minting yield tokens"
-```
 
 ### Pool Integration Example
 
@@ -507,73 +493,6 @@ class HighTideAgent:
         return moet_raised
 ```
 
-## Performance Considerations
-
-### Computational Efficiency
-
-- **Minute-level precision**: Efficient per-minute yield calculations
-- **Uniswap V3 integration**: Leverages efficient concentrated liquidity math
-- **Memory management**: Efficient token storage and cleanup
-
-### Scalability Features
-
-- **Batch operations**: Efficient handling of multiple tokens
-- **Lazy evaluation**: Calculations performed only when needed
-- **State caching**: Cached portfolio summaries for performance
-- **Error handling**: Robust error recovery for trading operations
-
-## Error Handling
-
-The system implements **fail-fast error handling** to ensure data integrity and prevent silent failures:
-
-### Core Principle: Fail Fast, Fail Clear
-
-Instead of using hardcoded fallbacks, the system throws descriptive errors when Uniswap V3 math fails:
-
-```python
-def _calculate_real_slippage(self, yield_token_value: float) -> float:
-    """Calculate real slippage using Uniswap V3 math"""
-    if not self.yield_token_pool:
-        raise ValueError("YieldTokenManager requires a YieldTokenPool for accurate slippage calculations")
-    
-    if yield_token_value <= 0:
-        raise ValueError(f"Invalid yield token value for slippage calculation: {yield_token_value}")
-    
-    # Use Uniswap V3 slippage calculator for real pricing
-    swap_result = self.yield_token_pool.slippage_calculator.calculate_swap_slippage(...)
-    
-    # Validate the swap result
-    if "amount_out" not in swap_result or swap_result["amount_out"] is None:
-        raise ValueError(f"Uniswap V3 slippage calculation failed for yield token value {yield_token_value}: {swap_result}")
-    
-    return swap_result["amount_out"]
-```
-
-### Error Scenarios That Cause System Failure
-
-- **Missing YieldTokenPool**: `YieldTokenManager` requires a pool for all operations
-- **Invalid input values**: Zero or negative amounts are rejected
-- **Uniswap V3 calculation failures**: Invalid swap results cause immediate failure
-- **State inconsistencies**: Missing or corrupted pool state triggers errors
-
-### Benefits of Fail-Fast Approach
-
-- **Data Integrity**: Prevents incorrect calculations from propagating
-- **Clear Debugging**: Descriptive error messages pinpoint exact issues
-- **No Silent Failures**: All problems are immediately visible
-- **Consistent State**: Ensures all operations use valid Uniswap V3 math
-
-## Integration with Tidal Protocol
-
-This yield token system is specifically designed for the Tidal Protocol simulation, providing:
-
-- **High Tide agent support**: Yield-bearing token portfolio management
-- **Position rebalancing**: Flexible MOET raising strategies
-- **Capital efficiency**: 10% APR on idle MOET
-- **Risk management**: Principal preservation options
-- **Protocol integration**: Seamless Uniswap V3 trading
-
-The system integrates seamlessly with the broader Tidal Protocol simulation framework, providing sophisticated yield token functionality for comprehensive protocol analysis and realistic market simulations.
 
 ## Key Features Summary
 
