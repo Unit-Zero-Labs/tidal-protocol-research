@@ -45,10 +45,10 @@ class ComprehensiveComparisonConfig:
         
         # Health Factor variation scenarios
         self.health_factor_scenarios = [
-            {"initial_hf_range": (1.2, 1.3), "target_hf": 1.01, "scenario_name": "Aggressive_1.01"},
-            {"initial_hf_range": (1.3, 1.4), "target_hf": 1.025, "scenario_name": "Moderate_1.025"},
-            {"initial_hf_range": (1.4, 1.5), "target_hf": 1.05, "scenario_name": "Conservative_1.05"},
-            {"initial_hf_range": (1.2, 1.5), "target_hf": 1.075, "scenario_name": "Mixed_1.075"},
+            {"initial_hf_range": (1.1, 1.2), "target_hf": 1.01, "scenario_name": "Aggressive_1.01"},
+            {"initial_hf_range": (1.2, 1.4), "target_hf": 1.025, "scenario_name": "Moderate_1.025"},
+            {"initial_hf_range": (1.3, 1.5), "target_hf": 1.05, "scenario_name": "Conservative_1.05"},
+            {"initial_hf_range": (1.1, 1.5), "target_hf": 1.075, "scenario_name": "Mixed_1.075"},
             {"initial_hf_range": (1.25, 1.45), "target_hf": 1.1, "scenario_name": "Balanced_1.1"}
         ]
         
