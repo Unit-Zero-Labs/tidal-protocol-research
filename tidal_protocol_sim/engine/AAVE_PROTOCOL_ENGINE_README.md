@@ -125,14 +125,14 @@ class AaveConfig(BaseLendingConfig):
         
         # Yield token parameters (for fair comparison)
         self.yield_apr = 0.10  # 10% APR
-        self.moet_btc_pool_size = 500_000  # Same as Tidal for comparison
+        self.moet_btc_pool_size = 500_000  # Same as High Tide for comparison
         
         # BTC price decline parameters (for fair comparison)
         self.btc_initial_price = 100_000.0
         self.btc_decline_duration = 60  # 60 minutes
         self.btc_final_price_range = (75_000.0, 85_000.0)  # 15-25% decline
         
-        # Agent configuration
+        # Agent configuration matches High Tide
         self.num_aave_agents = 20
         self.monte_carlo_agent_variation = True
         
