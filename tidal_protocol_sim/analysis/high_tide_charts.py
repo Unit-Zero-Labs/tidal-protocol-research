@@ -498,16 +498,15 @@ Protocol Revenue: ${cumulative_fees:,.0f}
                 if minute < len(btc_price_history):
                     price = btc_price_history[minute]
                     
-                    # Color code by rebalancing type
-                    color = 'yellow' if event.get("rebalancing_type") == "yield_only" else 'red'
+                    # Color code rebalancing events
+                    color = 'red'  # All yield token sales are now the same type
                     size = event["moet_raised"] / 1000  # Size based on amount
                     
                     ax1.scatter(minute, price, color=color, s=max(20, min(200, size)), 
                                alpha=0.7, edgecolors='black', linewidth=0.5)
             
-            # Add legend for rebalancing types
-            ax1.scatter([], [], color='yellow', s=100, label='Yield-Only Sales', alpha=0.7, edgecolors='black')
-            ax1.scatter([], [], color='red', s=100, label='Full Token Sales', alpha=0.7, edgecolors='black')
+            # Add legend for rebalancing events
+            ax1.scatter([], [], color='red', s=100, label='Yield Token Sales', alpha=0.7, edgecolors='black')
             
             ax1.set_ylabel("BTC Price ($)")
             ax1.set_title("BTC Price Decline with Rebalancing Events")

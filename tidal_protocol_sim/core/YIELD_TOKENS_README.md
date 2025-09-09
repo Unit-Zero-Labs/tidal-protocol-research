@@ -20,18 +20,18 @@ This document provides a comprehensive breakdown of the `yield_tokens.py` script
 
 ### What are Yield Tokens?
 
-Yield tokens are protocol-native assets that:
+Yield tokens are protocol-native rebasing assets that:
 - Track MOET value closely (1:1 peg with minimal deviation)
-- Automatically accrue yield at 10% APR
+- Automatically accrue yield at 10% APR through rebasing (same quantity, increasing value)
 - Can be traded back to MOET for position rebalancing
 - Provide capital efficiency for High Tide agents
 
 ### Key Components
 
-1. **YieldToken**: Individual yield-bearing token with continuous accrual
+1. **YieldToken**: Individual rebasing yield token with continuous value appreciation
 2. **YieldTokenManager**: Portfolio management for individual agents
 3. **YieldTokenPool**: Global trading pool using Uniswap V3 math
-4. **Yield Accrual**: Continuous compound interest calculation
+4. **Rebasing Mechanism**: Continuous value increase without quantity change
 5. **Trading Interface**: MOET ↔ Yield Token conversions
 
 ## Mathematical Foundations
@@ -69,23 +69,22 @@ Yield = Value - P
 
 ### 1. YieldToken Class
 
-Individual yield-bearing token with continuous accrual:
+Individual rebasing yield token with continuous value appreciation:
 
 ```python
 @dataclass
 class YieldToken:
-    """Individual yield token with continuous yield accrual"""
+    """Individual yield token with continuous yield accrual (rebasing)"""
     
-    def __init__(self, principal_amount: float, apr: float = 0.05, creation_minute: int = 0):
-        self.principal = principal_amount
+    def __init__(self, initial_value: float, apr: float = 0.10, creation_minute: int = 0):
+        self.initial_value = initial_value  # Value at creation time
         self.apr = apr
         self.creation_minute = creation_minute
 ```
 
 #### Key Methods
 
-- `get_current_value(current_minute)`: Calculate total value including yield
-- `get_accrued_yield(current_minute)`: Get yield earned above principal
+- `get_current_value(current_minute)`: Calculate current value including accrued yield (rebasing)
 - `get_sellable_value(current_minute)`: Get value after slippage
 
 ### 2. YieldTokenManager Class
@@ -105,8 +104,7 @@ class YieldTokenManager:
 #### Core Portfolio Operations
 
 - `mint_yield_tokens(moet_amount, current_minute, use_direct_minting)`: Convert MOET to yield tokens with flexible creation methods
-- `sell_yield_tokens(amount_needed, current_minute)`: Sell tokens to raise MOET with real slippage
-- `sell_yield_above_principal(current_minute)`: Sell only accrued yield with real slippage
+- `sell_yield_tokens(amount_needed, current_minute)`: Sell tokens at their current (rebased) value to raise MOET
 - `calculate_total_value(current_minute)`: Get total portfolio value
 - `get_portfolio_summary(current_minute)`: Comprehensive portfolio analysis
 - `_calculate_real_slippage(yield_token_value)`: Calculate real slippage using Uniswap V3 math
@@ -162,39 +160,25 @@ For a $1,000 yield token with 10% APR:
 | 1 month      | $1,008.33 | $8.33 | 0.833% |
 | 1 year       | $1,100.00 | $100.00 | 10.000% |
 
-### Yield Selling Strategies
+### Yield Token Selling
 
-#### 1. Full Token Sale
-Sell entire tokens to raise MOET using real Uniswap V3 slippage:
+Yield tokens are sold at their current (rebased) value, which includes all accrued yield:
+
 ```python
 def sell_yield_tokens(self, amount_needed: float, current_minute: int) -> float:
-    """Sell yield tokens to raise MOET, prioritizing highest yield first"""
-    # Sort by current value (highest yield first)
+    """Sell yield tokens at their current (rebased) value to raise MOET"""
+    # Sort by current value (highest value first for efficiency)
     self.yield_tokens.sort(
         key=lambda token: token.get_current_value(current_minute),
         reverse=True
     )
     
-    # Use real Uniswap V3 slippage calculation instead of hardcoded values
+    # Use real Uniswap V3 slippage calculation for accurate pricing
     token_value = token.get_current_value(current_minute)
     real_moet_value = self._calculate_real_slippage(token_value)
 ```
 
-#### 2. Yield-Only Sale
-Sell only accrued yield, preserving principal with real Uniswap V3 slippage:
-```python
-def sell_yield_above_principal(self, current_minute: int) -> float:
-    """Sell only the accrued yield portion, keeping principal intact"""
-    for token in self.yield_tokens:
-        accrued_yield = token.get_accrued_yield(current_minute)
-        if accrued_yield > 0:
-            # Use real Uniswap V3 slippage calculation instead of hardcoded values
-            real_moet_value = self._calculate_real_slippage(accrued_yield)
-            
-            # Reset token to current principal value minus yield sold
-            token.principal = token.get_current_value(current_minute) - accrued_yield
-            token.creation_minute = current_minute
-```
+**Key Concept**: Since yield tokens are rebasing, there's no distinction between "principal" and "yield" - each token simply has a current value that includes all accrued yield. When you sell tokens, you're selling them at their current (higher) value.
 
 ## Trading and Liquidity Management
 
@@ -421,12 +405,14 @@ yield_tokens_2 = manager.mint_yield_tokens(5_000, 30, use_direct_minting=False)
 ### Advanced Portfolio Management
 
 ```python
-# Sell only accrued yield (preserve principal) using real Uniswap V3 slippage
-yield_raised = manager.sell_yield_above_principal(60)
-print(f"Yield raised: ${yield_raised:.2f}")
-
-# Sell tokens to raise specific amount using real Uniswap V3 slippage
+# Sell tokens at their current (rebased) value to raise specific amount
 moet_raised = manager.sell_yield_tokens(5_000, 60)
+print(f"MOET raised: ${moet_raised:.2f}")
+
+# Get portfolio summary to see current value vs initial value
+summary = manager.get_portfolio_summary(60)
+print(f"Total current value: ${summary['total_current_value']:.2f}")
+print(f"Total yield accrued: ${summary['total_accrued_yield']:.2f}")
 ```
 
 ### Error Handling Example
@@ -513,17 +499,9 @@ class HighTideAgent:
         return yield_tokens
     
     def rebalance_position(self, moet_needed: float, current_minute: int):
-        """Rebalance position by selling yield tokens"""
-        # Try to raise MOET from yield tokens
+        """Rebalance position by selling yield tokens at their current value"""
+        # Sell yield tokens at their current (rebased) value
         moet_raised = self.yield_manager.sell_yield_tokens(moet_needed, current_minute)
-        
-        if moet_raised < moet_needed:
-            # If not enough, sell only yield to preserve principal
-            yield_raised = self.yield_manager.sell_yield_above_principal(current_minute)
-            total_raised = moet_raised + yield_raised
-            
-            print(f"Raised ${total_raised:.2f} MOET from yield tokens")
-            return total_raised
         
         print(f"Raised ${moet_raised:.2f} MOET from yield tokens")
         return moet_raised
@@ -599,10 +577,10 @@ The system integrates seamlessly with the broader Tidal Protocol simulation fram
 
 ## Key Features Summary
 
-### 1. Continuous Yield Accrual
+### 1. Rebasing Yield Accrual
 - True compound interest with minute-level precision
-- 10% APR with automatic accrual
-- Flexible yield selling strategies
+- 10% APR with automatic value appreciation (rebasing)
+- Tokens maintain same quantity but increase in value over time
 
 ### 2. Advanced Portfolio Management
 - Individual token tracking

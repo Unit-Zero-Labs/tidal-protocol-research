@@ -15,27 +15,23 @@ from .uniswap_v3_math import create_yield_token_pool, UniswapV3SlippageCalculato
 
 @dataclass
 class YieldToken:
-    """Individual yield token with continuous yield accrual"""
+    """Individual yield token with continuous yield accrual (rebasing)"""
     
-    def __init__(self, principal_amount: float, apr: float = 0.10, creation_minute: int = 0):
-        self.principal = principal_amount
+    def __init__(self, initial_value: float, apr: float = 0.10, creation_minute: int = 0):
+        self.initial_value = initial_value  # Value at creation time
         self.apr = apr
         self.creation_minute = creation_minute
         
     def get_current_value(self, current_minute: int) -> float:
-        """Calculate current value including accrued yield"""
+        """Calculate current value including accrued yield (rebasing)"""
         if current_minute < self.creation_minute:
-            return self.principal
+            return self.initial_value
             
         minutes_elapsed = current_minute - self.creation_minute
         # Convert APR to per-minute rate: (1 + APR)^(1/525600) - 1
         # For 10% APR over 60 minutes, this should be very small
         minute_rate = (1 + self.apr) ** (1 / 525600) - 1
-        return self.principal * (1 + minute_rate) ** minutes_elapsed
-        
-    def get_accrued_yield(self, current_minute: int) -> float:
-        """Get yield earned above principal amount"""
-        return self.get_current_value(current_minute) - self.principal
+        return self.initial_value * (1 + minute_rate) ** minutes_elapsed
         
     def get_sellable_value(self, current_minute: int) -> float:
         """Get value that can be sold (with minimal slippage)"""
@@ -48,7 +44,7 @@ class YieldTokenManager:
     
     def __init__(self, yield_token_pool: Optional['YieldTokenPool'] = None):
         self.yield_tokens: List[YieldToken] = []
-        self.total_principal_invested = 0.0
+        self.total_initial_value_invested = 0.0  # Total initial value invested
         self.yield_token_pool = yield_token_pool
         
     def mint_yield_tokens(self, moet_amount: float, current_minute: int, use_direct_minting: bool = False) -> List[YieldToken]:
@@ -72,20 +68,21 @@ class YieldTokenManager:
             raise ValueError(f"Failed to mint yield tokens for MOET amount {moet_amount}")
             
         # Create yield tokens based on actual amount received
+        # Each token represents $1 of initial value, but will rebase over time
         num_tokens = int(actual_yield_tokens_received)  # Floor to whole tokens
         new_tokens = []
         
         for _ in range(num_tokens):
-            token = YieldToken(1.0, 0.10, current_minute)  # Keep hardcoded APR
+            token = YieldToken(1.0, 0.10, current_minute)  # $1 initial value, 10% APR
             new_tokens.append(token)
             self.yield_tokens.append(token)
             
-        self.total_principal_invested += num_tokens
+        self.total_initial_value_invested += num_tokens
         return new_tokens
         
     def sell_yield_tokens(self, amount_needed: float, current_minute: int) -> float:
         """
-        Sell yield tokens to raise MOET, prioritizing highest yield first
+        Sell yield tokens to raise MOET at their current (rebased) value
         
         Returns:
             Amount of MOET obtained from selling tokens
@@ -93,7 +90,7 @@ class YieldTokenManager:
         if amount_needed <= 0 or not self.yield_tokens:
             return 0.0
             
-        # Sort tokens by current value (highest yield first)
+        # Sort tokens by current value (highest value first for efficiency)
         self.yield_tokens.sort(
             key=lambda token: token.get_current_value(current_minute),
             reverse=True
@@ -106,12 +103,12 @@ class YieldTokenManager:
             if moet_raised >= amount_needed:
                 break
                 
-            # Use real Uniswap V3 slippage calculation instead of hardcoded 0.999
+            # Use real Uniswap V3 slippage calculation for accurate pricing
             token_value = token.get_current_value(current_minute)
             real_moet_value = self._calculate_real_slippage(token_value)
             moet_raised += real_moet_value
             tokens_to_remove.append(token)
-            self.total_principal_invested -= token.principal
+            self.total_initial_value_invested -= token.initial_value
             
         # Remove sold tokens
         for token in tokens_to_remove:
@@ -119,30 +116,6 @@ class YieldTokenManager:
             
         return min(moet_raised, amount_needed)
         
-    def sell_yield_above_principal(self, current_minute: int) -> float:
-        """
-        Sell only the accrued yield portion, keeping principal intact
-        
-        Returns:
-            Amount of MOET obtained from selling accrued yield
-        """
-        if not self.yield_tokens:
-            return 0.0
-            
-        total_yield_raised = 0.0
-        
-        for token in self.yield_tokens:
-            accrued_yield = token.get_accrued_yield(current_minute)
-            if accrued_yield > 0:
-                # Use real Uniswap V3 slippage calculation instead of hardcoded 0.999
-                real_moet_value = self._calculate_real_slippage(accrued_yield)
-                total_yield_raised += real_moet_value
-                
-                # Reset token to current principal value minus yield sold
-                token.principal = token.get_current_value(current_minute) - accrued_yield
-                token.creation_minute = current_minute
-                
-        return total_yield_raised
         
     def calculate_total_value(self, current_minute: int) -> float:
         """Calculate total current value of all yield tokens"""
@@ -152,9 +125,9 @@ class YieldTokenManager:
         )
         
     def calculate_total_yield_accrued(self, current_minute: int) -> float:
-        """Calculate total yield accrued across all tokens"""
+        """Calculate total yield accrued across all tokens (current value - initial value)"""
         return sum(
-            token.get_accrued_yield(current_minute)
+            token.get_current_value(current_minute) - token.initial_value
             for token in self.yield_tokens
         )
         
@@ -165,10 +138,10 @@ class YieldTokenManager:
         
         return {
             "num_tokens": len(self.yield_tokens),
-            "total_principal": self.total_principal_invested,
+            "total_initial_value": self.total_initial_value_invested,
             "total_current_value": total_value,
             "total_accrued_yield": total_yield,
-            "yield_percentage": (total_yield / self.total_principal_invested * 100) if self.total_principal_invested > 0 else 0.0,
+            "yield_percentage": (total_yield / self.total_initial_value_invested * 100) if self.total_initial_value_invested > 0 else 0.0,
             "average_token_age_minutes": self._calculate_average_age(current_minute)
         }
         
@@ -230,7 +203,6 @@ class YieldTokenPool:
         self._update_legacy_properties()
         
         # Store configuration
-        self.btc_price = btc_price
         self.concentration = concentration
     
     def _update_legacy_properties(self):

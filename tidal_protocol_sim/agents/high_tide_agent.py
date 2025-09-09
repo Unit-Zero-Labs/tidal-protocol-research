@@ -201,23 +201,12 @@ class HighTideAgent(BaseAgent):
         if debt_reduction_needed <= 0:
             return (AgentAction.HOLD, {})
         
-        # First try to sell only accrued yield
-        yield_available = self.state.yield_token_manager.calculate_total_yield_accrued(current_minute)
-        
-        if yield_available >= debt_reduction_needed:
-            # Sell only yield portion
-            return (AgentAction.SWAP, {
-                "action_type": "sell_yield_only",
-                "amount_needed": debt_reduction_needed,
-                "current_minute": current_minute
-            })
-        else:
-            # Need to sell principal yield tokens too
-            return (AgentAction.SWAP, {
-                "action_type": "sell_yield_tokens",
-                "amount_needed": debt_reduction_needed,
-                "current_minute": current_minute
-            })
+        # Sell yield tokens at their current (rebased) value
+        return (AgentAction.SWAP, {
+            "action_type": "sell_yield_tokens",
+            "amount_needed": debt_reduction_needed,
+            "current_minute": current_minute
+        })
     
     def _execute_emergency_yield_sale(self, current_minute: int) -> tuple:
         """Emergency sale of ALL remaining yield tokens"""
@@ -358,12 +347,9 @@ class HighTideAgent(BaseAgent):
         
         return len(new_tokens) > 0
     
-    def execute_yield_token_sale(self, amount_needed: float, current_minute: int, yield_only: bool = False) -> float:
+    def execute_yield_token_sale(self, amount_needed: float, current_minute: int) -> float:
         """Execute yield token sale for rebalancing"""
-        if yield_only:
-            moet_raised = self.state.yield_token_manager.sell_yield_above_principal(current_minute)
-        else:
-            moet_raised = self.state.yield_token_manager.sell_yield_tokens(amount_needed, current_minute)
+        moet_raised = self.state.yield_token_manager.sell_yield_tokens(amount_needed, current_minute)
         
         if moet_raised > 0:
             # Use raised MOET to repay debt
@@ -376,8 +362,7 @@ class HighTideAgent(BaseAgent):
                 "minute": current_minute,
                 "moet_raised": moet_raised,
                 "debt_repaid": debt_repayment,
-                "health_factor_before": self.state.health_factor,
-                "yield_only": yield_only
+                "health_factor_before": self.state.health_factor
             })
             
             # NOTE: Health factor updated on next decide_action() call

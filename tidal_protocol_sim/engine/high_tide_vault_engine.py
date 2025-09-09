@@ -204,7 +204,7 @@ class HighTideVaultEngine(TidalProtocolEngine):
             if swap_type == "buy_yield_tokens":
                 success = self._execute_yield_token_purchase(agent, params, minute)
                 return success, None
-            elif swap_type in ["sell_yield_tokens", "sell_yield_only", "emergency_sell_all_yield"]:
+            elif swap_type in ["sell_yield_tokens", "emergency_sell_all_yield"]:
                 success, swap_data = self._execute_yield_token_sale(agent, params, minute)
                 return success, swap_data
                 
@@ -288,10 +288,9 @@ class HighTideVaultEngine(TidalProtocolEngine):
             
         # Execute sale through agent
         if swap_type == "emergency_sell_all_yield":
-            moet_raised = agent.execute_yield_token_sale(float('inf'), minute, yield_only=False)
+            moet_raised = agent.execute_yield_token_sale(float('inf'), minute)
         else:
-            yield_only = swap_type == "sell_yield_only"
-            moet_raised = agent.execute_yield_token_sale(amount_needed, minute, yield_only=yield_only)
+            moet_raised = agent.execute_yield_token_sale(amount_needed, minute)
         
         if moet_raised > 0:
             # Use MOET directly to pay down debt (no BTC swap needed)
