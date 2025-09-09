@@ -287,39 +287,6 @@ else:
     fee_amount = mul_div_rounding_up(amount_in, fee_pips, 1000000 - fee_pips)
 ```
 
-### State Management
-
-The swap function properly handles:
-
-- **Overlapping price ranges**: Deeper liquidity in overlap areas
-- **Consecutive price ranges**: Seamless transitions between adjacent ranges
-- **Partially overlapping ranges**: Complex liquidity dynamics
-- **Gap handling**: Proper behavior when no liquidity exists in price range
-
-### Legacy Field Updates
-
-The implementation ensures complete state consistency by automatically updating legacy reserve fields after each swap:
-
-```python
-# After swap execution, legacy fields are updated to reflect actual state
-def swap(self, zero_for_one: bool, amount_specified: int, sqrt_price_limit_x96: int):
-    # ... swap execution logic ...
-    
-    # Update pool state
-    self.sqrt_price_x96 = state['sqrt_price_x96']
-    self.tick_current = state['tick']
-    self.liquidity = state['liquidity']
-    
-    # Update legacy fields to reflect actual swap impact
-    self._update_legacy_fields()
-    
-    return (amount_in_final, amount_out_final)
-```
-
-This ensures that:
-- **Visualization compatibility**: Charts and analytics relying on legacy fields continue to work
-- **State consistency**: Legacy fields are updated alongside tick-based calculations
-- Note: Legacy reserve fields use a simple 50/50 split of active liquidity for backward compatibility and are approximate. For precise reserves, use tick/position data.
 
 ## Slippage Calculation
 
@@ -358,7 +325,7 @@ class UniswapV3SlippageCalculator:
 ### MOET:BTC Pool Configuration
 
 ```python
-def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.80):
+def create_moet_btc_pool():
     """
     Create a MOET:BTC Uniswap v3 pool with concentrated liquidity
     
@@ -371,7 +338,7 @@ def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, con
 ### Yield Token Pool Configuration
 
 ```python
-def create_yield_token_pool(pool_size_usd: float, concentration: float = 0.95):
+def create_yield_token_pool():
     """
     Create a MOET:Yield Token Uniswap v3 pool with concentrated liquidity
     
@@ -383,7 +350,7 @@ def create_yield_token_pool(pool_size_usd: float, concentration: float = 0.95):
 
 ## Usage Examples
 
-### Basic Pool Creation
+### Basic Pool Creation (these are overwritten by custom analysis scripts at root of the repo)
 
 ```python
 # Create a $500k MOET:BTC pool
@@ -420,8 +387,8 @@ The implementation provides sophisticated handling of fees and slippage that are
 #### Fee Structure and Calculation
 
 **Fee Tiers by Pool Type:**
-- **MOET:BTC Pools**: 0.3% (3000 pips) - for volatile asset pairs
-- **MOET:Yield Token Pools**: 0.05% (500 pips) - for stable, highly correlated assets
+- **MOET:BTC Pools**: 0.3% (3000 pips) 
+- **MOET:Yield Token Pools**: 0.05% (500 pips)
 
 **Fee Calculation Process:**
 ```python
@@ -622,23 +589,6 @@ print(f"Trading Fees: ${result['trading_fees']:.2f}")
 - Price range visualization
 - Tick-based charting support
 
-## Error Handling
-
-The implementation includes robust error handling for:
-- Overflow protection in mathematical operations
-- Division by zero prevention
-- Invalid tick range validation
-- Price limit enforcement
-- Infinite loop prevention in swap calculations
-- Cross-tick error recovery
-
-## Performance Considerations
-
-- Binary search for tick calculations
-- Efficient liquidity position management
-- Minimal state updates during swaps
-- Optimized memory usage for large pools
-- Advanced cross-tick performance optimizations
 
 ## Integration with Tidal Protocol
 
