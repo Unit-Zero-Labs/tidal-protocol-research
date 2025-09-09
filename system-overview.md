@@ -123,6 +123,9 @@ amount1_delta = (liquidity × (sqrt_price_b - sqrt_price_a)) / Q96
 - Portfolio value tracking and profit/loss calculation
 
 ### 2. `high_tide_agent.py` - Active Rebalancing Strategy
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+ Don't we have the active rebalancing strategy established in high_tide_vault_engine.py?
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 **Purpose**: Agents that automatically rebalance using yield tokens when health factors decline
 
 **Key Strategy**:
@@ -142,6 +145,9 @@ debt_reduction_needed = current_debt - (effective_collateral_value / initial_hea
 ```
 
 ### 3. `aave_agent.py` - Traditional Liquidation Strategy
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+ THIS SHOULD BE BUILT INTO THE AAVE ENGINE AND THE TIDAL ENGINE RESPECTIVELY, SINCE EACH HAVE DIFFERENT LIQUIDATION MECHANICS. WE DO NOT WANT A LIQUIDATOR AGENT, BUT RATHER THE LIQUIDATION IS BUILT INTO THE AAVE ENGINE AND THE TIDAL ENGINE
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 **Purpose**: Agents that hold positions until liquidation (no rebalancing)
 
 **Key Differences from High Tide**:
@@ -150,6 +156,9 @@ debt_reduction_needed = current_debt - (effective_collateral_value / initial_hea
 - Traditional AAVE liquidation: 50% collateral seizure + 5% bonus
 
 ### 4. `tidal_lender.py` - Lending-Focused Agent
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+ THIS SHOULD BE BUILT INTO THE AAVE ENGINE AND THE TIDAL ENGINE RESPECTIVELY, SINCE EACH HAVE DIFFERENT LIQUIDATION MECHANICS. WE DO NOT WANT A LIQUIDATOR AGENT, BUT RATHER THE LIQUIDATION IS BUILT INTO THE AAVE ENGINE AND THE TIDAL ENGINE
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 **Purpose**: Traditional lending behavior with supply/borrow optimization
 
 **Decision Logic**:
@@ -159,6 +168,9 @@ debt_reduction_needed = current_debt - (effective_collateral_value / initial_hea
 4. Borrow if can do safely (target HF 1.5)
 
 ### 5. `liquidator.py` - Liquidation Bot
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+ THIS SHOULD BE BUILT INTO THE AAVE ENGINE AND THE TIDAL ENGINE RESPECTIVELY, SINCE EACH HAVE DIFFERENT LIQUIDATION MECHANICS. WE DO NOT WANT A LIQUIDATOR AGENT, BUT RATHER THE LIQUIDATION IS BUILT INTO THE AAVE ENGINE AND THE TIDAL ENGINE
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 **Purpose**: Identifies and executes liquidation opportunities
 
 **Strategy**:
