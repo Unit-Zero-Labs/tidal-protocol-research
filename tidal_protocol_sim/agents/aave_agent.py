@@ -139,8 +139,8 @@ class AaveAgent(BaseAgent):
         if moet_amount <= 0:
             return False
             
-        # Purchase yield tokens
-        new_tokens = self.state.yield_token_manager.mint_yield_tokens(moet_amount, current_minute)
+        # Purchase yield tokens (use direct minting at minute 0)
+        new_tokens = self.state.yield_token_manager.mint_yield_tokens(moet_amount, current_minute, use_direct_minting=(current_minute == 0))
         
         # Update MOET debt (it's already borrowed, now used for yield tokens)
         # Debt remains the same, but MOET is now in yield tokens

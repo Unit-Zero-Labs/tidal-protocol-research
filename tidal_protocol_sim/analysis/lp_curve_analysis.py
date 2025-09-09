@@ -52,7 +52,7 @@ class LPCurveTracker:
             self.concentrated_pool = create_moet_btc_pool(pool_size_usd=initial_pool_size, btc_price=btc_price, concentration=concentration_range)
         else:
             from ..core.uniswap_v3_math import create_yield_token_pool
-            self.concentrated_pool = create_yield_token_pool(pool_size_usd=initial_pool_size, btc_price=btc_price, concentration=concentration_range)
+            self.concentrated_pool = create_yield_token_pool(pool_size_usd=initial_pool_size, concentration=concentration_range)
         
         # Calculate correct initial price based on pool type
         if "MOET:BTC" in pool_name:

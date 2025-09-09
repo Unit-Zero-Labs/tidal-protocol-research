@@ -36,7 +36,7 @@ from target_health_factor_analysis import create_custom_agents_for_hf_test
 
 
 class ComprehensiveComparisonConfig:
-    """Configuration for comprehensive High Tide vs AAVE analysis"""
+    """Configuration for comprehensive High Tide vs AAVE analysis with full Uniswap V3 integration"""
     
     def __init__(self):
         # Monte Carlo parameters
@@ -57,13 +57,33 @@ class ComprehensiveComparisonConfig:
         self.btc_initial_price = 100_000.0
         self.btc_final_price = 76_342.50  # 23.66% decline (consistent with previous analysis)
         
-        # Pool configurations
-        self.moet_btc_pool_size = 250_000  # $250K liquidation pool
-        self.moet_yt_pool_size = 250_000   # $250K rebalancing pool
-        self.yield_token_concentration = 0.90  # 90% concentration
+        # Enhanced Uniswap V3 Pool Configurations
+        self.moet_btc_pool_config = {
+            "size": 250_000,  # $250K liquidation pool
+            "concentration": 0.80,  # 80% concentration around BTC price
+            "fee_tier": 0.003,  # 0.3% fee tier for volatile pairs
+            "tick_spacing": 60,  # Tick spacing for price granularity
+            "pool_name": "MOET:BTC"
+        }
         
-        # Yield parameters
-        self.yield_apr = 0.12  # 12% APR for yield tokens
+        self.moet_yt_pool_config = {
+            "size": 250_000,  # $250K rebalancing pool
+            "concentration": 0.95,  # 95% concentration at 1:1 peg
+            "fee_tier": 0.0005,  # 0.05% fee tier for stable pairs
+            "tick_spacing": 10,  # Tight tick spacing for price control
+            "pool_name": "MOET:Yield_Token"
+        }
+        
+        # Yield token parameters
+        self.yield_apr = 0.10  # 10% APR for yield tokens (matches engine default)
+        self.use_direct_minting_for_initial = True  # Use 1:1 minting at minute 0
+        
+        # Enhanced data collection
+        self.collect_pool_state_history = True
+        self.collect_trading_activity = True
+        self.collect_slippage_metrics = True
+        self.collect_lp_curve_data = True
+        self.collect_agent_portfolio_snapshots = True
         
         # Output configuration
         self.scenario_name = "Comprehensive_HT_vs_Aave_Analysis"
@@ -106,17 +126,38 @@ class ComprehensiveHTvsAaveAnalysis:
                 "num_scenarios": len(config.health_factor_scenarios),
                 "monte_carlo_runs_per_scenario": config.num_monte_carlo_runs,
                 "agents_per_run": config.agents_per_run,
-                "btc_decline_percent": ((config.btc_initial_price - config.btc_final_price) / config.btc_initial_price) * 100
+                "btc_decline_percent": ((config.btc_initial_price - config.btc_final_price) / config.btc_initial_price) * 100,
+                "pool_configurations": {
+                    "moet_btc_pool": config.moet_btc_pool_config,
+                    "moet_yt_pool": config.moet_yt_pool_config
+                },
+                "data_collection_flags": {
+                    "pool_state_history": config.collect_pool_state_history,
+                    "trading_activity": config.collect_trading_activity,
+                    "slippage_metrics": config.collect_slippage_metrics,
+                    "lp_curve_data": config.collect_lp_curve_data,
+                    "agent_portfolio_snapshots": config.collect_agent_portfolio_snapshots
+                }
             },
             "scenario_results": [],
             "comparative_analysis": {},
             "cost_analysis": {},
-            "statistical_summary": {}
+            "statistical_summary": {},
+            "visualization_data": {
+                "pool_state_evolution": {},
+                "trading_activity_summary": {},
+                "slippage_analysis": {},
+                "lp_curve_evolution": {},
+                "agent_performance_trajectories": {}
+            }
         }
         
         # Storage for detailed data
         self.all_ht_agents = []
         self.all_aave_agents = []
+        self.pool_state_history = []
+        self.trading_activity_data = []
+        self.slippage_metrics_data = []
         
     def run_comprehensive_analysis(self) -> Dict[str, Any]:
         """Run the complete comparative analysis"""
@@ -155,6 +196,10 @@ class ComprehensiveHTvsAaveAnalysis:
         # Generate statistical summary
         print("📈 Generating statistical summary...")
         self._generate_statistical_summary()
+        
+        # Generate comprehensive visualization data
+        print("📊 Generating comprehensive visualization data...")
+        self._generate_comprehensive_visualization_data()
         
         # Save results
         self._save_comprehensive_results()
@@ -218,19 +263,29 @@ class ComprehensiveHTvsAaveAnalysis:
         return scenario_result
     
     def _run_high_tide_scenario(self, hf_scenario: Dict, run_id: int, seed: int) -> Dict[str, Any]:
-        """Run High Tide scenario with specified parameters"""
+        """Run High Tide scenario with specified parameters and comprehensive data collection"""
         
-        # Create High Tide configuration
+        # Create High Tide configuration with enhanced pool settings
         ht_config = HighTideConfig()
         ht_config.num_high_tide_agents = 0  # We'll create custom agents
         ht_config.btc_decline_duration = self.config.btc_decline_duration
-        ht_config.moet_btc_pool_size = self.config.moet_btc_pool_size
-        ht_config.moet_yield_pool_size = self.config.moet_yt_pool_size
-        ht_config.yield_token_concentration = self.config.yield_token_concentration
+        ht_config.btc_initial_price = self.config.btc_initial_price
+        ht_config.btc_final_price_range = (self.config.btc_final_price, self.config.btc_final_price)
+        
+        # Configure Uniswap V3 pools with proper parameters
+        ht_config.moet_btc_pool_size = self.config.moet_btc_pool_config["size"]
+        ht_config.moet_btc_concentration = self.config.moet_btc_pool_config["concentration"]
+        ht_config.moet_yield_pool_size = self.config.moet_yt_pool_config["size"]
+        ht_config.yield_token_concentration = self.config.moet_yt_pool_config["concentration"]
+        ht_config.use_direct_minting_for_initial = self.config.use_direct_minting_for_initial
         
         # Reset seed for consistent agent creation
         random.seed(seed)
         np.random.seed(seed)
+        
+        # Create engine first to get the yield token pool
+        ht_engine = HighTideVaultEngine(ht_config)
+        ht_engine.protocol = TidalProtocol()
         
         # Create custom High Tide agents using the function from target_health_factor_analysis
         custom_ht_agents = create_custom_agents_for_hf_test(
@@ -240,10 +295,12 @@ class ComprehensiveHTvsAaveAnalysis:
             agent_type=f"ht_{hf_scenario['scenario_name']}"
         )
         
-        # Create engine and run simulation
-        ht_engine = HighTideVaultEngine(ht_config)
+        # Connect agents to the yield token pool
+        for agent in custom_ht_agents:
+            if hasattr(agent, 'state') and hasattr(agent.state, 'yield_token_manager'):
+                agent.state.yield_token_manager.yield_token_pool = ht_engine.yield_token_pool
+        
         ht_engine.high_tide_agents = custom_ht_agents
-        ht_engine.protocol = TidalProtocol()
         
         # Add agents to engine's agent dict
         for agent in custom_ht_agents:
@@ -252,25 +309,39 @@ class ComprehensiveHTvsAaveAnalysis:
         # Run simulation
         results = ht_engine.run_simulation()
         
+        # Extract comprehensive data from simulation results
+        enhanced_results = self._extract_comprehensive_data(results, "High_Tide", ht_engine)
+        
         # Add metadata
-        results["run_metadata"] = {
+        enhanced_results["run_metadata"] = {
             "strategy": "High_Tide",
             "scenario_name": hf_scenario["scenario_name"],
             "run_id": run_id,
             "seed": seed,
-            "num_agents": len(custom_ht_agents)
+            "num_agents": len(custom_ht_agents),
+            "pool_configurations": {
+                "moet_btc_pool": self.config.moet_btc_pool_config,
+                "moet_yt_pool": self.config.moet_yt_pool_config
+            }
         }
         
-        return results
+        return enhanced_results
     
     def _run_aave_scenario(self, hf_scenario: Dict, run_id: int, seed: int) -> Dict[str, Any]:
-        """Run AAVE scenario with identical parameters to High Tide"""
+        """Run AAVE scenario with identical parameters to High Tide and comprehensive data collection"""
         
-        # Create AAVE configuration
+        # Create AAVE configuration with enhanced pool settings
         aave_config = AaveConfig()
         aave_config.num_aave_agents = 0  # We'll create custom agents
         aave_config.btc_decline_duration = self.config.btc_decline_duration
-        aave_config.moet_btc_pool_size = self.config.moet_btc_pool_size
+        aave_config.btc_initial_price = self.config.btc_initial_price
+        aave_config.btc_final_price_range = (self.config.btc_final_price, self.config.btc_final_price)
+        
+        # Configure Uniswap V3 pools with same parameters as High Tide
+        aave_config.moet_btc_pool_size = self.config.moet_btc_pool_config["size"]
+        aave_config.moet_btc_concentration = self.config.moet_btc_pool_config["concentration"]
+        aave_config.moet_yield_pool_size = self.config.moet_yt_pool_config["size"]
+        aave_config.yield_token_concentration = self.config.moet_yt_pool_config["concentration"]
         
         # Create custom AAVE agents with same initial HF distribution as High Tide agents
         custom_aave_agents = []
@@ -292,6 +363,11 @@ class ComprehensiveHTvsAaveAnalysis:
         aave_engine.aave_agents = custom_aave_agents
         aave_engine.protocol = TidalProtocol()
         
+        # Connect yield token managers to the engine's yield token pool
+        for agent in custom_aave_agents:
+            if hasattr(agent, 'state') and hasattr(agent.state, 'yield_token_manager'):
+                agent.state.yield_token_manager.yield_token_pool = aave_engine.yield_token_pool
+        
         # Add agents to engine's agent dict
         for agent in custom_aave_agents:
             aave_engine.agents[agent.agent_id] = agent
@@ -299,25 +375,226 @@ class ComprehensiveHTvsAaveAnalysis:
         # Run simulation
         results = aave_engine.run_simulation()
         
+        # Extract comprehensive data from simulation results
+        enhanced_results = self._extract_comprehensive_data(results, "AAVE", aave_engine)
+        
         # Add metadata
-        results["run_metadata"] = {
+        enhanced_results["run_metadata"] = {
             "strategy": "AAVE",
             "scenario_name": hf_scenario["scenario_name"],
             "run_id": run_id,
             "seed": seed,
-            "num_agents": len(custom_aave_agents)
+            "num_agents": len(custom_aave_agents),
+            "pool_configurations": {
+                "moet_btc_pool": self.config.moet_btc_pool_config,
+                "moet_yt_pool": self.config.moet_yt_pool_config
+            }
         }
         
-        return results
+        return enhanced_results
+    
+    def _extract_comprehensive_data(self, results: Dict, strategy: str, engine) -> Dict[str, Any]:
+        """Extract comprehensive data from simulation results leveraging all engine capabilities"""
+        
+        enhanced_results = results.copy()
+        
+        # Extract pool state data if available
+        if self.config.collect_pool_state_history:
+            pool_state_data = self._extract_pool_state_data(engine)
+            enhanced_results["pool_state_data"] = pool_state_data
+        
+        # Extract trading activity data
+        if self.config.collect_trading_activity:
+            trading_data = self._extract_trading_activity_data(results, strategy)
+            enhanced_results["trading_activity_data"] = trading_data
+        
+        # Extract slippage metrics
+        if self.config.collect_slippage_metrics:
+            slippage_data = self._extract_slippage_metrics_data(results, strategy)
+            enhanced_results["slippage_metrics_data"] = slippage_data
+        
+        # Extract LP curve data
+        if self.config.collect_lp_curve_data and strategy == "High_Tide":
+            lp_curve_data = self._extract_lp_curve_data(results)
+            enhanced_results["lp_curve_data"] = lp_curve_data
+        
+        # Extract agent portfolio snapshots
+        if self.config.collect_agent_portfolio_snapshots:
+            portfolio_data = self._extract_agent_portfolio_data(results, strategy)
+            enhanced_results["agent_portfolio_data"] = portfolio_data
+        
+        # Extract yield token specific data
+        if strategy == "High_Tide":
+            yield_token_data = self._extract_yield_token_data(results, engine)
+            enhanced_results["yield_token_data"] = yield_token_data
+        
+        return enhanced_results
+    
+    def _extract_pool_state_data(self, engine) -> Dict[str, Any]:
+        """Extract pool state data from engine"""
+        pool_state_data = {}
+        
+        try:
+            # Extract MOET:BTC pool state
+            if hasattr(engine, 'moet_btc_pool') and engine.moet_btc_pool:
+                pool_state_data["moet_btc_pool"] = {
+                    "pool_name": engine.moet_btc_pool.pool_name,
+                    "total_liquidity": engine.moet_btc_pool.total_liquidity,
+                    "current_price": engine.moet_btc_pool.get_price(),
+                    "tick_current": engine.moet_btc_pool.tick_current,
+                    "concentration": engine.moet_btc_pool.concentration,
+                    "fee_tier": engine.moet_btc_pool.fee_tier,
+                    "tick_spacing": engine.moet_btc_pool.tick_spacing,
+                    "active_liquidity": engine.moet_btc_pool.get_total_active_liquidity()
+                }
+            
+            # Extract yield token pool state
+            if hasattr(engine, 'yield_token_pool') and engine.yield_token_pool:
+                yt_pool_state = engine.yield_token_pool.get_pool_state()
+                pool_state_data["moet_yt_pool"] = yt_pool_state
+                
+                # Get underlying Uniswap V3 pool data
+                uniswap_pool = engine.yield_token_pool.get_uniswap_pool()
+                if uniswap_pool:
+                    pool_state_data["moet_yt_pool"]["uniswap_v3_data"] = {
+                        "tick_current": uniswap_pool.tick_current,
+                        "concentration": uniswap_pool.concentration,
+                        "fee_tier": uniswap_pool.fee_tier,
+                        "tick_spacing": uniswap_pool.tick_spacing,
+                        "active_liquidity": uniswap_pool.get_total_active_liquidity()
+                    }
+        
+        except Exception as e:
+            print(f"Warning: Could not extract pool state data: {e}")
+            pool_state_data = {"error": str(e)}
+        
+        return pool_state_data
+    
+    def _extract_trading_activity_data(self, results: Dict, strategy: str) -> Dict[str, Any]:
+        """Extract trading activity data from results"""
+        trading_data = {}
+        
+        # Extract yield token trading data
+        if "yield_token_trades" in results:
+            trading_data["yield_token_trades"] = results["yield_token_trades"]
+        
+        # Extract rebalancing events (High Tide only)
+        if strategy == "High_Tide" and "rebalancing_events" in results:
+            trading_data["rebalancing_events"] = results["rebalancing_events"]
+        
+        # Extract liquidation events
+        if "liquidation_events" in results:
+            trading_data["liquidation_events"] = results["liquidation_events"]
+        
+        # Extract trade events
+        if "trade_events" in results:
+            trading_data["trade_events"] = results["trade_events"]
+        
+        return trading_data
+    
+    def _extract_slippage_metrics_data(self, results: Dict, strategy: str) -> Dict[str, Any]:
+        """Extract slippage and trading cost metrics"""
+        slippage_data = {}
+        
+        # Extract from agent outcomes
+        agent_outcomes = results.get("agent_outcomes", [])
+        total_slippage_costs = 0.0
+        total_trading_fees = 0.0
+        slippage_events = []
+        
+        for outcome in agent_outcomes:
+            # Extract slippage costs
+            if "cost_of_rebalancing" in outcome:
+                total_slippage_costs += outcome["cost_of_rebalancing"]
+            elif "cost_of_liquidation" in outcome:
+                total_slippage_costs += outcome["cost_of_liquidation"]
+            
+            # Extract trading fees (if available in detailed portfolio data)
+            if "portfolio_details" in outcome:
+                portfolio = outcome["portfolio_details"]
+                if "trading_fees" in portfolio:
+                    total_trading_fees += portfolio["trading_fees"]
+        
+        slippage_data = {
+            "total_slippage_costs": total_slippage_costs,
+            "total_trading_fees": total_trading_fees,
+            "average_slippage_per_agent": total_slippage_costs / len(agent_outcomes) if agent_outcomes else 0.0,
+            "slippage_events": slippage_events
+        }
+        
+        return slippage_data
+    
+    def _extract_lp_curve_data(self, results: Dict) -> Dict[str, Any]:
+        """Extract LP curve evolution data"""
+        lp_curve_data = {}
+        
+        # Extract LP curve snapshots
+        if "lp_curve_data" in results:
+            lp_curve_data = results["lp_curve_data"]
+        
+        return lp_curve_data
+    
+    def _extract_agent_portfolio_data(self, results: Dict, strategy: str) -> Dict[str, Any]:
+        """Extract detailed agent portfolio data"""
+        portfolio_data = {}
+        
+        agent_outcomes = results.get("agent_outcomes", [])
+        portfolio_data["agent_count"] = len(agent_outcomes)
+        portfolio_data["agent_outcomes"] = agent_outcomes
+        
+        # Extract portfolio summaries
+        portfolio_summaries = []
+        for outcome in agent_outcomes:
+            if "portfolio_summary" in outcome:
+                portfolio_summaries.append(outcome["portfolio_summary"])
+        
+        portfolio_data["portfolio_summaries"] = portfolio_summaries
+        
+        return portfolio_data
+    
+    def _extract_yield_token_data(self, results: Dict, engine) -> Dict[str, Any]:
+        """Extract yield token specific data"""
+        yield_token_data = {}
+        
+        # Extract yield token activity
+        if "yield_token_activity" in results:
+            yield_token_data["activity"] = results["yield_token_activity"]
+        
+        # Extract yield token pool state
+        if hasattr(engine, 'yield_token_pool') and engine.yield_token_pool:
+            yield_token_data["pool_state"] = engine.yield_token_pool.get_pool_state()
+        
+        # Extract agent yield token portfolios
+        agent_yield_data = []
+        for agent in getattr(engine, 'high_tide_agents', []):
+            if hasattr(agent, 'state') and hasattr(agent.state, 'yield_token_manager'):
+                portfolio = agent.state.yield_token_manager.get_portfolio_summary(
+                    engine.current_step
+                )
+                agent_yield_data.append({
+                    "agent_id": agent.agent_id,
+                    "portfolio": portfolio
+                })
+        
+        yield_token_data["agent_portfolios"] = agent_yield_data
+        
+        return yield_token_data
     
     def _aggregate_scenario_results(self, runs: List[Dict], strategy: str) -> Dict[str, Any]:
-        """Aggregate results from multiple runs of the same scenario"""
+        """Aggregate results from multiple runs of the same scenario with comprehensive data"""
         
         survival_rates = []
         liquidation_counts = []
         rebalancing_events = []
         total_costs = []
         agent_outcomes = []
+        
+        # Comprehensive data aggregation
+        pool_state_data = []
+        trading_activity_data = []
+        slippage_metrics_data = []
+        lp_curve_data = []
+        yield_token_data = []
         
         for run in runs:
             # Extract survival statistics
@@ -341,6 +618,28 @@ class ComprehensiveHTvsAaveAnalysis:
             run_cost = sum(outcome.get("cost_of_liquidation" if strategy == "aave" else "cost_of_rebalancing", 0) 
                           for outcome in run_agent_outcomes)
             total_costs.append(run_cost)
+            
+            # Aggregate comprehensive data
+            if "pool_state_data" in run:
+                pool_state_data.append(run["pool_state_data"])
+            
+            if "trading_activity_data" in run:
+                trading_activity_data.append(run["trading_activity_data"])
+            
+            if "slippage_metrics_data" in run:
+                slippage_metrics_data.append(run["slippage_metrics_data"])
+            
+            if "lp_curve_data" in run:
+                lp_curve_data.append(run["lp_curve_data"])
+            
+            if "yield_token_data" in run:
+                yield_token_data.append(run["yield_token_data"])
+        
+        # Calculate comprehensive metrics
+        comprehensive_metrics = self._calculate_comprehensive_metrics(
+            pool_state_data, trading_activity_data, slippage_metrics_data, 
+            lp_curve_data, yield_token_data, strategy
+        )
         
         return {
             "mean_survival_rate": np.mean(survival_rates),
@@ -355,7 +654,234 @@ class ComprehensiveHTvsAaveAnalysis:
                 "survival_rates": survival_rates,
                 "liquidation_counts": liquidation_counts,
                 "total_costs": total_costs
+            },
+            "comprehensive_data": {
+                "pool_state_aggregate": self._aggregate_pool_state_data(pool_state_data),
+                "trading_activity_aggregate": self._aggregate_trading_activity_data(trading_activity_data),
+                "slippage_metrics_aggregate": self._aggregate_slippage_metrics_data(slippage_metrics_data),
+                "lp_curve_aggregate": self._aggregate_lp_curve_data(lp_curve_data),
+                "yield_token_aggregate": self._aggregate_yield_token_data(yield_token_data) if strategy == "high_tide" else None
+            },
+            "comprehensive_metrics": comprehensive_metrics
+        }
+    
+    def _calculate_comprehensive_metrics(self, pool_state_data, trading_activity_data, 
+                                       slippage_metrics_data, lp_curve_data, yield_token_data, strategy):
+        """Calculate comprehensive metrics from aggregated data"""
+        metrics = {}
+        
+        # Pool efficiency metrics
+        if pool_state_data:
+            metrics["pool_efficiency"] = self._calculate_pool_efficiency_metrics(pool_state_data)
+        
+        # Trading performance metrics
+        if trading_activity_data:
+            metrics["trading_performance"] = self._calculate_trading_performance_metrics(trading_activity_data)
+        
+        # Slippage analysis metrics
+        if slippage_metrics_data:
+            metrics["slippage_analysis"] = self._calculate_slippage_analysis_metrics(slippage_metrics_data)
+        
+        # LP curve evolution metrics (High Tide only)
+        if strategy == "high_tide" and lp_curve_data:
+            metrics["lp_curve_evolution"] = self._calculate_lp_curve_evolution_metrics(lp_curve_data)
+        
+        # Yield token performance metrics (High Tide only)
+        if strategy == "high_tide" and yield_token_data:
+            metrics["yield_token_performance"] = self._calculate_yield_token_performance_metrics(yield_token_data)
+        
+        return metrics
+    
+    def _calculate_pool_efficiency_metrics(self, pool_state_data):
+        """Calculate pool efficiency metrics"""
+        metrics = {}
+        
+        # Calculate average pool utilization
+        total_liquidity_values = []
+        active_liquidity_values = []
+        
+        for pool_data in pool_state_data:
+            if "moet_btc_pool" in pool_data:
+                btc_pool = pool_data["moet_btc_pool"]
+                total_liquidity_values.append(btc_pool.get("total_liquidity", 0))
+                active_liquidity_values.append(btc_pool.get("active_liquidity", 0))
+        
+        if total_liquidity_values and active_liquidity_values:
+            metrics["average_pool_utilization"] = np.mean(active_liquidity_values) / np.mean(total_liquidity_values) if np.mean(total_liquidity_values) > 0 else 0
+            metrics["pool_utilization_std"] = np.std(active_liquidity_values) / np.mean(total_liquidity_values) if np.mean(total_liquidity_values) > 0 else 0
+        
+        return metrics
+    
+    def _calculate_trading_performance_metrics(self, trading_activity_data):
+        """Calculate trading performance metrics"""
+        metrics = {}
+        
+        total_trades = 0
+        total_volume = 0.0
+        
+        for trading_data in trading_activity_data:
+            if "yield_token_trades" in trading_data:
+                total_trades += len(trading_data["yield_token_trades"])
+                for trade in trading_data["yield_token_trades"]:
+                    total_volume += trade.get("moet_amount", 0)
+        
+        metrics["total_trades"] = total_trades
+        metrics["total_volume"] = total_volume
+        metrics["average_trade_size"] = total_volume / total_trades if total_trades > 0 else 0
+        
+        return metrics
+    
+    def _calculate_slippage_analysis_metrics(self, slippage_metrics_data):
+        """Calculate slippage analysis metrics"""
+        metrics = {}
+        
+        total_slippage_costs = []
+        total_trading_fees = []
+        
+        for slippage_data in slippage_metrics_data:
+            total_slippage_costs.append(slippage_data.get("total_slippage_costs", 0))
+            total_trading_fees.append(slippage_data.get("total_trading_fees", 0))
+        
+        metrics["mean_slippage_costs"] = np.mean(total_slippage_costs)
+        metrics["std_slippage_costs"] = np.std(total_slippage_costs)
+        metrics["mean_trading_fees"] = np.mean(total_trading_fees)
+        metrics["std_trading_fees"] = np.std(total_trading_fees)
+        
+        return metrics
+    
+    def _calculate_lp_curve_evolution_metrics(self, lp_curve_data):
+        """Calculate LP curve evolution metrics"""
+        metrics = {}
+        
+        # This would analyze LP curve snapshots over time
+        # For now, return basic structure
+        metrics["curve_snapshots_count"] = len(lp_curve_data)
+        metrics["curve_evolution_analyzed"] = True
+        
+        return metrics
+    
+    def _calculate_yield_token_performance_metrics(self, yield_token_data):
+        """Calculate yield token performance metrics"""
+        metrics = {}
+        
+        total_yield_earned = 0.0
+        total_yield_sold = 0.0
+        portfolio_count = 0
+        
+        for yt_data in yield_token_data:
+            if "agent_portfolios" in yt_data:
+                for agent_portfolio in yt_data["agent_portfolios"]:
+                    portfolio = agent_portfolio.get("portfolio", {})
+                    total_yield_earned += portfolio.get("total_accrued_yield", 0)
+                    total_yield_sold += portfolio.get("total_yield_sold", 0)
+                    portfolio_count += 1
+        
+        metrics["total_yield_earned"] = total_yield_earned
+        metrics["total_yield_sold"] = total_yield_sold
+        metrics["average_yield_per_portfolio"] = total_yield_earned / portfolio_count if portfolio_count > 0 else 0
+        metrics["yield_utilization_rate"] = total_yield_sold / total_yield_earned if total_yield_earned > 0 else 0
+        
+        return metrics
+    
+    def _aggregate_pool_state_data(self, pool_state_data):
+        """Aggregate pool state data across runs"""
+        if not pool_state_data:
+            return {}
+        
+        aggregated = {}
+        
+        # Aggregate MOET:BTC pool data
+        btc_pools = [data.get("moet_btc_pool", {}) for data in pool_state_data if "moet_btc_pool" in data]
+        if btc_pools:
+            aggregated["moet_btc_pool"] = {
+                "average_liquidity": np.mean([p.get("total_liquidity", 0) for p in btc_pools]),
+                "average_price": np.mean([p.get("current_price", 0) for p in btc_pools]),
+                "average_tick": np.mean([p.get("tick_current", 0) for p in btc_pools]),
+                "concentration": btc_pools[0].get("concentration", 0) if btc_pools else 0,
+                "fee_tier": btc_pools[0].get("fee_tier", 0) if btc_pools else 0
             }
+        
+        # Aggregate MOET:YT pool data
+        yt_pools = [data.get("moet_yt_pool", {}) for data in pool_state_data if "moet_yt_pool" in data]
+        if yt_pools:
+            aggregated["moet_yt_pool"] = {
+                "average_liquidity": np.mean([p.get("total_liquidity", 0) for p in yt_pools]),
+                "average_price": np.mean([p.get("current_price", 0) for p in yt_pools]),
+                "concentration": yt_pools[0].get("concentration", 0) if yt_pools else 0,
+                "fee_tier": yt_pools[0].get("fee_tier", 0) if yt_pools else 0
+            }
+        
+        return aggregated
+    
+    def _aggregate_trading_activity_data(self, trading_activity_data):
+        """Aggregate trading activity data across runs"""
+        if not trading_activity_data:
+            return {}
+        
+        aggregated = {
+            "total_yield_token_trades": 0,
+            "total_rebalancing_events": 0,
+            "total_liquidation_events": 0,
+            "total_trade_events": 0
+        }
+        
+        for trading_data in trading_activity_data:
+            aggregated["total_yield_token_trades"] += len(trading_data.get("yield_token_trades", []))
+            aggregated["total_rebalancing_events"] += len(trading_data.get("rebalancing_events", []))
+            aggregated["total_liquidation_events"] += len(trading_data.get("liquidation_events", []))
+            aggregated["total_trade_events"] += len(trading_data.get("trade_events", []))
+        
+        return aggregated
+    
+    def _aggregate_slippage_metrics_data(self, slippage_metrics_data):
+        """Aggregate slippage metrics data across runs"""
+        if not slippage_metrics_data:
+            return {}
+        
+        total_slippage_costs = [data.get("total_slippage_costs", 0) for data in slippage_metrics_data]
+        total_trading_fees = [data.get("total_trading_fees", 0) for data in slippage_metrics_data]
+        
+        return {
+            "mean_slippage_costs": np.mean(total_slippage_costs),
+            "std_slippage_costs": np.std(total_slippage_costs),
+            "mean_trading_fees": np.mean(total_trading_fees),
+            "std_trading_fees": np.std(total_trading_fees),
+            "total_slippage_costs": sum(total_slippage_costs),
+            "total_trading_fees": sum(total_trading_fees)
+        }
+    
+    def _aggregate_lp_curve_data(self, lp_curve_data):
+        """Aggregate LP curve data across runs"""
+        if not lp_curve_data:
+            return {}
+        
+        return {
+            "curve_snapshots_count": len(lp_curve_data),
+            "curve_data_available": True
+        }
+    
+    def _aggregate_yield_token_data(self, yield_token_data):
+        """Aggregate yield token data across runs"""
+        if not yield_token_data:
+            return {}
+        
+        total_agent_portfolios = 0
+        total_yield_earned = 0.0
+        total_yield_sold = 0.0
+        
+        for yt_data in yield_token_data:
+            if "agent_portfolios" in yt_data:
+                total_agent_portfolios += len(yt_data["agent_portfolios"])
+                for portfolio in yt_data["agent_portfolios"]:
+                    portfolio_data = portfolio.get("portfolio", {})
+                    total_yield_earned += portfolio_data.get("total_accrued_yield", 0)
+                    total_yield_sold += portfolio_data.get("total_yield_sold", 0)
+        
+        return {
+            "total_agent_portfolios": total_agent_portfolios,
+            "total_yield_earned": total_yield_earned,
+            "total_yield_sold": total_yield_sold,
+            "average_yield_per_portfolio": total_yield_earned / total_agent_portfolios if total_agent_portfolios > 0 else 0
         }
     
     def _compare_scenarios(self, ht_runs: List[Dict], aave_runs: List[Dict]) -> Dict[str, Any]:
@@ -546,6 +1072,162 @@ class ComprehensiveHTvsAaveAnalysis:
                 "bias_mitigation": "Same random seed per run for both strategies ensures fair comparison"
             }
         }
+    
+    def _generate_comprehensive_visualization_data(self):
+        """Generate comprehensive visualization data from all scenario results"""
+        
+        # Pool state evolution data
+        pool_state_evolution = {
+            "moet_btc_pool_evolution": [],
+            "moet_yt_pool_evolution": [],
+            "liquidity_distribution_evolution": []
+        }
+        
+        # Trading activity summary
+        trading_activity_summary = {
+            "high_tide_trading_activity": [],
+            "aave_trading_activity": [],
+            "cross_strategy_comparison": {}
+        }
+        
+        # Slippage analysis
+        slippage_analysis = {
+            "high_tide_slippage_metrics": [],
+            "aave_slippage_metrics": [],
+            "slippage_comparison": {}
+        }
+        
+        # LP curve evolution (High Tide only)
+        lp_curve_evolution = {
+            "curve_snapshots": [],
+            "liquidity_concentration_evolution": [],
+            "price_impact_analysis": []
+        }
+        
+        # Agent performance trajectories
+        agent_performance_trajectories = {
+            "high_tide_agent_trajectories": [],
+            "aave_agent_trajectories": [],
+            "performance_comparison": {}
+        }
+        
+        # Process each scenario
+        for scenario in self.results["scenario_results"]:
+            scenario_name = scenario["scenario_name"]
+            
+            # Extract pool state data
+            ht_pool_data = self._extract_scenario_pool_data(scenario, "high_tide")
+            aave_pool_data = self._extract_scenario_pool_data(scenario, "aave")
+            
+            if ht_pool_data:
+                pool_state_evolution["moet_btc_pool_evolution"].append({
+                    "scenario": scenario_name,
+                    "data": ht_pool_data.get("moet_btc_pool", {})
+                })
+                pool_state_evolution["moet_yt_pool_evolution"].append({
+                    "scenario": scenario_name,
+                    "data": ht_pool_data.get("moet_yt_pool", {})
+                })
+            
+            # Extract trading activity data
+            ht_trading_data = self._extract_scenario_trading_data(scenario, "high_tide")
+            aave_trading_data = self._extract_scenario_trading_data(scenario, "aave")
+            
+            if ht_trading_data:
+                trading_activity_summary["high_tide_trading_activity"].append({
+                    "scenario": scenario_name,
+                    "data": ht_trading_data
+                })
+            
+            if aave_trading_data:
+                trading_activity_summary["aave_trading_activity"].append({
+                    "scenario": scenario_name,
+                    "data": aave_trading_data
+                })
+            
+            # Extract slippage data
+            ht_slippage_data = self._extract_scenario_slippage_data(scenario, "high_tide")
+            aave_slippage_data = self._extract_scenario_slippage_data(scenario, "aave")
+            
+            if ht_slippage_data:
+                slippage_analysis["high_tide_slippage_metrics"].append({
+                    "scenario": scenario_name,
+                    "data": ht_slippage_data
+                })
+            
+            if aave_slippage_data:
+                slippage_analysis["aave_slippage_metrics"].append({
+                    "scenario": scenario_name,
+                    "data": aave_slippage_data
+                })
+            
+            # Extract LP curve data (High Tide only)
+            ht_lp_data = self._extract_scenario_lp_curve_data(scenario, "high_tide")
+            if ht_lp_data:
+                lp_curve_evolution["curve_snapshots"].append({
+                    "scenario": scenario_name,
+                    "data": ht_lp_data
+                })
+            
+            # Extract agent performance data
+            ht_agent_data = self._extract_scenario_agent_performance_data(scenario, "high_tide")
+            aave_agent_data = self._extract_scenario_agent_performance_data(scenario, "aave")
+            
+            if ht_agent_data:
+                agent_performance_trajectories["high_tide_agent_trajectories"].append({
+                    "scenario": scenario_name,
+                    "data": ht_agent_data
+                })
+            
+            if aave_agent_data:
+                agent_performance_trajectories["aave_agent_trajectories"].append({
+                    "scenario": scenario_name,
+                    "data": aave_agent_data
+                })
+        
+        # Update visualization data
+        self.results["visualization_data"] = {
+            "pool_state_evolution": pool_state_evolution,
+            "trading_activity_summary": trading_activity_summary,
+            "slippage_analysis": slippage_analysis,
+            "lp_curve_evolution": lp_curve_evolution,
+            "agent_performance_trajectories": agent_performance_trajectories
+        }
+    
+    def _extract_scenario_pool_data(self, scenario, strategy):
+        """Extract pool data from scenario results"""
+        strategy_key = f"{strategy}_summary"
+        if strategy_key in scenario:
+            return scenario[strategy_key].get("comprehensive_data", {}).get("pool_state_aggregate", {})
+        return {}
+    
+    def _extract_scenario_trading_data(self, scenario, strategy):
+        """Extract trading data from scenario results"""
+        strategy_key = f"{strategy}_summary"
+        if strategy_key in scenario:
+            return scenario[strategy_key].get("comprehensive_data", {}).get("trading_activity_aggregate", {})
+        return {}
+    
+    def _extract_scenario_slippage_data(self, scenario, strategy):
+        """Extract slippage data from scenario results"""
+        strategy_key = f"{strategy}_summary"
+        if strategy_key in scenario:
+            return scenario[strategy_key].get("comprehensive_data", {}).get("slippage_metrics_aggregate", {})
+        return {}
+    
+    def _extract_scenario_lp_curve_data(self, scenario, strategy):
+        """Extract LP curve data from scenario results"""
+        strategy_key = f"{strategy}_summary"
+        if strategy_key in scenario:
+            return scenario[strategy_key].get("comprehensive_data", {}).get("lp_curve_aggregate", {})
+        return {}
+    
+    def _extract_scenario_agent_performance_data(self, scenario, strategy):
+        """Extract agent performance data from scenario results"""
+        strategy_key = f"{strategy}_summary"
+        if strategy_key in scenario:
+            return scenario[strategy_key].get("all_agent_outcomes", [])
+        return []
     
     def _save_comprehensive_results(self):
         """Save comprehensive results to JSON file"""

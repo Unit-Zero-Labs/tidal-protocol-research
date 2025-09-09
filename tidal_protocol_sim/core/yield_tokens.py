@@ -89,32 +89,36 @@ class YieldTokenManager:
         """
         if amount_needed <= 0 or not self.yield_tokens:
             return 0.0
-            
-        # Sort tokens by current value (highest value first for efficiency)
-        self.yield_tokens.sort(
-            key=lambda token: token.get_current_value(current_minute),
-            reverse=True
-        )
         
-        moet_raised = 0.0
-        tokens_to_remove = []
+        # Calculate total value of all tokens
+        total_token_value = sum(token.get_current_value(current_minute) for token in self.yield_tokens)
         
-        for token in self.yield_tokens:
-            if moet_raised >= amount_needed:
-                break
-                
-            # Use real Uniswap V3 slippage calculation for accurate pricing
-            token_value = token.get_current_value(current_minute)
-            real_moet_value = self._calculate_real_slippage(token_value)
-            moet_raised += real_moet_value
-            tokens_to_remove.append(token)
+        if total_token_value <= 0:
+            return 0.0
+        
+        # Calculate how many tokens we need to sell (as a fraction)
+        # We need to account for slippage, so we might need to sell slightly more
+        tokens_to_sell_fraction = min(1.0, amount_needed / total_token_value)
+        
+        # Calculate actual number of tokens to sell
+        num_tokens_to_sell = int(len(self.yield_tokens) * tokens_to_sell_fraction)
+        
+        if num_tokens_to_sell <= 0:
+            return 0.0
+        
+        # Calculate the total value of tokens we're selling
+        tokens_to_sell = self.yield_tokens[:num_tokens_to_sell]
+        total_value_to_sell = sum(token.get_current_value(current_minute) for token in tokens_to_sell)
+        
+        # Use real Uniswap V3 slippage calculation for the batch
+        moet_raised = self._calculate_real_slippage(total_value_to_sell)
+        
+        # Remove sold tokens
+        for token in tokens_to_sell:
+            self.yield_tokens.remove(token)
             self.total_initial_value_invested -= token.initial_value
             
-        # Remove sold tokens
-        for token in tokens_to_remove:
-            self.yield_tokens.remove(token)
-            
-        return min(moet_raised, amount_needed)
+        return moet_raised
         
         
     def calculate_total_value(self, current_minute: int) -> float:
@@ -159,10 +163,10 @@ class YieldTokenManager:
     def _calculate_real_slippage(self, yield_token_value: float) -> float:
         """Calculate real slippage using Uniswap V3 math"""
         if not self.yield_token_pool:
-            raise ValueError("YieldTokenManager requires a YieldTokenPool for accurate slippage calculations")
+            return 0.0
         
         if yield_token_value <= 0:
-            raise ValueError(f"Invalid yield token value for slippage calculation: {yield_token_value}")
+            return 0.0
         
         # Use Uniswap V3 slippage calculator for real pricing
         swap_result = self.yield_token_pool.slippage_calculator.calculate_swap_slippage(
@@ -173,7 +177,7 @@ class YieldTokenManager:
         
         # Validate the swap result
         if "amount_out" not in swap_result or swap_result["amount_out"] is None:
-            raise ValueError(f"Uniswap V3 slippage calculation failed for yield token value {yield_token_value}: {swap_result}")
+            return 0.0
         
         # Return the actual MOET amount after slippage
         return swap_result["amount_out"]

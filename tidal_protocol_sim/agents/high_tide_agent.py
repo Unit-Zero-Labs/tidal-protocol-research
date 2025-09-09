@@ -110,10 +110,19 @@ class HighTideAgent(BaseAgent):
         # Update health factor
         self._update_health_factor(asset_prices)
         
-        # Check if we need to purchase yield tokens initially
-        if (self.state.moet_debt > 0 and 
+        # Debug health factor tracking for agent2
+        
+        # Check if we need to purchase yield tokens initially (only at minute 0)
+        if (current_minute == 0 and 
+            self.state.moet_debt > 0 and 
             len(self.state.yield_token_manager.yield_tokens) == 0):
             return self._initial_yield_token_purchase(current_minute)
+        
+        # Check if agent is trying to purchase yield tokens after minute 0
+        if (current_minute > 0 and 
+            self.state.moet_debt > 0 and 
+            len(self.state.yield_token_manager.yield_tokens) == 0):
+            return ("no_action", {})
         
         # Check if we can increase leverage (HF > initial HF)
         if self._check_leverage_opportunity(asset_prices):
@@ -254,7 +263,7 @@ class HighTideAgent(BaseAgent):
         )
         actual_moet_received = swap_result["amount_out"]
         slippage_amount = swap_result["slippage_amount"]
-        slippage_percent = swap_result["slippage_percent"]
+        slippage_percent = swap_result.get("slippage_percent", swap_result.get("slippage_percentage", 0.0))
         
         # Step 3: Repay debt with actual MOET received
         actual_debt_repaid = min(actual_moet_received, self.state.moet_debt)
@@ -330,6 +339,7 @@ class HighTideAgent(BaseAgent):
         old_debt = self.state.moet_debt
         self.state.moet_debt *= interest_factor
         interest_accrued = self.state.moet_debt - old_debt
+        
         
         self.state.total_interest_accrued += interest_accrued
         self.state.last_interest_update_minute = current_minute
