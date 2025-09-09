@@ -23,7 +23,7 @@ This repository contains a sophisticated simulation system that models the Tidal
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/tidal-protocol-research.git
+git clone https://github.com/unit-zero-labs/tidal-protocol-research.git
 cd tidal-protocol-research
 
 # Create and activate virtual environment
