@@ -1,4 +1,4 @@
-# Tidal Protocol Research & Simulation System
+# Tidal Lending Simulations
 
 A comprehensive DeFi lending protocol simulation and analysis framework for comparing liquidation mechanisms, stress testing protocol stability, and analyzing High Tide active rebalancing strategies versus traditional AAVE-style liquidations.
 
