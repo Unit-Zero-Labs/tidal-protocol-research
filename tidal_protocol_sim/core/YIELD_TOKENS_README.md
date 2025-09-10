@@ -42,18 +42,23 @@ Yield tokens use continuous compound interest with per-minute precision:
 
 ```python
 def get_current_value(self, current_minute: int) -> float:
-    """Calculate current value including accrued yield"""
+    """Calculate current value including accrued yield (rebasing)"""
+    if current_minute < self.creation_minute:
+        return self.initial_value
+        
     minutes_elapsed = current_minute - self.creation_minute
-    # Convert APR to per-minute rate: (1 + APR)^(1/525600) - 1
-    minute_rate = (1 + self.apr) ** (1 / 525600) - 1
-    return self.initial_value * (1 + minute_rate) ** minutes_elapsed
+    # Convert APR to per-minute rate: APR * (minutes_elapsed / minutes_per_year)
+    # For 10% APR over 60 minutes: 0.10 * (60 / 525600) = 0.0000114
+    minutes_per_year = 365 * 24 * 60  # 525,600 minutes per year
+    minute_rate = self.apr * (minutes_elapsed / minutes_per_year)
+    return self.initial_value * (1 + minute_rate)
 ```
 
 ### Key Mathematical Constants
 
 - **APR**: 10% (0.10) annual percentage rate
-- **Minutes per year**: 525,600 (365.25 days × 24 hours × 60 minutes)
-- **Per-minute rate**: `(1 + 0.10)^(1/525600) - 1 ≈ 0.0000181%`
+- **Minutes per year**: 525,600 (365 days × 24 hours × 60 minutes)
+- **Per-minute rate**: `0.10 * (minutes_elapsed / 525600)` for linear approximation
 - **Slippage factor**: 0.1% (0.999) used only by `YieldToken.get_sellable_value`; portfolio operations use Uniswap V3 pricing
 
 ### Yield Calculation Formula
@@ -61,9 +66,11 @@ def get_current_value(self, current_minute: int) -> float:
 For a yield token with initial value `initial_value`, APR `r`, and time elapsed `t` minutes:
 
 ```
-Value = initial_value × (1 + r)^(t/525600)
+Value = initial_value × (1 + r × t/525600)
 Yield = Value - initial_value
 ```
+
+This uses a linear approximation for per-minute yield accrual, which is more computationally efficient while maintaining accuracy for short time periods.
 
 ## Core Classes and Components
 
@@ -162,18 +169,41 @@ For a $1,000 yield token with 10% APR:
 
 ### Yield Token Selling
 
-Yield tokens are sold using a bulk selling approach that efficiently handles complete and fractional token sales:
+Yield tokens are sold using a sophisticated bulk selling approach that efficiently handles complete and fractional token sales:
 
 ```python
-def sell_yield_tokens(self, amount_needed: float, current_minute: int) -> float:
-    """Sell yield tokens to raise MOET using bulk selling approach"""
+def sell_yield_tokens(self, moet_amount_needed: float, current_minute: int) -> tuple[float, float]:
+    """
+    Sell yield tokens to raise the exact MOET amount needed
+    Args:
+        moet_amount_needed: Amount of MOET needed (not yield token value). Use float('inf') for emergency sale of all tokens.
+    Returns:
+        tuple: (Amount of MOET obtained, Actual yield token value sold)
+    """
+    if not self.yield_tokens:
+        return 0.0, 0.0
+    
     # Calculate total value of all tokens (including yield appreciation)
     total_token_value = sum(token.get_current_value(current_minute) for token in self.yield_tokens)
     
+    if total_token_value <= 0:
+        return 0.0, 0.0
+    
+    # Handle emergency sale (sell all tokens)
+    if moet_amount_needed == float('inf'):
+        yield_tokens_to_sell = total_token_value
+    else:
+        # Use simple calculation to find the amount of yield tokens to sell
+        # Start with 1:1 assumption, let slippage handle reality
+        yield_tokens_to_sell = self._calculate_yield_tokens_needed(moet_amount_needed)
+        
+        if yield_tokens_to_sell <= 0:
+            return 0.0, 0.0
+    
     # Calculate how many complete tokens we can sell
     token_value = self.yield_tokens[0].get_current_value(current_minute)
-    complete_tokens_needed = int(amount_needed / token_value)
-    fractional_amount_needed = amount_needed - (complete_tokens_needed * token_value)
+    complete_tokens_needed = int(yield_tokens_to_sell / token_value)
+    fractional_amount_needed = yield_tokens_to_sell - (complete_tokens_needed * token_value)
     
     # Sell complete tokens (remove them entirely)
     tokens_to_remove = min(complete_tokens_needed, len(self.yield_tokens))
@@ -181,13 +211,21 @@ def sell_yield_tokens(self, amount_needed: float, current_minute: int) -> float:
         token = self.yield_tokens.pop(0)  # Remove from front
         self.total_initial_value_invested -= token.initial_value
     
-    # If we still need more, sell fractional amount of one token
+    # If we still need more and have tokens left, sell fractional amount
     if fractional_amount_needed > 0 and self.yield_tokens:
         fractional_fraction = fractional_amount_needed / token_value
+        # Reduce the first remaining token by the fractional amount
         self.yield_tokens[0].initial_value *= (1 - fractional_fraction)
+        # If the token becomes too small, remove it
+        if self.yield_tokens[0].initial_value < 0.01:
+            removed_token = self.yield_tokens.pop(0)
+            self.total_initial_value_invested -= removed_token.initial_value
     
-    # Use real Uniswap V3 slippage calculation for accurate pricing
-    moet_raised = self._calculate_real_slippage(total_value_to_sell)
+    # Use real Uniswap V3 slippage calculation for the batch
+    # This gives us the ACTUAL MOET amount based on pool math
+    moet_raised = self._calculate_real_slippage(yield_tokens_to_sell)
+    
+    return moet_raised, yield_tokens_to_sell
 ```
 
 **Key Concept**: The bulk selling approach is more realistic and efficient for infinitely divisible tokens. It sells complete tokens first, then only modifies one token by the fractional amount needed. Since all tokens have the same value (bought at the same time), this approach minimizes token modifications while maintaining accurate portfolio tracking.

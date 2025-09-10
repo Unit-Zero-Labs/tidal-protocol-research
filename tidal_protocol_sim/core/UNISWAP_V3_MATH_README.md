@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides a comprehensive breakdown of the `uniswap_v3_math.py` script, which implements a Uniswap V3 concentrated liquidity system suitable for simulation in the Tidal Protocol. The implementation uses Uniswap V3 mathematics with tick-based pricing, Q64.96 fixed-point arithmetic, and sophisticated cross-tick swap functionality. Tick-to-price conversions use float math and are clamped to official bounds for validity.
+This document provides a comprehensive breakdown of the `uniswap_v3_math.py` script, which implements a sophisticated Uniswap V3 concentrated liquidity system for the Tidal Protocol simulation. The implementation uses authentic Uniswap V3 mathematics with tick-based pricing, Q64.96 fixed-point arithmetic, and advanced cross-tick swap functionality. The system provides both trading functionality and visualization data for charts, with proper constant product curve calculations and concentrated liquidity positions optimized for MOET:BTC (80% concentration) and MOET:Yield Token (95% concentration) pairs.
 
 ## Table of Contents
 
@@ -27,8 +27,11 @@ Uniswap V3 is a decentralized exchange (DEX) that uses concentrated liquidity, a
 1. **Ticks**: Discrete price points that define liquidity ranges
 2. **Sqrt Price**: Square root of price stored in Q64.96 fixed-point format
 3. **Liquidity Positions**: Concentrated ranges of liquidity between two ticks
-4. **Fee Tiers**: Different fee structures for different asset pairs
+4. **Fee Tiers**: Different fee structures for different asset pairs (0.05%, 0.3%, 1%)
 5. **Cross-Tick Swaps**: Sophisticated handling of swaps that move across multiple price ranges
+6. **TickBitmap**: Efficient O(1) tick finding using bitmap approach instead of O(n) linear search
+7. **Multiple Position Ranges**: Sophisticated liquidity distribution with multiple concentrated positions
+8. **Chart Integration**: Built-in support for liquidity distribution visualization and tick data
 
 ## Mathematical Foundations
 
@@ -113,28 +116,40 @@ def get_next_sqrt_price_from_amount1_rounding_down(sqrt_price_x96, liquidity, am
 
 The main pool class that manages:
 - Current price and tick
-- Liquidity positions
-- Tick data structure
-- Trading operations
-- Cross-tick swap functionality
+- Liquidity positions with multiple concentrated ranges
+- Tick data structure with efficient bitmap lookup
+- Trading operations with enhanced cross-tick support
+- Chart integration and visualization data
 
 ```python
 @dataclass
 class UniswapV3Pool:
     pool_name: str  # "MOET:BTC" or "MOET:Yield_Token"
     total_liquidity: float  # Total pool size in USD
-    btc_price: float = None  # Set based on simulation
-    fee_tier: float = None  # Set based on pool type
-    concentration: float = None  # Set based on pool type
-    tick_spacing: int = None  # Set based on pool type
+    btc_price: float = 100_000.0  # BTC price in USD
+    fee_tier: float = None  # Will be set based on pool type
+    concentration: float = None  # Will be set based on pool type
+    tick_spacing: int = None  # Will be set based on pool type
     
     # Core Uniswap V3 state
-    sqrt_price_x96: int = Q96  # Current sqrt price
+    sqrt_price_x96: int = Q96  # Current sqrt price in Q64.96 format
     liquidity: int = 0  # Current active liquidity
     tick_current: int = 0  # Current tick
     
-    # Advanced features
+    # Tick and position data
+    ticks: Dict[int, TickInfo] = None  # tick -> TickInfo
+    positions: List[Position] = None  # List of liquidity positions
+    tick_bitmap: TickBitmap = None  # Efficient tick finding
+    
+    # Enhanced features
+    use_enhanced_cross_tick: bool = True
+    use_tick_bitmap: bool = True
+    max_swap_iterations: int = 1000
     debug_cross_tick: bool = False
+    
+    # Legacy fields for backward compatibility
+    token0_reserve: Optional[float] = None  # MOET reserve (calculated from ticks)
+    token1_reserve: Optional[float] = None  # BTC reserve (calculated from ticks)
 ```
 
 ### Pool Types and Configuration
@@ -165,7 +180,28 @@ class TickInfo:
     liquidity_gross: int = 0  # Total liquidity referencing this tick
     liquidity_net: int = 0   # Net liquidity change at this tick
     initialized: bool = False  # Whether this tick has been initialized
+
+@dataclass
+class TickBitmap:
+    """Efficient tick finding using bitmap approach (O(1) instead of O(n))"""
+    bitmap: Dict[int, int] = None  # word_index -> bitmap_word
+    
+    def next_initialized_tick(self, tick: int, tick_spacing: int, zero_for_one: bool) -> int:
+        """Find next initialized tick using bitmap lookup"""
+        
+    def flip_tick(self, tick: int, tick_spacing: int):
+        """Flip tick state in bitmap when liquidity is added/removed"""
 ```
+
+### Efficient Tick Finding with TickBitmap
+
+The implementation includes a sophisticated `TickBitmap` class that provides O(1) tick finding instead of O(n) linear search:
+
+- **Bitmap Structure**: Uses 256-bit words to represent tick states
+- **Word-based Lookup**: Divides tick space into 256-tick words for efficient searching
+- **Direction-aware Search**: Handles both increasing and decreasing price directions
+- **Memory Efficient**: Only stores non-zero words to minimize memory usage
+- **Automatic Cleanup**: Removes empty words when ticks are deactivated
 
 ## Trading Logic
 
@@ -585,9 +621,11 @@ print(f"Trading Fees: ${result['trading_fees']:.2f}")
 - Detailed result reporting
 
 ### 6. Chart Integration
-- Liquidity distribution data
-- Price range visualization
-- Tick-based charting support
+- **Liquidity Distribution Data**: `get_liquidity_distribution()` provides price and liquidity arrays for charting
+- **Tick Data for Charts**: `get_tick_data_for_charts()` returns formatted tick data with price labels
+- **Price Range Visualization**: Built-in support for concentrated liquidity range visualization
+- **Tick-based Charting Support**: Complete tick information with liquidity levels and active status
+- **Simulation Support**: `simulate_trade_impact()` for non-destructive trade impact analysis
 
 
 ## Integration with Tidal Protocol

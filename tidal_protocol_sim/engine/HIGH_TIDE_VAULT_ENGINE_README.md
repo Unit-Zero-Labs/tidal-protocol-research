@@ -240,8 +240,15 @@ def _execute_yield_token_purchase(self, agent: HighTideAgent, params: dict, minu
     success = agent.execute_yield_token_purchase(moet_amount, minute, use_direct_minting)
     
     if success:
-        # Only update pool state if NOT using direct minting at minute 0
-        if not use_direct_minting:
+        # Always update pool state to maintain synchronization
+        # For direct minting, we need to update the pool's internal reserves
+        if use_direct_minting:
+            # For direct minting, update pool reserves to reflect the 1:1 minting
+            # This ensures pool state stays synchronized with agent state
+            self.yield_token_pool.moet_reserve += moet_amount
+            self.yield_token_pool.yield_token_reserve += moet_amount
+        else:
+            # For regular purchases, use the pool's execute method
             self.yield_token_pool.execute_yield_token_purchase(moet_amount)
 ```
 
