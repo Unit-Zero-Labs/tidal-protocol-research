@@ -67,7 +67,7 @@ class ComprehensiveComparisonConfig:
         }
         
         self.moet_yt_pool_config = {
-            "size": 100_000_000,  # $250K rebalancing pool
+            "size": 250_000,  # $250K rebalancing pool
             "concentration": 0.95,  # 95% concentration at 1:1 peg
             "fee_tier": 0.0005,  # 0.05% fee tier for stable pairs
             "tick_spacing": 10,  # Tight tick spacing for price control
