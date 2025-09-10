@@ -2327,12 +2327,12 @@ This study implements a controlled comparison between two fundamentally differen
 ### 1.3 Pool Configuration and Economic Parameters
 
 **High Tide Pool Infrastructure:**
-- **MOET:BTC Liquidation Pool:** ${self.config.moet_btc_pool_size:,} each side (emergency liquidations)
-- **MOET:Yield Token Pool:** ${self.config.moet_yt_pool_size:,} each side ({self.config.yield_token_concentration:.0%} concentration)
+- **MOET:BTC Liquidation Pool:** ${self.config.moet_btc_pool_config["size"]:,} each side (emergency liquidations)
+- **MOET:Yield Token Pool:** ${self.config.moet_yt_pool_config["size"]:,} each side ({self.config.moet_yt_pool_config["concentration"]:.0%} concentration)
 - **Yield Token APR:** {self.config.yield_apr:.1%} annual percentage rate
 
 **AAVE Pool Infrastructure:**
-- **MOET:BTC Liquidation Pool:** ${self.config.moet_btc_pool_size:,} each side (same as High Tide for fair comparison)
+- **MOET:BTC Liquidation Pool:** ${self.config.moet_btc_pool_config["size"]:,} each side (same as High Tide for fair comparison)
 - **Liquidation Parameters:** 50% collateral seizure + 5% liquidation penalty
 
 ---
@@ -2484,7 +2484,7 @@ High Tide outperformed AAVE across all {len(self.config.health_factor_scenarios)
 
 **For Protocol Adoption:**
 1. **Implement Automated Rebalancing:** Clear evidence supports automated position management over passive liquidation systems
-2. **Optimize Pool Sizing:** Current ${self.config.moet_yt_pool_size:,} MOET:YT pool provides adequate liquidity for tested scenarios
+2. **Optimize Pool Sizing:** Current ${self.config.moet_yt_pool_config["size"]:,} MOET:YT pool provides adequate liquidity for tested scenarios
 3. **Target Health Factor Selection:** Analysis supports aggressive target health factors (1.01-1.05) for optimal capital efficiency
 
 **For Risk Management:**
