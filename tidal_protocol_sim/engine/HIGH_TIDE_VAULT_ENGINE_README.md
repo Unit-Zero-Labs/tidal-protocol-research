@@ -44,6 +44,33 @@ HighTideVaultEngine (Orchestration Layer)
 └── Analytics & Reporting (Performance Tracking)
 ```
 
+### Orchestration vs Execution Layers
+
+The High Tide system uses a clear separation between orchestration and execution:
+
+**🎯 Orchestration Layer (HighTideVaultEngine):**
+- **Coordinates** agent actions and decisions
+- **Tracks** rebalancing events, slippage costs, and performance metrics
+- **Records** all trading activity for comprehensive analysis
+- **Manages** simulation flow and agent lifecycle
+
+**⚙️ Execution Layer (Agents + Pools):**
+- **Agents** calculate portfolio needs and call pool methods directly
+- **YieldTokenPool** executes real Uniswap V3 swaps with permanent pool state mutations
+- **Pool state** is shared across all agents, creating realistic competition for liquidity
+- **Real economic impact** where each swap affects subsequent trades
+
+**🔄 Data Flow for Rebalancing:**
+```
+1. Agent calculates MOET needed for target health factor
+2. Agent requests engine._execute_yield_token_sale()
+3. Engine calls agent.execute_yield_token_sale()
+4. Agent calls YieldTokenPool.execute_yield_token_sale() (REAL SWAP)
+5. Pool state mutates permanently
+6. Engine records slippage, costs, and event data
+7. Agent portfolio updates to reflect actual tokens sold
+```
+
 ## Core Components and Integration
 
 ### 1. Tidal Protocol Integration
@@ -263,23 +290,56 @@ The engine manages sophisticated yield token sales for rebalancing:
 
 ```python
 def _execute_yield_token_sale(self, agent: HighTideAgent, params: dict, minute: int) -> tuple:
-    """Execute yield token sale for rebalancing"""
-    amount_needed = params.get("amount_needed", 0.0)
-    swap_type = params.get("action_type", "sell_yield_tokens")
+    """Execute yield token sale for rebalancing via engine orchestration"""
+    moet_amount_needed = params.get("moet_needed", 0.0)
+    swap_type = params.get("swap_type", "rebalancing")
     
-    if amount_needed <= 0 and swap_type != "emergency_sell_all_yield":
+    if moet_amount_needed <= 0:
         return False, None
         
-    # Execute sale through agent
-    if swap_type == "emergency_sell_all_yield":
-        moet_raised = agent.execute_yield_token_sale(float('inf'), minute)
-    else:
-        moet_raised = agent.execute_yield_token_sale(amount_needed, minute)
+    # ORCHESTRATION LAYER: Engine coordinates the real swap execution
+    # 1. Agent calculates yield tokens to sell and updates portfolio
+    # 2. Agent calls YieldTokenPool.execute_yield_token_sale() for real swap
+    # 3. Engine records the event and tracks slippage/costs
+    
+    success, swap_data = agent.execute_yield_token_sale()
+    
+    if success and swap_data:
+        moet_received = swap_data.get("moet_received", 0.0)
+        yt_swapped = swap_data.get("yt_swapped", 0.0)
+        
+        # Calculate slippage for engine tracking
+        slippage_cost = moet_amount_needed - moet_received
+        slippage_percentage = (slippage_cost / moet_amount_needed) * 100 if moet_amount_needed > 0 else 0
+        
+        # Record rebalancing event at engine level
+        rebalancing_event = {
+            "agent_id": agent.agent_id,
+            "minute": minute,
+            "moet_needed": moet_amount_needed,
+            "moet_raised": moet_received,
+            "swap_type": swap_type,
+            "slippage_cost": slippage_cost,
+            "slippage_percentage": slippage_percentage,
+            "health_factor_before": agent.state.health_factor,
+            "health_factor_after": agent.state.health_factor
+        }
+        self.rebalancing_events.append(rebalancing_event)
+        
+        return True, {
+            "moet_received": moet_received,
+            "yt_swapped": yt_swapped,
+            "slippage_cost": slippage_cost,
+            "slippage_percentage": slippage_percentage
+        }
+    
+    return False, None
 ```
 
 **Sale Strategies:**
-- **Rebalancing Sales**: Sell yield tokens to reduce MOET debt
+- **Rebalancing Sales**: Engine orchestrates yield token sales to reduce MOET debt with real pool state mutations
 - **Emergency Sales**: Sell all remaining yield tokens when health factor is critical
+- **Engine Tracking**: All sales are recorded at the engine level with slippage costs and performance metrics
 
 ## BTC Price Decline Simulation
 
@@ -379,8 +439,25 @@ def _execute_iterative_rebalancing(self, initial_moet_needed: float, current_min
         # Calculate yield tokens to sell (1:1 assumption)
         yield_tokens_to_sell = moet_needed
         
-        # Execute the swap
-        moet_received, actual_yield_tokens_sold_value = self.state.yield_token_manager.sell_yield_tokens(yield_tokens_to_sell, current_minute)
+        # CRITICAL FIX: Use engine's real swap execution instead of YieldTokenManager bookkeeping
+        if self.engine:
+            # Let the engine execute the REAL swap with pool state mutations
+            success, swap_data = self.engine._execute_yield_token_sale(
+                self, 
+                {"moet_needed": moet_needed, "swap_type": "rebalancing"}, 
+                current_minute
+            )
+            
+            if success and swap_data:
+                moet_received = swap_data.get("moet_received", 0.0)
+                actual_yield_tokens_sold_value = swap_data.get("yt_swapped", 0.0)
+            else:
+                moet_received = 0.0
+                actual_yield_tokens_sold_value = 0.0
+        else:
+            # WARNING: This fallback should not happen in production! Engine reference missing.
+            print(f"⚠️  WARNING: Agent {self.agent_id} using YieldTokenManager fallback - engine reference missing!")
+            moet_received, actual_yield_tokens_sold_value = self.state.yield_token_manager.sell_yield_tokens(yield_tokens_to_sell, current_minute)
         
         if moet_received <= 0:
             print(f"        ❌ No MOET received from yield token sale - liquidity exhausted")
@@ -776,9 +853,11 @@ generate_high_tide_dashboard(results, save_path="high_tide_analysis.png")
 ## Key Features Summary
 
 ### 1. Orchestration Layer Architecture
-- **Central Coordination**: Manages all simulation components and agent interactions
+- **Central Coordination**: Engine orchestrates all agent actions while agents execute real swaps
+- **Separation of Concerns**: Clear distinction between orchestration (engine) and execution (agents/pools)
+- **Real Pool State Mutations**: All swaps permanently affect shared liquidity pools
+- **Comprehensive Tracking**: Engine records all trading activity, slippage costs, and performance metrics
 - **Inheritance-Based Design**: Leverages Tidal Protocol's Uniswap V3 functionality
-- **Modular Integration**: Seamlessly integrates with yield token and price management systems
 
 ### 2. Monte Carlo Simulation Framework
 - **Dynamic Agent Population**: 10-50 agents with varied risk profiles per simulation

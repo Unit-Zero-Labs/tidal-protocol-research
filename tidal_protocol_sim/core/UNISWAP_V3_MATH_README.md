@@ -126,7 +126,7 @@ The main pool class that manages:
 class UniswapV3Pool:
     pool_name: str  # "MOET:BTC" or "MOET:Yield_Token"
     total_liquidity: float  # Total pool size in USD
-    btc_price: float = 100_000.0  # BTC price in USD
+    btc_price: float = None # Set up based on simulation
     fee_tier: float = None  # Will be set based on pool type
     concentration: float = None  # Will be set based on pool type
     tick_spacing: int = None  # Will be set based on pool type
@@ -328,13 +328,16 @@ else:
 
 ### UniswapV3SlippageCalculator Class
 
-Provides detailed slippage analysis for different swap types:
+ All `calculate_swap_slippage` calls now execute real swaps that permanently mutate the pool state, ensuring agents compete for shared liquidity.
 
 ```python
 class UniswapV3SlippageCalculator:
     def calculate_swap_slippage(self, amount_in: float, token_in: str, concentrated_range: float = 0.2):
         """
         Calculate slippage for a swap using proper Uniswap V3 tick-based math
+        
+        This method now executes REAL swaps that permanently alter pool state.
+        All agents share the same liquidity pools and affect each other's trading costs.
         
         Returns:
             Dict with swap details including slippage, fees, and price impact
@@ -615,17 +618,17 @@ print(f"Trading Fees: ${result['trading_fees']:.2f}")
 - Trading fee breakdown
 - Effective liquidity tracking
 
-### 5. Simulation Support
-- Non-destructive swap simulation
-- State restoration after calculations
-- Detailed result reporting
+### 5. Real Pool State Management
+- Pool state mutations persist after swaps
+- Shared liquidity pools across all agents
+- Detailed swap result reporting
 
 ### 6. Chart Integration
 - **Liquidity Distribution Data**: `get_liquidity_distribution()` provides price and liquidity arrays for charting
 - **Tick Data for Charts**: `get_tick_data_for_charts()` returns formatted tick data with price labels
 - **Price Range Visualization**: Built-in support for concentrated liquidity range visualization
 - **Tick-based Charting Support**: Complete tick information with liquidity levels and active status
-- **Simulation Support**: `simulate_trade_impact()` for non-destructive trade impact analysis
+- **Real Trading Support**: All swaps cause permanent pool state mutations affecting all agents
 
 
 ## Integration with Tidal Protocol

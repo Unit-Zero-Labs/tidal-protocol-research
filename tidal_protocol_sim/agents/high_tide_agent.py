@@ -86,6 +86,9 @@ class HighTideAgent(BaseAgent):
         # Replace state with HighTideAgentState
         self.state = HighTideAgentState(agent_id, initial_balance, initial_hf, target_hf, yield_token_pool)
         
+        # CRITICAL FIX: Add reference to engine for real swap recording
+        self.engine = None  # Will be set by engine during initialization
+        
         # Risk profile based on initial health factor
         if initial_hf >= 2.1:
             self.risk_profile = "conservative"
@@ -239,8 +242,25 @@ class HighTideAgent(BaseAgent):
             # Calculate yield tokens to sell (1:1 assumption)
             yield_tokens_to_sell = moet_needed
             
-            # Execute the swap
-            moet_received, actual_yield_tokens_sold_value = self.state.yield_token_manager.sell_yield_tokens(yield_tokens_to_sell, current_minute)
+            # CRITICAL FIX: Use engine's real swap execution instead of YieldTokenManager quotes
+            if self.engine:
+                # Let the engine execute the REAL swap with pool state mutations
+                success, swap_data = self.engine._execute_yield_token_sale(
+                    self, 
+                    {"moet_needed": moet_needed, "swap_type": "rebalancing"}, 
+                    current_minute
+                )
+                
+                if success and swap_data:
+                    moet_received = swap_data.get("moet_received", 0.0)
+                    actual_yield_tokens_sold_value = swap_data.get("yt_swapped", 0.0)
+                else:
+                    moet_received = 0.0
+                    actual_yield_tokens_sold_value = 0.0
+            else:
+                # WARNING: This fallback should not happen in production! Engine reference missing.
+                print(f"⚠️  WARNING: Agent {self.agent_id} using YieldTokenManager fallback - engine reference missing!")
+                moet_received, actual_yield_tokens_sold_value = self.state.yield_token_manager.sell_yield_tokens(yield_tokens_to_sell, current_minute)
             
             if moet_received <= 0:
                 print(f"        ❌ No MOET received from yield token sale - liquidity exhausted")
@@ -251,9 +271,11 @@ class HighTideAgent(BaseAgent):
                 slippage_percent = (1 - moet_received / actual_yield_tokens_sold_value) * 100
                 print(f"        ⚠️  HIGH SLIPPAGE: {actual_yield_tokens_sold_value:,.2f} yield tokens → ${moet_received:,.2f} MOET ({slippage_percent:.1f}% slippage)")
             
-            # Pay down debt
-            debt_repayment = min(moet_received, self.state.moet_debt)
+            # Pay down debt using MOET from agent's balance
+            available_moet = self.state.token_balances.get(Asset.MOET, 0.0)
+            debt_repayment = min(available_moet, self.state.moet_debt)
             self.state.moet_debt -= debt_repayment
+            self.state.token_balances[Asset.MOET] -= debt_repayment
             total_moet_raised += moet_received
             total_yield_tokens_sold += actual_yield_tokens_sold_value
             
@@ -280,12 +302,22 @@ class HighTideAgent(BaseAgent):
         
         # Record the rebalancing event
         if total_moet_raised > 0:
+            slippage_cost = total_yield_tokens_sold - total_moet_raised
+            
+            # CRITICAL FIX: Record in engine for real swap data
+            if self.engine:
+                self.engine.record_agent_rebalancing_event(
+                    self.agent_id, current_minute, total_moet_raised, 
+                    total_moet_raised, slippage_cost, self.state.health_factor
+                )
+            
+            # Also keep agent-level record for backward compatibility
             self.state.rebalancing_events.append({
                 "minute": current_minute,
                 "moet_raised": total_moet_raised,
                 "debt_repaid": total_moet_raised,
                 "yield_tokens_sold_value": total_yield_tokens_sold,
-                "slippage_cost": total_yield_tokens_sold - total_moet_raised,
+                "slippage_cost": slippage_cost,
                 "slippage_percentage": ((total_yield_tokens_sold - total_moet_raised) / total_yield_tokens_sold * 100) if total_yield_tokens_sold > 0 else 0.0,
                 "health_factor_before": self.state.health_factor,
                 "rebalance_cycles": rebalance_cycle
@@ -450,18 +482,39 @@ class HighTideAgent(BaseAgent):
         return len(new_tokens) > 0
     
     def execute_yield_token_sale(self, moet_amount_needed: float, current_minute: int) -> float:
-        """Execute yield token sale for rebalancing (simplified for iterative approach)"""
-        # Execute the sale
-        moet_raised, actual_yield_tokens_sold_value = self.state.yield_token_manager.sell_yield_tokens(moet_amount_needed, current_minute)
+        """Execute yield token sale for rebalancing using REAL pool execution"""
+        
+        # CRITICAL FIX: Use YieldTokenManager to determine how much to sell, but YieldTokenPool for execution
+        yield_tokens_to_sell = self.state.yield_token_manager._calculate_yield_tokens_needed(moet_amount_needed)
+        
+        if yield_tokens_to_sell <= 0:
+            return 0.0
+            
+        # Check if we have enough yield tokens
+        total_yield_value = sum(token.get_current_value(current_minute) for token in self.state.yield_token_manager.yield_tokens)
+        
+        if total_yield_value < yield_tokens_to_sell:
+            yield_tokens_to_sell = total_yield_value
+            
+        if yield_tokens_to_sell <= 0:
+            return 0.0
+        
+        # CRITICAL FIX: Use the pool's REAL execution instead of manager's quotes
+        moet_raised = self.state.yield_token_manager.yield_token_pool.execute_yield_token_sale(yield_tokens_to_sell)
         
         if moet_raised > 0:
-            # Use raised MOET to repay debt
-            debt_repayment = min(moet_raised, self.state.moet_debt)
-            self.state.moet_debt -= debt_repayment
+            # Remove the sold tokens from the manager's inventory
+            self.state.yield_token_manager._remove_yield_tokens(yield_tokens_to_sell, current_minute)
+            
+            # CRITICAL FIX: Don't repay debt here! Let the rebalancing loop handle debt repayment
+            # to avoid double repayment. Just add the MOET to the agent's balance.
+            self.state.token_balances[Asset.MOET] += moet_raised
             self.state.total_yield_sold += moet_raised
             
             # Debug logging
-            print(f"        💸 {self.agent_id}: Yield tokens sold: ${moet_amount_needed:,.0f}, MOET raised: ${moet_raised:,.0f}, Debt repaid: ${debt_repayment:,.0f}")
+            print(f"        💸 {self.agent_id}: Yield tokens sold: ${yield_tokens_to_sell:,.0f}, MOET raised: ${moet_raised:,.0f}, added to balance")
+        else:
+            print(f"    ❌ {self.agent_id}: No MOET raised from yield token sale")
             
         return moet_raised
     

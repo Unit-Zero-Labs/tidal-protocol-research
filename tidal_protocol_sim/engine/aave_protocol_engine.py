@@ -94,6 +94,8 @@ class AaveProtocolEngine(TidalProtocolEngine):
         self.yield_token_trades = []
         self.agent_health_history = []
         self.btc_price_history = []
+        # CRITICAL FIX: Initialize liquidation events tracking
+        self.liquidation_events = []
         
     def _setup_aave_liquidation_pools(self):
         """Setup AAVE's actual liquidation mechanisms"""
@@ -333,7 +335,7 @@ class AaveProtocolEngine(TidalProtocolEngine):
                 "total_yield_earned": portfolio["yield_token_portfolio"]["total_accrued_yield"],
                 "total_yield_sold": 0.0,  # AAVE agents don't sell yield tokens
                 "liquidation_events": len(agent.get_liquidation_history()),
-                "survived": agent.active and agent.state.health_factor > 1.0,
+                "survived": len(agent.get_liquidation_history()) == 0,  # FIXED: Survived if no liquidations occurred
                 "liquidation_penalties": portfolio["liquidation_penalties"],
                 "yield_token_value": portfolio["yield_token_portfolio"]["total_current_value"],
                 "remaining_collateral": portfolio["btc_amount"]

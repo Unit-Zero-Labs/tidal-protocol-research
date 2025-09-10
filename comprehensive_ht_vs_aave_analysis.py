@@ -482,9 +482,11 @@ class ComprehensiveHTvsAaveAnalysis:
         
         ht_engine.high_tide_agents = custom_ht_agents
         
-        # Add agents to engine's agent dict
+        # Add agents to engine's agent dict and set engine reference
         for agent in custom_ht_agents:
             ht_engine.agents[agent.agent_id] = agent
+            # CRITICAL FIX: Set engine reference for real swap recording
+            agent.engine = ht_engine
         
         # Run simulation with time-series tracking
         print(f"      🚀 Running High Tide simulation...")
@@ -586,6 +588,17 @@ class ComprehensiveHTvsAaveAnalysis:
         
         enhanced_results = results.copy()
         
+        # CRITICAL FIX: Add engine-level real swap data to results
+        if strategy == "High_Tide" and hasattr(engine, 'rebalancing_events'):
+            enhanced_results["engine_data"] = {
+                "rebalancing_events": engine.rebalancing_events,
+                "yield_token_trades": getattr(engine, 'yield_token_trades', [])
+            }
+        elif strategy == "AAVE" and hasattr(engine, 'liquidation_events'):
+            enhanced_results["engine_data"] = {
+                "liquidation_events": getattr(engine, 'liquidation_events', [])
+            }
+        
         # Extract pool state data if available
         if self.config.collect_pool_state_history:
             pool_state_data = self._extract_pool_state_data(engine)
@@ -596,9 +609,9 @@ class ComprehensiveHTvsAaveAnalysis:
             trading_data = self._extract_trading_activity_data(results, strategy)
             enhanced_results["trading_activity_data"] = trading_data
         
-        # Extract slippage metrics
+        # Extract slippage metrics (FIXED: Now uses engine data)
         if self.config.collect_slippage_metrics:
-            slippage_data = self._extract_slippage_metrics_data(results, strategy)
+            slippage_data = self._extract_slippage_metrics_data(enhanced_results, strategy)
             enhanced_results["slippage_metrics_data"] = slippage_data
         
         # Extract LP curve data
@@ -616,9 +629,9 @@ class ComprehensiveHTvsAaveAnalysis:
             yield_token_data = self._extract_yield_token_data(results, engine)
             enhanced_results["yield_token_data"] = yield_token_data
         
-        # Extract rebalancing events (High Tide only)
+        # Extract rebalancing events (FIXED: Now uses engine data)
         if strategy == "High_Tide":
-            rebalancing_data = self._extract_rebalancing_events(results, strategy)
+            rebalancing_data = self._extract_rebalancing_events(enhanced_results, strategy)
             enhanced_results["rebalancing_events_data"] = rebalancing_data
         
         return enhanced_results
@@ -675,9 +688,15 @@ class ComprehensiveHTvsAaveAnalysis:
         if strategy == "High_Tide" and "rebalancing_events" in results:
             trading_data["rebalancing_events"] = results["rebalancing_events"]
         
-        # Extract liquidation events
-        if "liquidation_events" in results:
-            trading_data["liquidation_events"] = results["liquidation_events"]
+        # Extract liquidation events (FIXED: Use correct data source for AAVE)
+        if strategy == "AAVE":
+            # AAVE liquidation events are in liquidation_activity section
+            liquidation_activity = results.get("liquidation_activity", {})
+            trading_data["liquidation_events"] = liquidation_activity.get("liquidation_events", [])
+        else:
+            # For other strategies, look at top level
+            if "liquidation_events" in results:
+                trading_data["liquidation_events"] = results["liquidation_events"]
         
         # Extract trade events
         if "trade_events" in results:
@@ -686,34 +705,90 @@ class ComprehensiveHTvsAaveAnalysis:
         return trading_data
     
     def _extract_slippage_metrics_data(self, results: Dict, strategy: str) -> Dict[str, Any]:
-        """Extract slippage and trading cost metrics"""
+        """Extract slippage and trading cost metrics from ENGINE DATA (real Uniswap V3 swaps)"""
         slippage_data = {}
         
-        # Extract from agent outcomes
-        agent_outcomes = results.get("agent_outcomes", [])
-        total_slippage_costs = 0.0
-        total_trading_fees = 0.0
-        slippage_events = []
-        
-        for outcome in agent_outcomes:
-            # Extract slippage costs
-            if "cost_of_rebalancing" in outcome:
-                total_slippage_costs += outcome["cost_of_rebalancing"]
-            elif "cost_of_liquidation" in outcome:
-                total_slippage_costs += outcome["cost_of_liquidation"]
+        # CRITICAL FIX: Use engine-level real swap data instead of agent portfolio data
+        if "engine_data" in results:
+            engine_data = results["engine_data"]
+            total_slippage_costs = 0.0
+            total_trading_fees = 0.0
+            slippage_events = []
             
-            # Extract trading fees (if available in detailed portfolio data)
-            if "portfolio_details" in outcome:
-                portfolio = outcome["portfolio_details"]
-                if "trading_fees" in portfolio:
-                    total_trading_fees += portfolio["trading_fees"]
-        
-        slippage_data = {
-            "total_slippage_costs": total_slippage_costs,
-            "total_trading_fees": total_trading_fees,
-            "average_slippage_per_agent": total_slippage_costs / len(agent_outcomes) if agent_outcomes else 0.0,
-            "slippage_events": slippage_events
-        }
+            if strategy == "High_Tide":
+                # Extract from real rebalancing events (Uniswap V3 swaps)
+                rebalancing_events = engine_data.get("rebalancing_events", [])
+                for event in rebalancing_events:
+                    slippage_cost = event.get("slippage_cost", 0.0)
+                    total_slippage_costs += slippage_cost
+                    
+                    slippage_events.append({
+                        "agent_id": event.get("agent_id"),
+                        "timestamp": event.get("minute"),
+                        "slippage_cost": slippage_cost,
+                        "moet_amount": event.get("moet_raised", 0.0),
+                        "swap_type": event.get("rebalancing_type", "yield_token_sale")
+                    })
+                
+                # Extract from yield token trades (additional swap data)
+                yield_token_trades = engine_data.get("yield_token_trades", [])
+                for trade in yield_token_trades:
+                    trading_fee = trade.get("slippage_cost", 0.0)  # In engine, this includes trading fees
+                    total_trading_fees += trading_fee
+            
+            elif strategy == "AAVE":
+                # Extract from liquidation events
+                liquidation_events = engine_data.get("liquidation_events", [])
+                for event in liquidation_events:
+                    slippage_cost = event.get("slippage_cost", 0.0)
+                    total_slippage_costs += slippage_cost
+                    
+                    slippage_events.append({
+                        "agent_id": event.get("agent_id"),
+                        "timestamp": event.get("minute"),
+                        "slippage_cost": slippage_cost,
+                        "liquidation_amount": event.get("amount", 0.0),
+                        "swap_type": "liquidation"
+                    })
+            
+            # Calculate averages based on number of agents
+            agent_outcomes = results.get("agent_outcomes", [])
+            num_agents = len(agent_outcomes) if agent_outcomes else 1
+            
+            slippage_data = {
+                "total_slippage_costs": total_slippage_costs,
+                "total_trading_fees": total_trading_fees,
+                "average_slippage_per_agent": total_slippage_costs / num_agents,
+                "slippage_events": slippage_events,
+                "data_source": "engine_real_swaps"  # Flag to indicate this is real data
+            }
+        else:
+            # Fallback to agent data (for backward compatibility, but flag as potentially inaccurate)
+            agent_outcomes = results.get("agent_outcomes", [])
+            total_slippage_costs = 0.0
+            total_trading_fees = 0.0
+            slippage_events = []
+            
+            for outcome in agent_outcomes:
+                # Extract slippage costs
+                if "cost_of_rebalancing" in outcome:
+                    total_slippage_costs += outcome["cost_of_rebalancing"]
+                elif "cost_of_liquidation" in outcome:
+                    total_slippage_costs += outcome["cost_of_liquidation"]
+                
+                # Extract trading fees (if available in detailed portfolio data)
+                if "portfolio_details" in outcome:
+                    portfolio = outcome["portfolio_details"]
+                    if "trading_fees" in portfolio:
+                        total_trading_fees += portfolio["trading_fees"]
+            
+            slippage_data = {
+                "total_slippage_costs": total_slippage_costs,
+                "total_trading_fees": total_trading_fees,
+                "average_slippage_per_agent": total_slippage_costs / len(agent_outcomes) if agent_outcomes else 0.0,
+                "slippage_events": slippage_events,
+                "data_source": "agent_portfolio_fallback"  # Flag as potentially inaccurate
+            }
         
         return slippage_data
     
@@ -774,25 +849,47 @@ class ComprehensiveHTvsAaveAnalysis:
         return yield_token_data
     
     def _extract_rebalancing_events(self, results: Dict, strategy: str) -> Dict[str, Any]:
-        """Extract detailed rebalancing events for High Tide agents"""
+        """Extract detailed rebalancing events from ENGINE DATA (real Uniswap V3 swaps)"""
         rebalancing_events = []
         
         if strategy == "High_Tide":
-            for agent in results.get("agent_outcomes", []):
-                if "rebalancing_events_list" in agent:
-                    for event in agent["rebalancing_events_list"]:
-                        rebalancing_events.append({
-                            "agent_id": agent["agent_id"],
-                            "timestamp": event.get("minute", 0),
-                            "yield_tokens_sold": event.get("yield_tokens_sold_value", 0),
-                            "moet_received": event.get("moet_raised", 0),
-                            "debt_paid_down": event.get("debt_repaid", 0),
-                            "slippage_cost": event.get("slippage_cost", 0),
-                            "slippage_percentage": event.get("slippage_percentage", 0),
-                            "health_factor_before": event.get("health_factor_before", 0),
-                            "health_factor_after": agent.get("final_health_factor", 0),
-                            "rebalance_cycles": event.get("rebalance_cycles", 1)
-                        })
+            # CRITICAL FIX: Use engine-level real swap data instead of agent portfolio data
+            if "engine_data" in results:
+                engine_data = results["engine_data"]
+                engine_rebalancing_events = engine_data.get("rebalancing_events", [])
+                
+                for event in engine_rebalancing_events:
+                    rebalancing_events.append({
+                        "agent_id": event.get("agent_id"),
+                        "timestamp": event.get("minute", 0),
+                        "yield_tokens_sold": event.get("moet_raised", 0),  # Real swap amount from Uniswap V3
+                        "moet_received": event.get("moet_raised", 0),
+                        "debt_paid_down": event.get("debt_repayment", 0),
+                        "slippage_cost": event.get("slippage_cost", 0),  # Real Uniswap V3 slippage
+                        "slippage_percentage": event.get("slippage_percentage", 0),
+                        "health_factor_before": event.get("health_factor_before", 0),
+                        "health_factor_after": event.get("health_factor_after", 0),
+                        "rebalancing_type": event.get("rebalancing_type", "yield_token_sale"),
+                        "data_source": "engine_real_swaps"  # Flag to indicate this is real data
+                    })
+            else:
+                # Fallback to agent data (for backward compatibility, but flag as potentially inaccurate)
+                for agent in results.get("agent_outcomes", []):
+                    if "rebalancing_events_list" in agent:
+                        for event in agent["rebalancing_events_list"]:
+                            rebalancing_events.append({
+                                "agent_id": agent["agent_id"],
+                                "timestamp": event.get("minute", 0),
+                                "yield_tokens_sold": event.get("yield_tokens_sold_value", 0),
+                                "moet_received": event.get("moet_raised", 0),
+                                "debt_paid_down": event.get("debt_repaid", 0),
+                                "slippage_cost": event.get("slippage_cost", 0),
+                                "slippage_percentage": event.get("slippage_percentage", 0),
+                                "health_factor_before": event.get("health_factor_before", 0),
+                                "health_factor_after": agent.get("final_health_factor", 0),
+                                "rebalance_cycles": event.get("rebalance_cycles", 1),
+                                "data_source": "agent_portfolio_fallback"  # Flag as potentially inaccurate
+                            })
         
         return {
             "rebalancing_events": rebalancing_events,

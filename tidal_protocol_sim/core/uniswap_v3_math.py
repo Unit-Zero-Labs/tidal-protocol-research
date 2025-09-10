@@ -867,13 +867,11 @@ class UniswapV3Pool:
                     
                     # Apply liquidity change based on direction
                     if zero_for_one:
-                        # Moving down (price decreasing): when crossing tick -100,
-                        # we are leaving the concentrated range, so subtract liquidity
+                        # Moving down (price decreasing): subtract liquidity_net
                         state['liquidity'] -= liquidity_net
                     else:
-                        # Moving up (price increasing): when crossing tick +100,
-                        # we are leaving the concentrated range, so subtract liquidity
-                        state['liquidity'] -= liquidity_net
+                        # Moving up (price increasing): add liquidity_net  
+                        state['liquidity'] += liquidity_net
                     
                     if self.debug_cross_tick:
                         print(f"Crossed tick {tick_next}, liquidity: {prev_liquidity} -> {state['liquidity']}")
@@ -1117,12 +1115,27 @@ class UniswapV3Pool:
     
     def _update_legacy_fields(self):
         """Update legacy fields for backward compatibility"""
-        # Calculate total reserves from positions
-        total_active_liquidity = self.get_total_active_liquidity()
-        
-        # Split reserves 50/50 for compatibility
-        self.token0_reserve = total_active_liquidity / 2  # MOET reserve in USD
-        self.token1_reserve = total_active_liquidity / 2  # BTC reserve in USD
+        # For yield token pools, calculate reserves based on current price and liquidity
+        if "Yield_Token" in self.pool_name:
+            # Calculate reserves based on current pool state and price
+            current_price = self.get_price()  # YT price in MOET terms
+            total_liquidity_usd = self.get_total_active_liquidity()
+            
+            # Split liquidity based on current price ratio
+            # If price > 1, yield tokens are more expensive, so fewer YT in pool
+            if current_price > 0:
+                # Reserve split based on price: more expensive token has less quantity
+                self.token0_reserve = total_liquidity_usd / (1 + current_price)  # MOET reserve
+                self.token1_reserve = total_liquidity_usd - self.token0_reserve   # YT reserve
+            else:
+                # Fallback to 50/50 split
+                self.token0_reserve = total_liquidity_usd / 2
+                self.token1_reserve = total_liquidity_usd / 2
+        else:
+            # For other pools, use the original method
+            total_active_liquidity = self.get_total_active_liquidity()
+            self.token0_reserve = total_active_liquidity / 2  # MOET reserve
+            self.token1_reserve = total_active_liquidity / 2  # BTC reserve
     
 
 
@@ -1225,10 +1238,9 @@ class UniswapV3SlippageCalculator:
             }
             
         finally:
-            # Restore original pool state (for simulation purposes)
-            self.pool.sqrt_price_x96 = original_sqrt_price_x96
-            self.pool.tick_current = original_tick_current
-            self.pool.liquidity = original_liquidity
+            # CRITICAL FIX: DON'T restore pool state - let swaps mutate the pool
+            # This allows agents to impact each other through shared pool state
+            pass  # Keep the finally block but don't restore state
         
         return result
     
@@ -1292,10 +1304,9 @@ class UniswapV3SlippageCalculator:
             }
             
         finally:
-            # Restore original pool state (for simulation purposes)
-            self.pool.sqrt_price_x96 = original_sqrt_price_x96
-            self.pool.tick_current = original_tick_current
-            self.pool.liquidity = original_liquidity
+            # CRITICAL FIX: DON'T restore pool state - let swaps mutate the pool
+            # This allows agents to impact each other through shared pool state
+            pass  # Keep the finally block but don't restore state
         
         return result
     
@@ -1353,10 +1364,9 @@ class UniswapV3SlippageCalculator:
             }
             
         finally:
-            # Restore original pool state (for simulation purposes)
-            self.pool.sqrt_price_x96 = original_sqrt_price_x96
-            self.pool.tick_current = original_tick_current
-            self.pool.liquidity = original_liquidity
+            # CRITICAL FIX: DON'T restore pool state - let swaps mutate the pool
+            # This allows agents to impact each other through shared pool state
+            pass  # Keep the finally block but don't restore state
         
         return result
     
@@ -1413,10 +1423,9 @@ class UniswapV3SlippageCalculator:
             }
             
         finally:
-            # Restore original pool state (for simulation purposes)
-            self.pool.sqrt_price_x96 = original_sqrt_price_x96
-            self.pool.tick_current = original_tick_current
-            self.pool.liquidity = original_liquidity
+            # CRITICAL FIX: DON'T restore pool state - let swaps mutate the pool
+            # This allows agents to impact each other through shared pool state
+            pass  # Keep the finally block but don't restore state
         
         return result
 

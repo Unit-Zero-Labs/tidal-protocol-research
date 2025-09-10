@@ -222,6 +222,37 @@ class YieldTokenManager:
         
         # Return the actual MOET amount after slippage
         return swap_result["amount_out"]
+    
+    def _remove_yield_tokens(self, yield_tokens_to_remove: float, current_minute: int):
+        """Remove yield tokens from inventory after successful sale"""
+        if yield_tokens_to_remove <= 0 or not self.yield_tokens:
+            return
+            
+        remaining_to_remove = yield_tokens_to_remove
+        tokens_to_remove = []
+        
+        # Remove tokens from front of list (FIFO)
+        for i, token in enumerate(self.yield_tokens):
+            token_value = token.get_current_value(current_minute)
+            
+            if remaining_to_remove >= token_value:
+                # Remove entire token
+                tokens_to_remove.append(i)
+                remaining_to_remove -= token_value
+                self.total_initial_value_invested -= token.initial_value
+            else:
+                # Remove partial token
+                fraction_to_remove = remaining_to_remove / token_value
+                token.initial_value *= (1 - fraction_to_remove)
+                if token.initial_value < 0.01:  # Remove if too small
+                    tokens_to_remove.append(i)
+                    self.total_initial_value_invested -= token.initial_value
+                remaining_to_remove = 0
+                break
+        
+        # Remove tokens in reverse order to maintain indices
+        for i in reversed(tokens_to_remove):
+            self.yield_tokens.pop(i)
 
 
 class YieldTokenPool:
@@ -322,11 +353,14 @@ class YieldTokenPool:
     def execute_yield_token_sale(self, yield_token_value: float) -> float:
         """Execute sale of yield tokens for MOET using Uniswap V3 swaps"""
         if yield_token_value <= 0:
+            print(f"🚫 DEBUG: execute_yield_token_sale called with invalid amount: {yield_token_value}")
             return 0.0
             
         # Execute actual Uniswap V3 swap: Yield Token -> MOET
         # Convert USD to scaled amount for Uniswap V3 math
         amount_in_scaled = int(yield_token_value * 1e6)
+        
+        # Execute swap
         
         try:
             from .uniswap_v3_math import MIN_SQRT_RATIO, MAX_SQRT_RATIO
@@ -340,6 +374,8 @@ class YieldTokenPool:
             
             # Convert back to USD amounts
             moet_received = amount_out_actual / 1e6
+            
+            # Swap completed successfully
             
             # Update legacy properties for backward compatibility
             self._update_legacy_properties()

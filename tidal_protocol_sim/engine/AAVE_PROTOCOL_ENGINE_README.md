@@ -48,12 +48,12 @@ AaveProtocolEngine (Orchestration Layer)
 
 ## Core Components and Integration
 
-### 1. Base Lending Engine Integration
+### 1. Tidal Protocol Engine Integration
 
-The engine inherits core lending functionality from the base `BaseLendingEngine`:
+The engine inherits core functionality from the `TidalProtocolEngine`:
 
 ```python
-class AaveProtocolEngine(BaseLendingEngine):
+class AaveProtocolEngine(TidalProtocolEngine):
     """Pure AAVE Protocol implementation"""
     
     def __init__(self, config: AaveConfig):
@@ -65,10 +65,11 @@ class AaveProtocolEngine(BaseLendingEngine):
 ```
 
 **Key Inherited Capabilities:**
-- **Core Lending Operations**: Basic borrow/lend functionality without Tidal Protocol complexity
-- **Protocol State Management**: Interest accrual, debt tracking, and basic protocol operations
-- **Agent Management**: Base agent coordination and action processing
-- **Metrics Collection**: Basic performance tracking and result generation
+- **Core Lending Operations**: Complete lending functionality with protocol state management
+- **Protocol State Management**: Interest accrual, debt tracking, and protocol operations
+- **Agent Management**: Full agent coordination and action processing
+- **Metrics Collection**: Comprehensive performance tracking and result generation
+- **Uniswap V3 Integration**: Full access to concentrated liquidity mathematics for liquidation swaps
 
 ### 2. Yield Token Pool Integration
 
@@ -211,6 +212,7 @@ def _execute_aave_action(self, agent: AaveAgent, action_type: AgentAction, param
 - **No Leverage Management**: No dynamic borrowing based on health factors
 - **No Emergency Actions**: No crisis management or liquidation prevention
 - **Passive Strategy**: Buy and hold until liquidation
+- **Liquidation Handling**: Traditional AAVE liquidation with Uniswap V3 integration
 
 ### Yield Token Purchase Orchestration
 
@@ -429,18 +431,15 @@ def execute_aave_liquidation(self, current_minute: int, asset_prices: Dict[Asset
         return {}  # No collateral to liquidate
     
     # 5. Use Uniswap V3 math to calculate actual MOET received from BTC swap
-    from ..core.uniswap_v3_math import create_moet_btc_pool, UniswapV3SlippageCalculator
+    from ..core.uniswap_v3_math import calculate_liquidation_cost_with_slippage
     
-    # Create pool and calculator
-    pool = create_moet_btc_pool(pool_size_usd, btc_price)
-    calculator = UniswapV3SlippageCalculator(pool)
-    
-    # Calculate BTC -> MOET swap with slippage
-    btc_value_to_swap = btc_to_seize * btc_price
-    swap_result = calculator.calculate_swap_slippage(btc_value_to_swap, "BTC")
+    # Calculate BTC -> MOET swap with slippage using the liquidation cost function
+    liquidation_cost = calculate_liquidation_cost_with_slippage(
+        btc_to_seize, btc_price, pool_size_usd
+    )
     
     # Actual MOET received from swap (after slippage and fees)
-    actual_moet_received = swap_result["amount_out"]
+    actual_moet_received = liquidation_cost["moet_received"]
     
     # 6. Calculate actual debt that can be repaid (limited by MOET received)
     actual_debt_repaid = min(debt_reduction, actual_moet_received)
@@ -461,6 +460,7 @@ def execute_aave_liquidation(self, current_minute: int, asset_prices: Dict[Asset
 - **Slippage-Aware Repayment**: Uses actual MOET received (post-slippage) to repay debt
 - **Liquidation Bonus**: 5% bonus calculated on actual debt repaid (post-slippage)
 - **Real Market Conditions**: Liquidation flows through Uniswap V3 trading mechanism for realistic pricing
+- **Simplified Integration**: Uses `calculate_liquidation_cost_with_slippage` function for streamlined calculations
 
 ## Performance Analytics and Reporting
 
@@ -557,8 +557,8 @@ def _generate_aave_results(self) -> dict:
 The engine supports extensive configuration options:
 
 ```python
-class AaveConfig(BaseLendingConfig):
-    """Pure AAVE configuration - no Tidal dependencies"""
+class AaveConfig(TidalConfig):
+    """Pure AAVE configuration - inherits from TidalConfig"""
     
     def __init__(self):
         super().__init__()
@@ -573,6 +573,9 @@ class AaveConfig(BaseLendingConfig):
         self.yield_apr = 0.10  # 10% APR
         self.moet_btc_pool_size = 500_000  # Same as Tidal for comparison
         
+        # Uniswap V3 pool parameters (inherited from TidalConfig)
+        self.moet_btc_concentration = 0.80  # 80% concentration around BTC price
+        
         # BTC price decline parameters (for fair comparison)
         self.btc_initial_price = 100_000.0
         self.btc_decline_duration = 60  # 60 minutes
@@ -584,6 +587,9 @@ class AaveConfig(BaseLendingConfig):
         
         # Disable rebalancing for AAVE scenario
         self.rebalancing_enabled = False
+        
+        # Override simulation parameters
+        self.price_update_frequency = 1  # Update every minute
 ```
 
 **Configuration Options:**
@@ -723,8 +729,9 @@ print(f"High Tide Rebalancing Cost: ${high_tide_results['cost_analysis']['total_
 
 ### 1. Orchestration Layer Architecture
 - **Central Coordination**: Manages all simulation components and agent interactions
-- **Base Lending Integration**: Leverages core lending functionality without Tidal Protocol complexity
+- **Tidal Protocol Integration**: Leverages complete Tidal Protocol functionality for comprehensive simulation
 - **Modular Integration**: Seamlessly integrates with yield token and price management systems
+- **Uniswap V3 Integration**: Full access to concentrated liquidity mathematics for realistic liquidation swaps
 
 ### 2. Monte Carlo Simulation Framework
 - **Dynamic Agent Population**: 10-50 agents with varied risk profiles per simulation
@@ -747,6 +754,7 @@ print(f"High Tide Rebalancing Cost: ${high_tide_results['cost_analysis']['total_
 - **Uniswap V3 Integration**: BTC->MOET swap through MOET:BTC pool with real slippage and fees
 - **Real Market Conditions**: Liquidation flows through Uniswap V3 trading mechanism for realistic pricing
 - **Slippage-Aware Calculations**: Accounts for actual slippage and fees in liquidation calculations
+- **Simplified Integration**: Uses `calculate_liquidation_cost_with_slippage` function for streamlined calculations
 
 ### 6. Comprehensive Analytics
 - **Performance Tracking**: Detailed metrics collection throughout simulation lifecycle
@@ -757,4 +765,5 @@ print(f"High Tide Rebalancing Cost: ${high_tide_results['cost_analysis']['total_
 ### 7. Integration with Core Systems
 - **Yield Token System**: Complete integration with [Portfolio Management](../core/YIELD_TOKENS_README.md#portfolio-management)
 - **Uniswap V3 Math**: Full access to [Concentrated Liquidity Mathematics](../core/UNISWAP_V3_MATH_README.md#concentrated-liquidity) for liquidation swaps
-- **Protocol State**: Seamless coordination with base lending infrastructure
+- **Protocol State**: Seamless coordination with Tidal Protocol infrastructure
+- **Liquidation Cost Functions**: Direct integration with `calculate_liquidation_cost_with_slippage` for streamlined calculations
