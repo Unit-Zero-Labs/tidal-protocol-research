@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Comprehensive High Tide vs AAVE Analysis
+Balanced Scenario Monte Carlo Analysis
 Technical Whitepaper Generator
 
-Runs 5 Monte Carlo scenarios with varying Initial and Target Health Factors,
+Runs 5 Monte Carlo iterations of the Balanced_1.1 scenario,
 comparing High Tide's automated rebalancing against AAVE's liquidation mechanism
 during BTC price decline scenarios.
 """
@@ -191,11 +191,11 @@ class ComprehensiveComparisonConfig:
         
         # Health Factor variation scenarios
         self.health_factor_scenarios = [
-            {"initial_hf_range": (1.1, 1.2), "target_hf": 1.01, "scenario_name": "Aggressive_1.01"},
-            {"initial_hf_range": (1.2, 1.4), "target_hf": 1.025, "scenario_name": "Moderate_1.025"},
-            {"initial_hf_range": (1.3, 1.5), "target_hf": 1.05, "scenario_name": "Conservative_1.05"},
-            {"initial_hf_range": (1.1, 1.5), "target_hf": 1.075, "scenario_name": "Mixed_1.075"},
-            {"initial_hf_range": (1.25, 1.45), "target_hf": 1.1, "scenario_name": "Balanced_1.1"}
+            {"initial_hf_range": (1.25, 1.45), "target_hf": 1.1, "scenario_name": "Balanced_Run_1"},
+            {"initial_hf_range": (1.25, 1.45), "target_hf": 1.1, "scenario_name": "Balanced_Run_2"},
+            {"initial_hf_range": (1.25, 1.45), "target_hf": 1.1, "scenario_name": "Balanced_Run_3"},
+            {"initial_hf_range": (1.25, 1.45), "target_hf": 1.1, "scenario_name": "Balanced_Run_4"},
+            {"initial_hf_range": (1.25, 1.45), "target_hf": 1.1, "scenario_name": "Balanced_Run_5"}
         ]
         
         # BTC decline scenarios
@@ -205,7 +205,7 @@ class ComprehensiveComparisonConfig:
         
         # Enhanced Uniswap V3 Pool Configurations
         self.moet_btc_pool_config = {
-            "size": 500_000,  # $500K liquidation pool
+            "size": 5_000_000,  # $5M liquidation pool
             "concentration": 0.80,  # 80% concentration around BTC price
             "fee_tier": 0.003,  # 0.3% fee tier for volatile pairs
             "tick_spacing": 60,  # Tick spacing for price granularity
@@ -213,7 +213,7 @@ class ComprehensiveComparisonConfig:
         }
         
         self.moet_yt_pool_config = {
-            "size": 500_000,  # $500K rebalancing pool
+            "size": 5_000_000,  # $5M rebalancing pool
             "concentration": 0.95,  # 95% concentration at 1:1 peg
             "fee_tier": 0.0005,  # 0.05% fee tier for stable pairs
             "tick_spacing": 10,  # Tight tick spacing for price control
@@ -232,7 +232,7 @@ class ComprehensiveComparisonConfig:
         self.collect_agent_portfolio_snapshots = True
         
         # Output configuration
-        self.scenario_name = "Comprehensive_HT_vs_Aave_Analysis"
+        self.scenario_name = "Balanced_Scenario_Monte_Carlo"
         self.generate_charts = True
         self.save_detailed_data = True
         
@@ -1854,12 +1854,21 @@ class ComprehensiveHTvsAaveAnalysis:
             aave_survival = scenario["aave_summary"]["mean_survival_rate"] * 100
             survival_improvement = ((ht_survival - aave_survival) / aave_survival * 100) if aave_survival > 0 else 0
             
-            ht_cost = scenario["high_tide_summary"]["mean_total_cost"]
-            aave_cost = scenario["aave_summary"]["mean_total_cost"]
-            cost_reduction = ((aave_cost - ht_cost) / aave_cost * 100) if aave_cost > 0 else 0
+            # Calculate average cost per agent
+            # High Tide: divide by all agents (since all agents may rebalance)
+            ht_avg_cost = scenario["high_tide_summary"]["mean_total_cost"] / self.config.agents_per_run
+            
+            # AAVE: divide by number of liquidated agents only
+            aave_liquidations = scenario["aave_summary"]["mean_liquidations"]
+            if aave_liquidations > 0:
+                aave_avg_cost = scenario["aave_summary"]["mean_total_cost"] / aave_liquidations
+            else:
+                aave_avg_cost = 0  # No liquidations, no cost per liquidated agent
+            
+            cost_reduction = ((aave_avg_cost - ht_avg_cost) / aave_avg_cost * 100) if aave_avg_cost > 0 else 0
             
             survival_data.append([ht_survival, aave_survival, survival_improvement])
-            cost_data.append([ht_cost, aave_cost, cost_reduction])
+            cost_data.append([ht_avg_cost, aave_avg_cost, cost_reduction])
         
         # Survival rate heatmap
         survival_df = pd.DataFrame(survival_data, 
@@ -1871,14 +1880,14 @@ class ComprehensiveHTvsAaveAnalysis:
         ax1.set_title('Survival Rate Performance Matrix')
         ax1.set_ylabel('Scenario')
         
-        # Cost heatmap (normalized)
+        # Cost heatmap (average per affected agent)
         cost_df = pd.DataFrame(cost_data, 
                               index=scenarios, 
-                              columns=['High Tide', 'AAVE', 'Reduction %'])
+                              columns=['High Tide (per agent)', 'AAVE (per liquidation)', 'Reduction %'])
         
         sns.heatmap(cost_df, annot=True, fmt='.0f', cmap='RdYlBu_r', 
-                   ax=ax2, cbar_kws={'label': 'Cost ($)'})
-        ax2.set_title('Cost Performance Matrix')
+                   ax=ax2, cbar_kws={'label': 'Average Cost ($)'})
+        ax2.set_title('Average Cost Performance Matrix')
         ax2.set_ylabel('Scenario')
         
         plt.tight_layout()
