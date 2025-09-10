@@ -357,37 +357,71 @@ def _initial_yield_token_purchase(self, current_minute: int) -> tuple:
 
 ### Rebalancing Strategy
 
-The engine coordinates sophisticated rebalancing strategies:
+The engine coordinates sophisticated iterative rebalancing strategies:
 
 ```python
-def _execute_rebalancing(self, asset_prices: Dict[Asset, float], current_minute: int) -> tuple:
-    """Execute rebalancing by selling yield tokens"""
-    if not self.state.yield_token_manager.yield_tokens:
-        # No yield tokens to sell, position cannot be saved
-        return (AgentAction.HOLD, {})
+def _execute_iterative_rebalancing(self, initial_moet_needed: float, current_minute: int, asset_prices: Dict[Asset, float]) -> tuple:
+    """Execute iterative rebalancing with slippage monitoring"""
+    moet_needed = initial_moet_needed
+    total_moet_raised = 0.0
+    total_yield_tokens_sold = 0.0
+    rebalance_cycle = 0
     
-    # Calculate how much debt reduction is needed
-    collateral_value = self._calculate_effective_collateral_value(asset_prices)
-    current_debt = self.state.moet_debt
-    target_debt = collateral_value / self.state.initial_health_factor
-    debt_reduction_needed = current_debt - target_debt
+    print(f"        🔄 {self.agent_id}: Starting iterative rebalancing - need ${moet_needed:,.2f} MOET")
     
-    if debt_reduction_needed <= 0:
-        return (AgentAction.HOLD, {})
-    
-    # Sell yield tokens at their current (rebased) value
-    return (AgentAction.SWAP, {
-        "action_type": "sell_yield_tokens",
-        "amount_needed": debt_reduction_needed,
-        "current_minute": current_minute
-    })
+    while (self.state.health_factor < self.state.target_health_factor and 
+           self.state.yield_token_manager.yield_tokens and
+           rebalance_cycle < 10):  # Max 10 cycles to prevent infinite loops
+        
+        rebalance_cycle += 1
+        print(f"        🔄 Rebalance Cycle {rebalance_cycle}: Need ${moet_needed:,.2f} MOET")
+        
+        # Calculate yield tokens to sell (1:1 assumption)
+        yield_tokens_to_sell = moet_needed
+        
+        # Execute the swap
+        moet_received, actual_yield_tokens_sold_value = self.state.yield_token_manager.sell_yield_tokens(yield_tokens_to_sell, current_minute)
+        
+        if moet_received <= 0:
+            print(f"        ❌ No MOET received from yield token sale - liquidity exhausted")
+            break
+        
+        # Check slippage threshold (>5% slippage)
+        if moet_received < 0.95 * actual_yield_tokens_sold_value:
+            slippage_percent = (1 - moet_received / actual_yield_tokens_sold_value) * 100
+            print(f"        ⚠️  HIGH SLIPPAGE: {actual_yield_tokens_sold_value:,.2f} yield tokens → ${moet_received:,.2f} MOET ({slippage_percent:.1f}% slippage)")
+        
+        # Pay down debt
+        debt_repayment = min(moet_received, self.state.moet_debt)
+        self.state.moet_debt -= debt_repayment
+        total_moet_raised += moet_received
+        total_yield_tokens_sold += actual_yield_tokens_sold_value
+        
+        # Update health factor with actual prices
+        self._update_health_factor(asset_prices)
+        
+        print(f"        📊 Cycle {rebalance_cycle}: Received ${moet_received:,.2f} MOET, repaid ${debt_repayment:,.2f} debt, new HF: {self.state.health_factor:.3f}")
+        
+        # Check if we've reached target
+        if self.state.health_factor >= self.state.target_health_factor:
+            print(f"        ✅ Target HF reached: {self.state.health_factor:.3f} >= {self.state.target_health_factor:.3f}")
+            break
+        
+        # Calculate remaining MOET needed for next cycle
+        collateral_value = self._calculate_effective_collateral_value(asset_prices)
+        target_debt = collateral_value / self.state.initial_health_factor
+        moet_needed = self.state.moet_debt - target_debt
+        
+        if moet_needed <= 0:
+            break
 ```
 
-**Rebalancing Logic:**
-- **Health Factor Triggers**: Rebalancing when HF falls below target threshold
-- **Direct Yield Token Sales**: Sells yield tokens at their current rebased value
-- **Debt Reduction**: Uses raised MOET to directly repay debt (no BTC swap needed)
-- **Target Restoration**: Aims to restore initial health factor through debt reduction
+**Iterative Rebalancing Logic:**
+- **Multi-Cycle Approach**: Continues rebalancing until target health factor is reached
+- **Slippage Monitoring**: Tracks and reports high slippage (>5%) during rebalancing
+- **Progressive Debt Reduction**: Each cycle reduces debt and recalculates remaining needs
+- **Safety Limits**: Maximum 10 cycles to prevent infinite loops
+- **Real-Time Health Factor Updates**: Updates health factor after each rebalancing cycle
 
 ### Leverage Management
 
