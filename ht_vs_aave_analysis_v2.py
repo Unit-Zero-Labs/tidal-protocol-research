@@ -7,13 +7,13 @@ comparing High Tide's automated rebalancing against AAVE's liquidation mechanism
 during BTC price decline scenarios.
 
 Usage:
-  python ht_vs_aave_analysis_v2.py                    # Run default scenario (Aggressive_1.01) with 25 runs
-  python ht_vs_aave_analysis_v2.py --list             # List available scenarios
-  python ht_vs_aave_analysis_v2.py <scenario> <runs>  # Run specific scenario with specified runs
+  python3 ht_vs_aave_analysis_v2.py                    # Run default scenario (Aggressive_1.01) with 25 runs
+  python3 ht_vs_aave_analysis_v2.py --list             # List available scenarios
+  python3 ht_vs_aave_analysis_v2.py <scenario> <runs>  # Run specific scenario with specified runs
 
 Examples:
-  python ht_vs_aave_analysis_v2.py Aggressive_1.01 50
-  python ht_vs_aave_analysis_v2.py Conservative_1.05 100
+  python3 ht_vs_aave_analysis_v2.py Aggressive_1.01 50
+  python3 ht_vs_aave_analysis_v2.py Conservative_1.05 100
 """
 
 import sys
