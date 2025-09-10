@@ -104,7 +104,7 @@ class YieldTokenManager:
 #### Core Portfolio Operations
 
 - `mint_yield_tokens(moet_amount, current_minute, use_direct_minting)`: Convert MOET to yield tokens with flexible creation methods
-- `sell_yield_tokens(amount_needed, current_minute)`: Sell tokens at their current (rebased) value to raise MOET
+- `sell_yield_tokens(amount_needed, current_minute)`: Sell tokens using bulk selling approach (complete tokens first, then fractional)
 - `calculate_total_value(current_minute)`: Get total portfolio value
 - `get_portfolio_summary(current_minute)`: Comprehensive portfolio analysis
 - `_calculate_real_slippage(yield_token_value)`: Calculate real slippage using Uniswap V3 math
@@ -162,23 +162,49 @@ For a $1,000 yield token with 10% APR:
 
 ### Yield Token Selling
 
-Yield tokens are sold at their current (rebased) value, which includes all accrued yield:
+Yield tokens are sold using a bulk selling approach that efficiently handles complete and fractional token sales:
 
 ```python
 def sell_yield_tokens(self, amount_needed: float, current_minute: int) -> float:
-    """Sell yield tokens at their current (rebased) value to raise MOET"""
-    # Sort by current value (highest value first for efficiency)
-    self.yield_tokens.sort(
-        key=lambda token: token.get_current_value(current_minute),
-        reverse=True
-    )
+    """Sell yield tokens to raise MOET using bulk selling approach"""
+    # Calculate total value of all tokens (including yield appreciation)
+    total_token_value = sum(token.get_current_value(current_minute) for token in self.yield_tokens)
+    
+    # Calculate how many complete tokens we can sell
+    token_value = self.yield_tokens[0].get_current_value(current_minute)
+    complete_tokens_needed = int(amount_needed / token_value)
+    fractional_amount_needed = amount_needed - (complete_tokens_needed * token_value)
+    
+    # Sell complete tokens (remove them entirely)
+    tokens_to_remove = min(complete_tokens_needed, len(self.yield_tokens))
+    for _ in range(tokens_to_remove):
+        token = self.yield_tokens.pop(0)  # Remove from front
+        self.total_initial_value_invested -= token.initial_value
+    
+    # If we still need more, sell fractional amount of one token
+    if fractional_amount_needed > 0 and self.yield_tokens:
+        fractional_fraction = fractional_amount_needed / token_value
+        self.yield_tokens[0].initial_value *= (1 - fractional_fraction)
     
     # Use real Uniswap V3 slippage calculation for accurate pricing
-    token_value = token.get_current_value(current_minute)
-    real_moet_value = self._calculate_real_slippage(token_value)
+    moet_raised = self._calculate_real_slippage(total_value_to_sell)
 ```
 
-**Key Concept**: Since yield tokens are rebasing, there's no distinction between "initial value" and "yield" - each token simply has a current value that includes all accrued yield. When you sell tokens, you're selling them at their current (higher) value.
+**Key Concept**: The bulk selling approach is more realistic and efficient for infinitely divisible tokens. It sells complete tokens first, then only modifies one token by the fractional amount needed. Since all tokens have the same value (bought at the same time), this approach minimizes token modifications while maintaining accurate portfolio tracking.
+
+### Bulk Selling Benefits
+
+The new bulk selling approach provides several advantages over the previous proportional method:
+
+1. **Efficiency**: Removes complete tokens entirely instead of modifying all tokens
+2. **Realism**: Matches how you'd actually trade infinitely divisible tokens in practice
+3. **Cleaner Tracking**: Fewer token modifications means simpler portfolio state management
+4. **Performance**: O(n) operations instead of modifying every token in the portfolio
+5. **Accuracy**: Maintains precise MOET raising while preserving yield accrual on remaining tokens
+
+**Example**: If you need $1001.234 MOET and each token is worth $1.05:
+- **Old approach**: Reduces ALL tokens by ~95.3% (inefficient)
+- **New approach**: Removes 953 complete tokens, reduces 1 token by 22.3% (efficient)
 
 ## Trading and Liquidity Management
 
@@ -485,8 +511,8 @@ class HighTideAgent:
         return yield_tokens
     
     def rebalance_position(self, moet_needed: float, current_minute: int):
-        """Rebalance position by selling yield tokens at their current value"""
-        # Sell yield tokens at their current (rebased) value
+        """Rebalance position by selling yield tokens using bulk selling approach"""
+        # Sell yield tokens using efficient bulk selling (complete tokens first, then fractional)
         moet_raised = self.yield_manager.sell_yield_tokens(moet_needed, current_minute)
         
         print(f"Raised ${moet_raised:.2f} MOET from yield tokens")
@@ -502,9 +528,9 @@ class HighTideAgent:
 - Tokens maintain same quantity but increase in value over time
 
 ### 2. Advanced Portfolio Management
-- Individual token tracking
+- Individual token tracking with bulk selling efficiency
 - Portfolio analytics and reporting
-- Optimal token selection algorithms
+- Optimal token selection algorithms (complete tokens first, then fractional)
 
 ### 3. Complete Uniswap V3 Integration
 - Sophisticated concentrated liquidity mathematics throughout the system

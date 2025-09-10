@@ -657,9 +657,9 @@ class UniswapV3Pool:
         total_liquidity_amount = int(self.total_liquidity * 1e6)
         concentrated_liquidity = int(total_liquidity_amount * self.concentration)
         
-        # Position 1: Very tight range around 1:1 peg (±0.1% = ~10 ticks)
+        # Position 1: Tight range around 1:1 peg (±1% = ~100 ticks)
         peg_tick = self.tick_current  # Should be 0 for 1:1 peg
-        tick_range = 10  # Approximately 0.1% price range
+        tick_range = 100  # Approximately 1% price range
         
         tick_lower = ((peg_tick - tick_range) // self.tick_spacing) * self.tick_spacing
         tick_upper = ((peg_tick + tick_range) // self.tick_spacing) * self.tick_spacing
@@ -671,19 +671,29 @@ class UniswapV3Pool:
         if tick_lower < tick_upper:
             self._add_position(tick_lower, tick_upper, concentrated_liquidity)
         
-        # Position 2: Wider range for remaining liquidity (±1% = ~100 ticks)
+        # Position 2: Wider range for remaining liquidity (outside concentrated range)
         remaining_liquidity = total_liquidity_amount - concentrated_liquidity
         if remaining_liquidity > 0:
-            wide_tick_range = 100  # Approximately 1% price range
+            wide_tick_range = 1000  # Approximately 10% price range
             
-            tick_lower = ((peg_tick - wide_tick_range) // self.tick_spacing) * self.tick_spacing
-            tick_upper = ((peg_tick + wide_tick_range) // self.tick_spacing) * self.tick_spacing
+            # Create two separate positions outside the concentrated range
+            # Position 2a: Below concentrated range (-1000 to -100)
+            tick_lower_below = ((peg_tick - wide_tick_range) // self.tick_spacing) * self.tick_spacing
+            tick_upper_below = tick_lower  # End at the concentrated range start
             
-            tick_lower = max(MIN_TICK + self.tick_spacing, tick_lower)
-            tick_upper = min(MAX_TICK - self.tick_spacing, tick_upper)
+            tick_lower_below = max(MIN_TICK + self.tick_spacing, tick_lower_below)
             
-            if tick_lower < tick_upper:
-                self._add_position(tick_lower, tick_upper, remaining_liquidity)
+            if tick_lower_below < tick_upper_below:
+                self._add_position(tick_lower_below, tick_upper_below, remaining_liquidity // 2)
+            
+            # Position 2b: Above concentrated range (+100 to +1000)
+            tick_lower_above = tick_upper  # Start at the concentrated range end
+            tick_upper_above = ((peg_tick + wide_tick_range) // self.tick_spacing) * self.tick_spacing
+            
+            tick_upper_above = min(MAX_TICK - self.tick_spacing, tick_upper_above)
+            
+            if tick_lower_above < tick_upper_above:
+                self._add_position(tick_lower_above, tick_upper_above, remaining_liquidity // 2)
     
     def _add_position(self, tick_lower: int, tick_upper: int, liquidity: int):
         """Add a liquidity position and update tick data"""
@@ -704,10 +714,12 @@ class UniswapV3Pool:
             self.ticks[tick_upper] = TickInfo()
         
         # Update liquidity deltas
+        # Lower tick: positive liquidity_net (add liquidity when crossing from below)
         self.ticks[tick_lower].liquidity_net += liquidity
         self.ticks[tick_lower].liquidity_gross += liquidity
         self.ticks[tick_lower].initialized = True
         
+        # Upper tick: negative liquidity_net (remove liquidity when crossing from below)
         self.ticks[tick_upper].liquidity_net -= liquidity
         self.ticks[tick_upper].liquidity_gross += liquidity
         self.ticks[tick_upper].initialized = True
@@ -752,12 +764,15 @@ class UniswapV3Pool:
                 raise ValueError("Price limit too high")
         
         # Initialize swap state
+        # Calculate active liquidity from ticks (not positions)
+        active_liquidity = self._calculate_active_liquidity_from_ticks(self.tick_current)
+        
         state = {
             'amount_specified_remaining': amount_specified,
             'amount_calculated': 0,
             'sqrt_price_x96': self.sqrt_price_x96,
             'tick': self.tick_current,
-            'liquidity': self.liquidity
+            'liquidity': active_liquidity
         }
         
         # Convert fee to pips (0.003 = 3000 pips)
@@ -850,15 +865,15 @@ class UniswapV3Pool:
                 if tick_next in self.ticks and self.ticks[tick_next].initialized:
                     liquidity_net = self.ticks[tick_next].liquidity_net
                     
-                    # Apply liquidity change based on direction (CORRECTED LOGIC)
+                    # Apply liquidity change based on direction
                     if zero_for_one:
-                        # Moving down (price decreasing): when crossing a tick downward,
-                        # we subtract the liquidity_net of that tick
+                        # Moving down (price decreasing): when crossing tick -100,
+                        # we are leaving the concentrated range, so subtract liquidity
                         state['liquidity'] -= liquidity_net
                     else:
-                        # Moving up (price increasing): when crossing a tick upward,
-                        # we add the liquidity_net of that tick
-                        state['liquidity'] += liquidity_net
+                        # Moving up (price increasing): when crossing tick +100,
+                        # we are leaving the concentrated range, so subtract liquidity
+                        state['liquidity'] -= liquidity_net
                     
                     if self.debug_cross_tick:
                         print(f"Crossed tick {tick_next}, liquidity: {prev_liquidity} -> {state['liquidity']}")
@@ -961,6 +976,17 @@ class UniswapV3Pool:
         
         # Convert back to USD
         return liquidity_at_tick / 1e6
+    
+    def _calculate_active_liquidity_from_ticks(self, current_tick: int) -> int:
+        """Calculate active liquidity from positions that are currently active"""
+        active_liquidity = 0
+        
+        # Only count liquidity from positions that are currently active
+        for position in self.positions:
+            if position.tick_lower <= current_tick < position.tick_upper:
+                active_liquidity += position.liquidity
+        
+        return active_liquidity
     
     def get_total_active_liquidity(self) -> float:
         """Get total liquidity across all active positions"""
@@ -1364,7 +1390,7 @@ class UniswapV3SlippageCalculator:
             amount_out_moet = amount_out_actual / 1e6
             
             # Calculate expected output without slippage (should be ~1:1)
-            expected_moet_out = yield_token_amount / current_price
+            expected_moet_out = yield_token_amount * current_price
             
             # Calculate slippage
             slippage_amount = max(0, expected_moet_out - amount_out_moet)

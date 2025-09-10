@@ -68,6 +68,7 @@ class HighTideAgentState(AgentState):
         self.btc_amount = btc_amount
         self.moet_debt = moet_to_borrow
         self.initial_moet_debt = moet_to_borrow  # Track original debt
+        self.initial_yield_token_value = 0.0  # Will be set when yield tokens are first purchased
         
         # Interest tracking
         self.total_interest_accrued = 0.0
@@ -168,7 +169,13 @@ class HighTideAgent(BaseAgent):
             return False
             
         # Rebalance when current HF falls below the TARGET HF (the trigger threshold)
-        return self.state.health_factor < self.state.target_health_factor
+        needs_rebalancing = self.state.health_factor < self.state.target_health_factor
+        
+        # Debug logging for rebalancing decisions
+        if needs_rebalancing:
+            print(f"        🔄 {self.agent_id}: HF {self.state.health_factor:.3f} < Target {self.state.target_health_factor:.3f} - REBALANCING NEEDED")
+        
+        return needs_rebalancing
     
     def _check_leverage_opportunity(self, asset_prices: Dict[Asset, float]) -> bool:
         """Check if agent can increase leverage when HF > initial HF"""
@@ -195,7 +202,7 @@ class HighTideAgent(BaseAgent):
         })
     
     def _execute_rebalancing(self, asset_prices: Dict[Asset, float], current_minute: int) -> tuple:
-        """Execute rebalancing by selling yield tokens"""
+        """Execute iterative rebalancing by selling yield tokens until HF target is reached"""
         if not self.state.yield_token_manager.yield_tokens:
             # No yield tokens to sell, position cannot be saved
             return (AgentAction.HOLD, {})
@@ -210,12 +217,87 @@ class HighTideAgent(BaseAgent):
         if debt_reduction_needed <= 0:
             return (AgentAction.HOLD, {})
         
-        # Sell yield tokens at their current (rebased) value
-        return (AgentAction.SWAP, {
-            "action_type": "sell_yield_tokens",
-            "amount_needed": debt_reduction_needed,
-            "current_minute": current_minute
-        })
+        # Start iterative rebalancing loop
+        return self._execute_iterative_rebalancing(debt_reduction_needed, current_minute, asset_prices)
+    
+    def _execute_iterative_rebalancing(self, initial_moet_needed: float, current_minute: int, asset_prices: Dict[Asset, float]) -> tuple:
+        """Execute iterative rebalancing with slippage monitoring"""
+        moet_needed = initial_moet_needed
+        total_moet_raised = 0.0
+        total_yield_tokens_sold = 0.0
+        rebalance_cycle = 0
+        
+        print(f"        🔄 {self.agent_id}: Starting iterative rebalancing - need ${moet_needed:,.2f} MOET")
+        
+        while (self.state.health_factor < self.state.target_health_factor and 
+               self.state.yield_token_manager.yield_tokens and
+               rebalance_cycle < 10):  # Max 10 cycles to prevent infinite loops
+            
+            rebalance_cycle += 1
+            print(f"        🔄 Rebalance Cycle {rebalance_cycle}: Need ${moet_needed:,.2f} MOET")
+            
+            # Calculate yield tokens to sell (1:1 assumption)
+            yield_tokens_to_sell = moet_needed
+            
+            # Execute the swap
+            moet_received, actual_yield_tokens_sold_value = self.state.yield_token_manager.sell_yield_tokens(yield_tokens_to_sell, current_minute)
+            
+            if moet_received <= 0:
+                print(f"        ❌ No MOET received from yield token sale - liquidity exhausted")
+                break
+            
+            # Check slippage threshold (>5% slippage)
+            if moet_received < 0.95 * actual_yield_tokens_sold_value:
+                slippage_percent = (1 - moet_received / actual_yield_tokens_sold_value) * 100
+                print(f"        ⚠️  HIGH SLIPPAGE: {actual_yield_tokens_sold_value:,.2f} yield tokens → ${moet_received:,.2f} MOET ({slippage_percent:.1f}% slippage)")
+            
+            # Pay down debt
+            debt_repayment = min(moet_received, self.state.moet_debt)
+            self.state.moet_debt -= debt_repayment
+            total_moet_raised += moet_received
+            total_yield_tokens_sold += actual_yield_tokens_sold_value
+            
+            # Update health factor with actual prices
+            self._update_health_factor(asset_prices)
+            
+            print(f"        📊 Cycle {rebalance_cycle}: Received ${moet_received:,.2f} MOET, repaid ${debt_repayment:,.2f} debt, new HF: {self.state.health_factor:.3f}")
+            
+            # Check if we've reached target
+            if self.state.health_factor >= self.state.target_health_factor:
+                print(f"        ✅ Target HF reached: {self.state.health_factor:.3f} >= {self.state.target_health_factor:.3f}")
+                break
+            
+            # Calculate remaining MOET needed for next cycle
+            collateral_value = self._calculate_effective_collateral_value(asset_prices)
+            target_debt = collateral_value / self.state.initial_health_factor
+            moet_needed = self.state.moet_debt - target_debt
+            
+            if moet_needed <= 0:
+                break
+        
+        # Update the agent's total yield sold counter
+        self.state.total_yield_sold += total_moet_raised
+        
+        # Record the rebalancing event
+        if total_moet_raised > 0:
+            self.state.rebalancing_events.append({
+                "minute": current_minute,
+                "moet_raised": total_moet_raised,
+                "debt_repaid": total_moet_raised,
+                "yield_tokens_sold_value": total_yield_tokens_sold,
+                "slippage_cost": total_yield_tokens_sold - total_moet_raised,
+                "slippage_percentage": ((total_yield_tokens_sold - total_moet_raised) / total_yield_tokens_sold * 100) if total_yield_tokens_sold > 0 else 0.0,
+                "health_factor_before": self.state.health_factor,
+                "rebalance_cycles": rebalance_cycle
+            })
+        
+        # Check if we need to continue rebalancing
+        if (self.state.health_factor < self.state.target_health_factor and 
+            not self.state.yield_token_manager.yield_tokens):
+            print(f"        ❌ All yield tokens sold but HF still below target: {self.state.health_factor:.3f} < {self.state.target_health_factor:.3f}")
+            return (AgentAction.HOLD, {"emergency": True})
+        
+        return (AgentAction.HOLD, {})
     
     def _execute_emergency_yield_sale(self, current_minute: int) -> tuple:
         """Emergency sale of ALL remaining yield tokens"""
@@ -358,14 +440,19 @@ class HighTideAgent(BaseAgent):
         # Purchase yield tokens
         new_tokens = self.state.yield_token_manager.mint_yield_tokens(moet_amount, current_minute, use_direct_minting)
         
+        # Set initial yield token value if this is the first purchase
+        if self.state.initial_yield_token_value == 0.0:
+            self.state.initial_yield_token_value = self.state.yield_token_manager.calculate_total_value(current_minute)
+        
         # Update MOET debt (it's already borrowed, now used for yield tokens)
         # Debt remains the same, but MOET is now in yield tokens
         
         return len(new_tokens) > 0
     
-    def execute_yield_token_sale(self, amount_needed: float, current_minute: int) -> float:
-        """Execute yield token sale for rebalancing"""
-        moet_raised = self.state.yield_token_manager.sell_yield_tokens(amount_needed, current_minute)
+    def execute_yield_token_sale(self, moet_amount_needed: float, current_minute: int) -> float:
+        """Execute yield token sale for rebalancing (simplified for iterative approach)"""
+        # Execute the sale
+        moet_raised, actual_yield_tokens_sold_value = self.state.yield_token_manager.sell_yield_tokens(moet_amount_needed, current_minute)
         
         if moet_raised > 0:
             # Use raised MOET to repay debt
@@ -373,16 +460,8 @@ class HighTideAgent(BaseAgent):
             self.state.moet_debt -= debt_repayment
             self.state.total_yield_sold += moet_raised
             
-            # Record rebalancing event
-            self.state.rebalancing_events.append({
-                "minute": current_minute,
-                "moet_raised": moet_raised,
-                "debt_repaid": debt_repayment,
-                "health_factor_before": self.state.health_factor
-            })
-            
-            # NOTE: Health factor updated on next decide_action() call
-            # sim engine should call agent actions before recording final metrics
+            # Debug logging
+            print(f"        💸 {self.agent_id}: Yield tokens sold: ${moet_amount_needed:,.0f}, MOET raised: ${moet_raised:,.0f}, Debt repaid: ${debt_repayment:,.0f}")
             
         return moet_raised
     
@@ -390,25 +469,29 @@ class HighTideAgent(BaseAgent):
                                      pool_size_usd: float = 500_000, 
                                      concentrated_range: float = 0.2) -> float:
         """
-        Calculate Cost of Rebalancing = Current BTC Price - Net Position Value
+        Calculate Cost of Rebalancing = Final BTC Price - Net Position Value
         
-        Where Net Position Value = Current Collateral + (Current Yield Token Value - Current Debt)
+        Where:
+        - Current Value of Collateral = Users Collateral Deposited * Current Market Price
+        - Value of Debt = MOET taken as DEBT
+        - Value of Yield Tokens = Value of Yield Tokens
+        - Net Position Value = Current Collateral + (Value of Yield Tokens - Value of Debt)
         
-        This represents the opportunity cost of not being able to liquidate at current BTC price.
+        This represents the opportunity cost of the rebalancing strategy vs. just holding BTC.
         """
-        # Current collateral value (BTC at current price)
+        # Current Value of Collateral = Users Collateral Deposited * Current Market Price
         current_collateral = self.state.btc_amount * final_btc_price
         
-        # Current yield token value (including appreciation)
+        # Value of Yield Tokens
         current_yield_token_value = self.state.yield_token_manager.calculate_total_value(current_minute)
         
-        # Current debt
+        # Value of Debt = MOET taken as DEBT
         current_debt = self.state.moet_debt
         
-        # Net Position Value = Current Collateral + (Current Yield Token Value - Current Debt)
+        # Net Position Value = Current Collateral + (Value of Yield Tokens - Value of Debt)
         net_position_value = current_collateral + (current_yield_token_value - current_debt)
         
-        # Cost of Rebalancing = Current BTC Price - Net Position Value
+        # Cost of Rebalancing = Final BTC Price - Net Position Value
         cost_of_rebalancing = final_btc_price - net_position_value
         
         return cost_of_rebalancing
@@ -448,6 +531,9 @@ class HighTideAgent(BaseAgent):
         
         total_transaction_costs = self.calculate_total_transaction_costs()
         
+        # Calculate current yield token value
+        current_yield_token_value = self.state.yield_token_manager.calculate_total_value(current_minute)
+        
         high_tide_metrics = {
             "risk_profile": self.risk_profile,
             "color": self.color,
@@ -463,7 +549,7 @@ class HighTideAgent(BaseAgent):
             "emergency_liquidations": self.state.emergency_liquidations,
             "cost_of_rebalancing": pnl_from_rebalancing,  # PnL from rebalancing strategy
             "total_slippage_costs": total_transaction_costs,  # Transaction costs (slippage + fees)
-            "net_position_value": (self.state.btc_amount * btc_price) - pnl_from_rebalancing,
+            "net_position_value": (self.state.btc_amount * btc_price) + (current_yield_token_value - self.state.moet_debt),
             "automatic_rebalancing": self.state.automatic_rebalancing
         }
         

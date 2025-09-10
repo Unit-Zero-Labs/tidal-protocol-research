@@ -28,11 +28,157 @@ from tidal_protocol_sim.engine.high_tide_vault_engine import HighTideVaultEngine
 from tidal_protocol_sim.engine.aave_protocol_engine import AaveProtocolEngine, AaveConfig
 from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
 from tidal_protocol_sim.agents.aave_agent import AaveAgent
-from tidal_protocol_sim.core.protocol import TidalProtocol
+from tidal_protocol_sim.core.protocol import TidalProtocol, Asset
 
 # Import the custom agent creation function from target health factor analysis
 sys.path.append(str(Path(__file__).parent))
 from target_health_factor_analysis import create_custom_agents_for_hf_test
+
+
+class AnalysisHighTideEngine(HighTideVaultEngine):
+    """High Tide Engine with built-in analysis tracking capabilities"""
+    
+    def __init__(self, config: HighTideConfig, tracking_callback=None):
+        super().__init__(config)
+        self.tracking_callback = tracking_callback
+        self.time_series_data = {
+            "timestamps": [],
+            "btc_prices": [],
+            "agent_states": {},
+            "rebalancing_events": []
+        }
+    
+    def _process_high_tide_agents(self, minute: int):
+        """Process High Tide agents with tracking"""
+        result = super()._process_high_tide_agents(minute)
+        
+        # Capture time-series data
+        current_btc_price = self.state.current_prices.get(Asset.BTC, 100_000.0)
+        self.time_series_data["timestamps"].append(minute)
+        self.time_series_data["btc_prices"].append(current_btc_price)
+        
+        # Capture agent states
+        for agent in self.high_tide_agents:
+            if hasattr(agent, 'state'):
+                agent_state = {
+                    "timestamp": minute,
+                    "btc_price": current_btc_price,
+                    "health_factor": agent.state.health_factor,
+                    "btc_amount": agent.state.btc_amount,
+                    "moet_debt": agent.state.moet_debt,
+                    "collateral_value": agent.state.btc_amount * current_btc_price,
+                    "yield_token_value": 0.0,
+                    "net_position": 0.0
+                }
+                
+                # Calculate yield token value
+                if hasattr(agent.state, 'yield_token_manager'):
+                    yt_manager = agent.state.yield_token_manager
+                    if hasattr(yt_manager, 'calculate_total_value'):
+                        agent_state["yield_token_value"] = yt_manager.calculate_total_value(minute)
+                
+                # Calculate net position
+                agent_state["net_position"] = (agent_state["collateral_value"] + 
+                                             agent_state["yield_token_value"] - 
+                                             agent_state["moet_debt"])
+                
+                if agent.agent_id not in self.time_series_data["agent_states"]:
+                    self.time_series_data["agent_states"][agent.agent_id] = []
+                self.time_series_data["agent_states"][agent.agent_id].append(agent_state)
+        
+        # Capture rebalancing events
+        for agent in self.high_tide_agents:
+            if hasattr(agent.state, 'rebalancing_events') and agent.state.rebalancing_events:
+                latest_event = agent.state.rebalancing_events[-1]
+                if latest_event.get('minute') == minute:
+                    self.time_series_data["rebalancing_events"].append({
+                        "agent_id": agent.agent_id,
+                        "timestamp": minute,
+                        "event_data": latest_event
+                    })
+        
+        # Call tracking callback if provided
+        if self.tracking_callback:
+            self.tracking_callback(minute, result, self.time_series_data)
+        
+        return result
+    
+    def get_time_series_data(self):
+        """Get collected time-series data"""
+        return self.time_series_data.copy()
+
+
+class AnalysisAaveEngine(AaveProtocolEngine):
+    """AAVE Engine with built-in analysis tracking capabilities"""
+    
+    def __init__(self, config: AaveConfig, tracking_callback=None):
+        super().__init__(config)
+        self.tracking_callback = tracking_callback
+        self.time_series_data = {
+            "timestamps": [],
+            "btc_prices": [],
+            "agent_states": {},
+            "liquidation_events": []
+        }
+    
+    def _process_aave_agents(self, minute: int):
+        """Process AAVE agents with tracking"""
+        result = super()._process_aave_agents(minute)
+        
+        # Capture time-series data
+        current_btc_price = self.state.current_prices.get(Asset.BTC, 100_000.0)
+        self.time_series_data["timestamps"].append(minute)
+        self.time_series_data["btc_prices"].append(current_btc_price)
+        
+        # Capture agent states
+        for agent in self.aave_agents:
+            if hasattr(agent, 'state'):
+                agent_state = {
+                    "timestamp": minute,
+                    "btc_price": current_btc_price,
+                    "health_factor": agent.state.health_factor,
+                    "btc_amount": agent.state.supplied_balances.get(Asset.BTC, 0.0),
+                    "moet_debt": agent.state.moet_debt,
+                    "collateral_value": agent.state.supplied_balances.get(Asset.BTC, 0.0) * current_btc_price,
+                    "yield_token_value": 0.0,
+                    "net_position": 0.0
+                }
+                
+                # Calculate yield token value
+                if hasattr(agent.state, 'yield_token_manager'):
+                    yt_manager = agent.state.yield_token_manager
+                    if hasattr(yt_manager, 'calculate_total_value'):
+                        agent_state["yield_token_value"] = yt_manager.calculate_total_value(minute)
+                
+                # Calculate net position
+                agent_state["net_position"] = (agent_state["collateral_value"] + 
+                                             agent_state["yield_token_value"] - 
+                                             agent_state["moet_debt"])
+                
+                if agent.agent_id not in self.time_series_data["agent_states"]:
+                    self.time_series_data["agent_states"][agent.agent_id] = []
+                self.time_series_data["agent_states"][agent.agent_id].append(agent_state)
+        
+        # Capture liquidation events
+        for agent in self.aave_agents:
+            if hasattr(agent.state, 'liquidation_events') and agent.state.liquidation_events:
+                latest_event = agent.state.liquidation_events[-1]
+                if latest_event.get('minute') == minute:
+                    self.time_series_data["liquidation_events"].append({
+                        "agent_id": agent.agent_id,
+                        "timestamp": minute,
+                        "event_data": latest_event
+                    })
+        
+        # Call tracking callback if provided
+        if self.tracking_callback:
+            self.tracking_callback(minute, result, self.time_series_data)
+        
+        return result
+    
+    def get_time_series_data(self):
+        """Get collected time-series data"""
+        return self.time_series_data.copy()
 
 
 class ComprehensiveComparisonConfig:
@@ -41,7 +187,7 @@ class ComprehensiveComparisonConfig:
     def __init__(self):
         # Monte Carlo parameters
         self.num_monte_carlo_runs = 1
-        self.agents_per_run = 15  # 15 agents per scenario
+        self.agents_per_run = 5  # agents per scenario
         
         # Health Factor variation scenarios
         self.health_factor_scenarios = [
@@ -89,10 +235,16 @@ class ComprehensiveComparisonConfig:
         self.scenario_name = "Comprehensive_HT_vs_Aave_Analysis"
         self.generate_charts = True
         self.save_detailed_data = True
+        
+        # Add missing attributes for compatibility
+        self.moet_btc_pool_size = self.moet_btc_pool_config["size"]
+        self.moet_yield_pool_size = self.moet_yt_pool_config["size"]
+        self.moet_yt_pool_size = self.moet_yt_pool_config["size"]  # Alias for whitepaper
+        self.yield_token_concentration = self.moet_yt_pool_config["concentration"]
 
 
 def create_custom_aave_agents(initial_hf_range: Tuple[float, float], target_hf: float, 
-                             num_agents: int, run_num: int) -> List[AaveAgent]:
+                             num_agents: int, run_num: int, yield_token_pool=None) -> List[AaveAgent]:
     """Create custom AAVE agents matching High Tide agent parameters"""
     agents = []
     
@@ -107,6 +259,33 @@ def create_custom_aave_agents(initial_hf_range: Tuple[float, float], target_hf: 
             agent_id,
             initial_hf,
             target_hf  # Not used for rebalancing in AAVE, but kept for comparison
+        )
+        
+        agents.append(agent)
+    
+    return agents
+
+
+def create_custom_ht_agents_with_scenario_ranges(target_hf: float, initial_hf_range: Tuple[float, float], 
+                                                num_agents: int, run_num: int, agent_type: str, yield_token_pool=None) -> List:
+    """Create custom High Tide agents with scenario-specific initial HF ranges"""
+    import random
+    from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
+    
+    agents = []
+    
+    for i in range(num_agents):
+        # Use scenario-specific initial health factor range
+        initial_hf = random.uniform(initial_hf_range[0], initial_hf_range[1])
+        
+        # Create agent with proper naming convention
+        agent_id = f"{agent_type}_run{run_num}_agent{i}"
+        
+        agent = HighTideAgent(
+            agent_id,
+            initial_hf,
+            target_hf,
+            yield_token_pool=yield_token_pool  # Pass pool during creation
         )
         
         agents.append(agent)
@@ -251,6 +430,7 @@ class ComprehensiveHTvsAaveAnalysis:
         scenario_result = {
             "scenario_name": hf_scenario["scenario_name"],
             "scenario_params": hf_scenario,
+            "final_btc_price": self.config.btc_final_price,  # Add final BTC price for CSV
             "high_tide_summary": self._aggregate_scenario_results(ht_runs, "high_tide"),
             "aave_summary": self._aggregate_scenario_results(aave_runs, "aave"),
             "direct_comparison": self._compare_scenarios(ht_runs, aave_runs),
@@ -264,6 +444,8 @@ class ComprehensiveHTvsAaveAnalysis:
     
     def _run_high_tide_scenario(self, hf_scenario: Dict, run_id: int, seed: int) -> Dict[str, Any]:
         """Run High Tide scenario with specified parameters and comprehensive data collection"""
+        
+        print(f"      🔧 High Tide: Initial HF range {hf_scenario['initial_hf_range']}, Target HF {hf_scenario['target_hf']}")
         
         # Create High Tide configuration with enhanced pool settings
         ht_config = HighTideConfig()
@@ -283,22 +465,20 @@ class ComprehensiveHTvsAaveAnalysis:
         random.seed(seed)
         np.random.seed(seed)
         
-        # Create engine first to get the yield token pool
-        ht_engine = HighTideVaultEngine(ht_config)
-        ht_engine.protocol = TidalProtocol()
+        # Create analysis engine with built-in tracking
+        ht_engine = AnalysisHighTideEngine(ht_config)
+        # Don't override the protocol - let TidalProtocolEngine handle it properly
+        # ht_engine.protocol = TidalProtocol()  # REMOVED - this was breaking Uniswap V3 integration
         
-        # Create custom High Tide agents using the function from target_health_factor_analysis
-        custom_ht_agents = create_custom_agents_for_hf_test(
+        # Create custom High Tide agents with scenario-specific initial HF ranges
+        custom_ht_agents = create_custom_ht_agents_with_scenario_ranges(
             target_hf=hf_scenario["target_hf"],
+            initial_hf_range=hf_scenario["initial_hf_range"],
             num_agents=self.config.agents_per_run,
             run_num=run_id,
-            agent_type=f"ht_{hf_scenario['scenario_name']}"
+            agent_type=f"ht_{hf_scenario['scenario_name']}",
+            yield_token_pool=ht_engine.yield_token_pool  # Pass pool during creation
         )
-        
-        # Connect agents to the yield token pool
-        for agent in custom_ht_agents:
-            if hasattr(agent, 'state') and hasattr(agent.state, 'yield_token_manager'):
-                agent.state.yield_token_manager.yield_token_pool = ht_engine.yield_token_pool
         
         ht_engine.high_tide_agents = custom_ht_agents
         
@@ -306,8 +486,14 @@ class ComprehensiveHTvsAaveAnalysis:
         for agent in custom_ht_agents:
             ht_engine.agents[agent.agent_id] = agent
         
-        # Run simulation
-        results = ht_engine.run_simulation()
+        # Run simulation with time-series tracking
+        print(f"      🚀 Running High Tide simulation...")
+        results = self._run_simulation_with_time_series_tracking(ht_engine, custom_ht_agents, "High_Tide")
+        
+        # Debug: Print key results
+        survival_rate = results.get("survival_statistics", {}).get("survival_rate", 0.0)
+        total_cost = sum(agent.get("cost_of_rebalancing", 0) for agent in results.get("agent_outcomes", []))
+        print(f"      📊 High Tide Results: {survival_rate:.1%} survival, ${total_cost:,.0f} total cost")
         
         # Extract comprehensive data from simulation results
         enhanced_results = self._extract_comprehensive_data(results, "High_Tide", ht_engine)
@@ -330,6 +516,8 @@ class ComprehensiveHTvsAaveAnalysis:
     def _run_aave_scenario(self, hf_scenario: Dict, run_id: int, seed: int) -> Dict[str, Any]:
         """Run AAVE scenario with identical parameters to High Tide and comprehensive data collection"""
         
+        print(f"      🔧 AAVE: Initial HF range {hf_scenario['initial_hf_range']}, Target HF {hf_scenario['target_hf']}")
+        
         # Create AAVE configuration with enhanced pool settings
         aave_config = AaveConfig()
         aave_config.num_aave_agents = 0  # We'll create custom agents
@@ -343,37 +531,37 @@ class ComprehensiveHTvsAaveAnalysis:
         aave_config.moet_yield_pool_size = self.config.moet_yt_pool_config["size"]
         aave_config.yield_token_concentration = self.config.moet_yt_pool_config["concentration"]
         
+        # Create analysis engine with built-in tracking
+        aave_engine = AnalysisAaveEngine(aave_config)
+        
         # Create custom AAVE agents with same initial HF distribution as High Tide agents
-        custom_aave_agents = []
+        custom_aave_agents = create_custom_aave_agents(
+            initial_hf_range=hf_scenario["initial_hf_range"],
+            target_hf=hf_scenario["target_hf"],
+            num_agents=self.config.agents_per_run,
+            run_num=run_id
+        )
         
-        # Reset seed to match High Tide agent creation for identical initial conditions
-        random.seed(seed)
-        np.random.seed(seed)
-        
-        for i in range(self.config.agents_per_run):
-            # Use same randomization as High Tide to ensure identical initial conditions
-            initial_hf = random.uniform(hf_scenario["initial_hf_range"][0], hf_scenario["initial_hf_range"][1])
-            agent_id = f"aave_{hf_scenario['scenario_name']}_run{run_id}_agent{i}"
-            
-            agent = AaveAgent(agent_id, initial_hf, hf_scenario["target_hf"])
-            custom_aave_agents.append(agent)
-        
-        # Create engine and run simulation
-        aave_engine = AaveProtocolEngine(aave_config)
-        aave_engine.aave_agents = custom_aave_agents
-        aave_engine.protocol = TidalProtocol()
-        
-        # Connect yield token managers to the engine's yield token pool
+        # Connect AAVE agents to yield token pool after creation (they don't use it the same way)
         for agent in custom_aave_agents:
             if hasattr(agent, 'state') and hasattr(agent.state, 'yield_token_manager'):
                 agent.state.yield_token_manager.yield_token_pool = aave_engine.yield_token_pool
+        
+        aave_engine.aave_agents = custom_aave_agents
         
         # Add agents to engine's agent dict
         for agent in custom_aave_agents:
             aave_engine.agents[agent.agent_id] = agent
         
-        # Run simulation
-        results = aave_engine.run_simulation()
+        # Run simulation with time-series tracking
+        print(f"      🚀 Running AAVE simulation...")
+        results = self._run_simulation_with_time_series_tracking(aave_engine, custom_aave_agents, "AAVE")
+        
+        # Debug: Print key results
+        survival_rate = results.get("survival_statistics", {}).get("survival_rate", 0.0)
+        total_cost = sum(agent.get("cost_of_liquidation", 0) for agent in results.get("agent_outcomes", []))
+        liquidations = sum(1 for agent in results.get("agent_outcomes", []) if not agent.get("survived", True))
+        print(f"      📊 AAVE Results: {survival_rate:.1%} survival, {liquidations} liquidations, ${total_cost:,.0f} total cost")
         
         # Extract comprehensive data from simulation results
         enhanced_results = self._extract_comprehensive_data(results, "AAVE", aave_engine)
@@ -427,6 +615,11 @@ class ComprehensiveHTvsAaveAnalysis:
         if strategy == "High_Tide":
             yield_token_data = self._extract_yield_token_data(results, engine)
             enhanced_results["yield_token_data"] = yield_token_data
+        
+        # Extract rebalancing events (High Tide only)
+        if strategy == "High_Tide":
+            rebalancing_data = self._extract_rebalancing_events(results, strategy)
+            enhanced_results["rebalancing_events_data"] = rebalancing_data
         
         return enhanced_results
     
@@ -580,6 +773,87 @@ class ComprehensiveHTvsAaveAnalysis:
         
         return yield_token_data
     
+    def _extract_rebalancing_events(self, results: Dict, strategy: str) -> Dict[str, Any]:
+        """Extract detailed rebalancing events for High Tide agents"""
+        rebalancing_events = []
+        
+        if strategy == "High_Tide":
+            for agent in results.get("agent_outcomes", []):
+                if "rebalancing_events_list" in agent:
+                    for event in agent["rebalancing_events_list"]:
+                        rebalancing_events.append({
+                            "agent_id": agent["agent_id"],
+                            "timestamp": event.get("minute", 0),
+                            "yield_tokens_sold": event.get("yield_tokens_sold_value", 0),
+                            "moet_received": event.get("moet_raised", 0),
+                            "debt_paid_down": event.get("debt_repaid", 0),
+                            "slippage_cost": event.get("slippage_cost", 0),
+                            "slippage_percentage": event.get("slippage_percentage", 0),
+                            "health_factor_before": event.get("health_factor_before", 0),
+                            "health_factor_after": agent.get("final_health_factor", 0),
+                            "rebalance_cycles": event.get("rebalance_cycles", 1)
+                        })
+        
+        return {
+            "rebalancing_events": rebalancing_events,
+            "total_rebalancing_events": len(rebalancing_events),
+            "total_yield_tokens_sold": sum(event["yield_tokens_sold"] for event in rebalancing_events),
+            "total_moet_received": sum(event["moet_received"] for event in rebalancing_events),
+            "total_slippage_costs": sum(event["slippage_cost"] for event in rebalancing_events)
+        }
+    
+    def _calculate_cost_of_rebalancing(self, agent_outcomes: List[Dict], final_btc_price: float) -> Dict[str, Any]:
+        """Calculate cost of rebalancing vs direct BTC holding"""
+        cost_analysis = {
+            "agent_costs": [],
+            "total_cost_of_rebalancing": 0.0,
+            "average_cost_per_agent": 0.0,
+            "rebalancing_efficiency": 0.0
+        }
+        
+        total_cost = 0.0
+        total_net_position = 0.0
+        
+        for agent in agent_outcomes:
+            if agent.get("strategy") == "High_Tide":
+                final_net_position = agent.get("net_position_value", 0)
+                cost_of_rebalancing = final_btc_price - final_net_position
+                rebalancing_efficiency = (final_net_position / final_btc_price) * 100 if final_btc_price > 0 else 0
+                
+                agent_cost_data = {
+                    "agent_id": agent.get("agent_id", ""),
+                    "final_btc_price": final_btc_price,
+                    "final_net_position": final_net_position,
+                    "cost_of_rebalancing": cost_of_rebalancing,
+                    "rebalancing_efficiency": rebalancing_efficiency,
+                    "btc_amount": agent.get("btc_amount", 1.0),
+                    "current_btc_collateral_value": agent.get("btc_amount", 1.0) * final_btc_price,
+                    "current_yield_token_value": agent.get("yield_token_portfolio", {}).get("total_current_value", 0),
+                    "current_moet_debt": agent.get("current_moet_debt", 0)
+                }
+                
+                cost_analysis["agent_costs"].append(agent_cost_data)
+                total_cost += cost_of_rebalancing
+                total_net_position += final_net_position
+        
+        cost_analysis["total_cost_of_rebalancing"] = total_cost
+        cost_analysis["average_cost_per_agent"] = total_cost / len(agent_outcomes) if agent_outcomes else 0
+        cost_analysis["rebalancing_efficiency"] = (total_net_position / (final_btc_price * len(agent_outcomes))) * 100 if agent_outcomes and final_btc_price > 0 else 0
+        
+        return cost_analysis
+    
+    def _run_simulation_with_time_series_tracking(self, engine, agents, strategy: str) -> Dict[str, Any]:
+        """Run simulation with built-in tracking from analysis engines"""
+        
+        # Run the simulation (tracking is built into the analysis engines)
+        results = engine.run_simulation()
+        
+        # Get time-series data from the analysis engine
+        time_series_data = engine.get_time_series_data()
+        results["time_series_data"] = time_series_data
+        
+        return results
+    
     def _aggregate_scenario_results(self, runs: List[Dict], strategy: str) -> Dict[str, Any]:
         """Aggregate results from multiple runs of the same scenario with comprehensive data"""
         
@@ -603,6 +877,17 @@ class ComprehensiveHTvsAaveAnalysis:
             
             # Extract agent outcomes
             run_agent_outcomes = run.get("agent_outcomes", [])
+            
+            # Calculate total slippage costs for each agent (High Tide only)
+            if strategy == "high_tide":
+                for outcome in run_agent_outcomes:
+                    # Calculate total slippage from rebalancing events
+                    total_slippage = 0.0
+                    if "rebalancing_events_list" in outcome:
+                        for event in outcome["rebalancing_events_list"]:
+                            total_slippage += event.get("slippage_cost", 0.0)
+                    outcome["total_slippage_costs"] = total_slippage
+            
             agent_outcomes.extend(run_agent_outcomes)
             
             # Count liquidations
@@ -641,6 +926,13 @@ class ComprehensiveHTvsAaveAnalysis:
             lp_curve_data, yield_token_data, strategy
         )
         
+        # Calculate cost of rebalancing for High Tide agents
+        cost_of_rebalancing_data = None
+        if strategy == "high_tide" and agent_outcomes:
+            # Get final BTC price from the first run (should be consistent)
+            final_btc_price = runs[0].get("final_btc_price", self.config.btc_final_price) if runs else self.config.btc_final_price
+            cost_of_rebalancing_data = self._calculate_cost_of_rebalancing(agent_outcomes, final_btc_price)
+        
         return {
             "mean_survival_rate": np.mean(survival_rates),
             "std_survival_rate": np.std(survival_rates),
@@ -662,7 +954,8 @@ class ComprehensiveHTvsAaveAnalysis:
                 "lp_curve_aggregate": self._aggregate_lp_curve_data(lp_curve_data),
                 "yield_token_aggregate": self._aggregate_yield_token_data(yield_token_data) if strategy == "high_tide" else None
             },
-            "comprehensive_metrics": comprehensive_metrics
+            "comprehensive_metrics": comprehensive_metrics,
+            "cost_of_rebalancing_analysis": cost_of_rebalancing_data
         }
     
     def _calculate_comprehensive_metrics(self, pool_state_data, trading_activity_data, 
@@ -910,9 +1203,12 @@ class ComprehensiveHTvsAaveAnalysis:
             ht_costs.append(ht_cost)
             aave_costs.append(aave_cost)
         
-        # Calculate improvements
-        survival_improvement = (np.mean(ht_survivals) - np.mean(aave_survivals)) / np.mean(aave_survivals) * 100
-        cost_improvement = (np.mean(aave_costs) - np.mean(ht_costs)) / np.mean(aave_costs) * 100
+        # Calculate improvements (handle division by zero)
+        aave_survival_mean = np.mean(aave_survivals)
+        aave_cost_mean = np.mean(aave_costs)
+        
+        survival_improvement = ((np.mean(ht_survivals) - aave_survival_mean) / aave_survival_mean * 100) if aave_survival_mean > 0 else 0
+        cost_improvement = ((aave_cost_mean - np.mean(ht_costs)) / aave_cost_mean * 100) if aave_cost_mean > 0 else 0
         
         return {
             "survival_rate_comparison": {
@@ -995,7 +1291,7 @@ class ComprehensiveHTvsAaveAnalysis:
                 "overall_survival_improvement": (np.mean(overall_ht_survival) - np.mean(overall_aave_survival)) / np.mean(overall_aave_survival) * 100,
                 "high_tide_mean_cost": np.mean(overall_ht_costs),
                 "aave_mean_cost": np.mean(overall_aave_costs),
-                "overall_cost_reduction": (np.mean(overall_aave_costs) - np.mean(overall_ht_costs)) / np.mean(overall_aave_costs) * 100
+                "overall_cost_reduction": ((np.mean(overall_aave_costs) - np.mean(overall_ht_costs)) / np.mean(overall_aave_costs) * 100) if np.mean(overall_aave_costs) > 0 else 0
             },
             "scenario_summaries": scenario_summaries,
             "statistical_power": len(self.config.health_factor_scenarios) * self.config.num_monte_carlo_runs
@@ -1278,6 +1574,11 @@ class ComprehensiveHTvsAaveAnalysis:
         self._create_agent_level_comparison_chart(output_dir)
         self._create_statistical_significance_chart(output_dir)
         
+        # Generate enhanced charts with new data
+        self._create_rebalancing_activity_charts(output_dir)
+        self._create_time_series_evolution_charts(output_dir)
+        self._create_cost_of_rebalancing_analysis_charts(output_dir)
+        
         print(f"📊 Charts saved to: {output_dir}")
     
     def _create_survival_rate_comparison_chart(self, output_dir: Path):
@@ -1501,6 +1802,254 @@ class ComprehensiveHTvsAaveAnalysis:
         # Implementation would use the statistical significance data from comparisons
         pass
     
+    def _create_rebalancing_activity_charts(self, output_dir: Path):
+        """Create rebalancing activity analysis charts"""
+        
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('High Tide Rebalancing Activity Analysis', fontsize=16, fontweight='bold')
+        
+        # Extract rebalancing data from all High Tide scenarios
+        all_rebalancing_events = []
+        scenario_names = []
+        
+        for scenario in self.results["scenario_results"]:
+            scenario_name = scenario["scenario_name"]
+            scenario_names.append(scenario_name)
+            
+            # Get rebalancing events from all runs
+            for run in scenario["detailed_runs"]["high_tide_runs"]:
+                if "rebalancing_events_data" in run:
+                    events = run["rebalancing_events_data"]["rebalancing_events"]
+                    for event in events:
+                        event["scenario"] = scenario_name
+                        all_rebalancing_events.append(event)
+        
+        if not all_rebalancing_events:
+            print("No rebalancing events found for chart generation")
+            plt.close()
+            return
+        
+        # Chart 1: Rebalancing frequency by scenario
+        rebalancing_counts = {}
+        for event in all_rebalancing_events:
+            scenario = event["scenario"]
+            rebalancing_counts[scenario] = rebalancing_counts.get(scenario, 0) + 1
+        
+        scenarios = list(rebalancing_counts.keys())
+        counts = list(rebalancing_counts.values())
+        
+        bars1 = ax1.bar(scenarios, counts, color='#2E8B57', alpha=0.8)
+        ax1.set_xlabel('Scenario')
+        ax1.set_ylabel('Total Rebalancing Events')
+        ax1.set_title('Rebalancing Frequency by Scenario')
+        ax1.tick_params(axis='x', rotation=45)
+        ax1.grid(True, alpha=0.3)
+        
+        # Add value labels
+        for bar in bars1:
+            height = bar.get_height()
+            ax1.annotate(f'{int(height)}',
+                       xy=(bar.get_x() + bar.get_width() / 2, height),
+                       xytext=(0, 3), textcoords="offset points",
+                       ha='center', va='bottom', fontsize=9)
+        
+        # Chart 2: Slippage costs distribution
+        slippage_costs = [event["slippage_cost"] for event in all_rebalancing_events]
+        ax2.hist(slippage_costs, bins=20, color='#DC143C', alpha=0.7, edgecolor='black')
+        ax2.set_xlabel('Slippage Cost ($)')
+        ax2.set_ylabel('Frequency')
+        ax2.set_title('Distribution of Slippage Costs')
+        ax2.grid(True, alpha=0.3)
+        
+        # Chart 3: Yield tokens sold vs MOET received
+        yield_tokens_sold = [event["yield_tokens_sold"] for event in all_rebalancing_events]
+        moet_received = [event["moet_received"] for event in all_rebalancing_events]
+        
+        ax3.scatter(yield_tokens_sold, moet_received, alpha=0.6, color='#2E8B57')
+        ax3.plot([0, max(yield_tokens_sold)], [0, max(yield_tokens_sold)], 'r--', alpha=0.5, label='1:1 Line')
+        ax3.set_xlabel('Yield Tokens Sold ($)')
+        ax3.set_ylabel('MOET Received ($)')
+        ax3.set_title('Yield Tokens Sold vs MOET Received')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # Chart 4: Health factor improvement
+        hf_before = [event["health_factor_before"] for event in all_rebalancing_events]
+        hf_after = [event["health_factor_after"] for event in all_rebalancing_events]
+        hf_improvement = [after - before for before, after in zip(hf_before, hf_after)]
+        
+        ax4.hist(hf_improvement, bins=20, color='#4169E1', alpha=0.7, edgecolor='black')
+        ax4.set_xlabel('Health Factor Improvement')
+        ax4.set_ylabel('Frequency')
+        ax4.set_title('Distribution of Health Factor Improvements')
+        ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "rebalancing_activity_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_time_series_evolution_charts(self, output_dir: Path):
+        """Create time series evolution charts"""
+        
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Time Series Evolution Analysis', fontsize=16, fontweight='bold')
+        
+        # Extract time series data from first scenario for demonstration
+        if not self.results["scenario_results"]:
+            print("No scenario results found for time series charts")
+            plt.close()
+            return
+        
+        first_scenario = self.results["scenario_results"][0]
+        
+        # Get time series data from first High Tide run
+        ht_runs = first_scenario["detailed_runs"]["high_tide_runs"]
+        if not ht_runs or "time_series_data" not in ht_runs[0]:
+            print("No time series data found for chart generation")
+            plt.close()
+            return
+        
+        time_series_data = ht_runs[0]["time_series_data"]
+        timestamps = time_series_data["timestamps"]
+        btc_prices = time_series_data["btc_prices"]
+        
+        # Chart 1: BTC Price Evolution
+        ax1.plot(timestamps, btc_prices, 'b-', linewidth=2, label='BTC Price')
+        ax1.set_xlabel('Time (minutes)')
+        ax1.set_ylabel('BTC Price ($)')
+        ax1.set_title('BTC Price Evolution')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        # Chart 2: Health Factor Evolution
+        for agent_id, agent_states in time_series_data["agent_states"].items():
+            if agent_states:  # Only plot if agent has data
+                timestamps_agent = [state["timestamp"] for state in agent_states]
+                health_factors = [state["health_factor"] for state in agent_states]
+                ax2.plot(timestamps_agent, health_factors, alpha=0.7, label=f'Agent {agent_id[-1]}')
+        
+        ax2.set_xlabel('Time (minutes)')
+        ax2.set_ylabel('Health Factor')
+        ax2.set_title('Health Factor Evolution by Agent')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        
+        # Chart 3: Net Position Evolution
+        for agent_id, agent_states in time_series_data["agent_states"].items():
+            if agent_states:  # Only plot if agent has data
+                timestamps_agent = [state["timestamp"] for state in agent_states]
+                net_positions = [state["net_position"] for state in agent_states]
+                ax3.plot(timestamps_agent, net_positions, alpha=0.7, label=f'Agent {agent_id[-1]}')
+        
+        ax3.set_xlabel('Time (minutes)')
+        ax3.set_ylabel('Net Position ($)')
+        ax3.set_title('Net Position Evolution by Agent')
+        ax3.grid(True, alpha=0.3)
+        ax3.legend()
+        
+        # Chart 4: Yield Token Value Evolution
+        for agent_id, agent_states in time_series_data["agent_states"].items():
+            if agent_states:  # Only plot if agent has data
+                timestamps_agent = [state["timestamp"] for state in agent_states]
+                yield_token_values = [state["yield_token_value"] for state in agent_states]
+                ax4.plot(timestamps_agent, yield_token_values, alpha=0.7, label=f'Agent {agent_id[-1]}')
+        
+        ax4.set_xlabel('Time (minutes)')
+        ax4.set_ylabel('Yield Token Value ($)')
+        ax4.set_title('Yield Token Value Evolution by Agent')
+        ax4.grid(True, alpha=0.3)
+        ax4.legend()
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "time_series_evolution_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_cost_of_rebalancing_analysis_charts(self, output_dir: Path):
+        """Create cost of rebalancing analysis charts"""
+        
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Cost of Rebalancing Analysis', fontsize=16, fontweight='bold')
+        
+        # Extract cost of rebalancing data from all scenarios
+        all_cost_data = []
+        scenario_names = []
+        
+        for scenario in self.results["scenario_results"]:
+            scenario_name = scenario["scenario_name"]
+            scenario_names.append(scenario_name)
+            
+            # Get cost of rebalancing data from High Tide summary
+            ht_summary = scenario["high_tide_summary"]
+            if "cost_of_rebalancing_analysis" in ht_summary and ht_summary["cost_of_rebalancing_analysis"]:
+                cost_data = ht_summary["cost_of_rebalancing_analysis"]
+                for agent_cost in cost_data["agent_costs"]:
+                    agent_cost["scenario"] = scenario_name
+                    all_cost_data.append(agent_cost)
+        
+        if not all_cost_data:
+            print("No cost of rebalancing data found for chart generation")
+            plt.close()
+            return
+        
+        # Chart 1: Cost of rebalancing by scenario
+        scenario_costs = {}
+        for cost_data in all_cost_data:
+            scenario = cost_data["scenario"]
+            if scenario not in scenario_costs:
+                scenario_costs[scenario] = []
+            scenario_costs[scenario].append(cost_data["cost_of_rebalancing"])
+        
+        scenarios = list(scenario_costs.keys())
+        avg_costs = [np.mean(scenario_costs[scenario]) for scenario in scenarios]
+        
+        bars1 = ax1.bar(scenarios, avg_costs, color='#2E8B57', alpha=0.8)
+        ax1.set_xlabel('Scenario')
+        ax1.set_ylabel('Average Cost of Rebalancing ($)')
+        ax1.set_title('Average Cost of Rebalancing by Scenario')
+        ax1.tick_params(axis='x', rotation=45)
+        ax1.grid(True, alpha=0.3)
+        
+        # Add value labels
+        for bar in bars1:
+            height = bar.get_height()
+            ax1.annotate(f'${height:.0f}',
+                       xy=(bar.get_x() + bar.get_width() / 2, height),
+                       xytext=(0, 3), textcoords="offset points",
+                       ha='center', va='bottom', fontsize=9)
+        
+        # Chart 2: Rebalancing efficiency distribution
+        efficiencies = [cost_data["rebalancing_efficiency"] for cost_data in all_cost_data]
+        ax2.hist(efficiencies, bins=20, color='#4169E1', alpha=0.7, edgecolor='black')
+        ax2.set_xlabel('Rebalancing Efficiency (%)')
+        ax2.set_ylabel('Frequency')
+        ax2.set_title('Distribution of Rebalancing Efficiency')
+        ax2.grid(True, alpha=0.3)
+        
+        # Chart 3: Cost vs Net Position
+        costs = [cost_data["cost_of_rebalancing"] for cost_data in all_cost_data]
+        net_positions = [cost_data["final_net_position"] for cost_data in all_cost_data]
+        
+        ax3.scatter(net_positions, costs, alpha=0.6, color='#DC143C')
+        ax3.set_xlabel('Final Net Position ($)')
+        ax3.set_ylabel('Cost of Rebalancing ($)')
+        ax3.set_title('Cost of Rebalancing vs Final Net Position')
+        ax3.grid(True, alpha=0.3)
+        
+        # Chart 4: BTC Price vs Net Position
+        btc_prices = [cost_data["final_btc_price"] for cost_data in all_cost_data]
+        
+        ax4.scatter(btc_prices, net_positions, alpha=0.6, color='#2E8B57')
+        ax4.plot(btc_prices, btc_prices, 'r--', alpha=0.5, label='1:1 BTC Line')
+        ax4.set_xlabel('Final BTC Price ($)')
+        ax4.set_ylabel('Final Net Position ($)')
+        ax4.set_title('Final Net Position vs BTC Price')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "cost_of_rebalancing_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
     def _generate_lp_curve_analysis_charts(self):
         """Generate LP curve analysis charts for High Tide scenarios"""
         
@@ -1570,6 +2119,13 @@ class ComprehensiveHTvsAaveAnalysis:
             
             # High Tide agents
             for agent in scenario["high_tide_summary"]["all_agent_outcomes"]:
+                # Get BTC price from scenario results
+                final_btc_price = scenario.get("final_btc_price", 0)
+                
+                # Extract yield token portfolio data
+                yield_portfolio = agent.get("yield_token_portfolio", {})
+                current_yield_token_value = yield_portfolio.get("total_current_value", 0)
+                
                 agent_data = {
                     "Strategy": "High_Tide",
                     "Scenario": scenario_name,
@@ -1582,12 +2138,28 @@ class ComprehensiveHTvsAaveAnalysis:
                     "Cost_of_Rebalancing": agent.get("cost_of_rebalancing", 0),
                     "Total_Slippage_Costs": agent.get("total_slippage_costs", 0),
                     "Yield_Tokens_Sold": agent.get("total_yield_sold", 0),
-                    "Final_Net_Position": agent.get("net_position_value", 0)
+                    "Final_Net_Position": agent.get("net_position_value", 0),
+                    # New components for manual Net Position calculation
+                    "Final_BTC_Price": final_btc_price,
+                    "BTC_Amount": agent.get("btc_amount", 1.0),  # Should be 1.0 for all agents
+                    "Current_BTC_Collateral_Value": agent.get("btc_amount", 1.0) * final_btc_price,
+                    "Current_Yield_Token_Value": current_yield_token_value,
+                    "Current_MOET_Debt": agent.get("current_moet_debt", 0),
+                    "Initial_MOET_Debt": agent.get("initial_moet_debt", 0),
+                    "Total_Interest_Accrued": agent.get("total_interest_accrued", 0),
+                    # New rebalancing and cost data
+                    "Rebalancing_Events_Count": agent.get("rebalancing_events", 0),
+                    "Total_Slippage_Costs": agent.get("total_slippage_costs", 0),
+                    "Cost_of_Rebalancing_vs_BTC": 0.0,  # Will be calculated below
+                    "Rebalancing_Efficiency": 0.0  # Will be calculated below
                 }
                 all_agent_data.append(agent_data)
             
             # AAVE agents
             for agent in scenario["aave_summary"]["all_agent_outcomes"]:
+                # Get BTC price from scenario results
+                final_btc_price = scenario.get("final_btc_price", 0)
+                
                 agent_data = {
                     "Strategy": "AAVE",
                     "Scenario": scenario_name,
@@ -1600,9 +2172,28 @@ class ComprehensiveHTvsAaveAnalysis:
                     "Cost_of_Liquidation": agent.get("cost_of_liquidation", 0),
                     "Liquidation_Penalties": agent.get("liquidation_penalties", 0),
                     "Collateral_Lost": agent.get("total_liquidated_collateral", 0),
-                    "Final_Net_Position": agent.get("net_position_value", 0)
+                    "Final_Net_Position": agent.get("net_position_value", 0),
+                    # New components for manual Net Position calculation
+                    "Final_BTC_Price": final_btc_price,
+                    "BTC_Amount": 1.0,  # AAVE agents also have 1 BTC
+                    "Current_BTC_Collateral_Value": 1.0 * final_btc_price,
+                    "Current_Yield_Token_Value": 0.0,  # AAVE agents don't have yield tokens
+                    "Current_MOET_Debt": 0.0,  # AAVE agents don't have MOET debt
+                    "Initial_MOET_Debt": 0.0,  # AAVE agents don't have MOET debt
+                    "Total_Interest_Accrued": 0.0  # AAVE agents don't have MOET interest
                 }
                 all_agent_data.append(agent_data)
+        
+        # Calculate cost of rebalancing for High Tide agents
+        for agent_data in all_agent_data:
+            if agent_data["Strategy"] == "High_Tide":
+                final_btc_price = agent_data["Final_BTC_Price"]
+                final_net_position = agent_data["Final_Net_Position"]
+                cost_of_rebalancing = final_btc_price - final_net_position
+                rebalancing_efficiency = (final_net_position / final_btc_price) * 100 if final_btc_price > 0 else 0
+                
+                agent_data["Cost_of_Rebalancing_vs_BTC"] = cost_of_rebalancing
+                agent_data["Rebalancing_Efficiency"] = rebalancing_efficiency
         
         # Create DataFrame and save
         df = pd.DataFrame(all_agent_data)

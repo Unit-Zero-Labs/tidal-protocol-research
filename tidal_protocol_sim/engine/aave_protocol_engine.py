@@ -9,7 +9,7 @@ No Tidal dependencies - inherits only from BaseLendingEngine.
 
 import random
 from typing import Dict, List, Optional
-from .base_lending_engine import BaseLendingEngine, BaseLendingConfig
+from .tidal_engine import TidalProtocolEngine, TidalConfig
 from .btc_price_manager import BTCPriceDeclineManager
 from ..core.protocol import Asset
 from ..core.yield_tokens import YieldTokenPool
@@ -18,7 +18,7 @@ from ..agents.base_agent import BaseAgent, AgentAction
 from ..analysis.agent_position_tracker import AgentPositionTracker
 
 
-class AaveConfig(BaseLendingConfig):
+class AaveConfig(TidalConfig):
     """Pure AAVE configuration - no Tidal dependencies"""
     
     def __init__(self):
@@ -33,6 +33,9 @@ class AaveConfig(BaseLendingConfig):
         # Yield token parameters (for fair comparison)
         self.yield_apr = 0.10  # 10% APR
         self.moet_btc_pool_size = 500_000  # Same as Tidal for comparison
+        
+        # Uniswap V3 pool parameters (inherited from TidalConfig)
+        self.moet_btc_concentration = 0.80  # 80% concentration around BTC price
         
         # BTC price decline parameters (for fair comparison)
         self.btc_initial_price = 100_000.0
@@ -51,14 +54,14 @@ class AaveConfig(BaseLendingConfig):
         self.price_update_frequency = 1  # Update every minute
 
 
-class AaveProtocolEngine(BaseLendingEngine):
+class AaveProtocolEngine(TidalProtocolEngine):
     """Pure AAVE Protocol implementation"""
     
     def __init__(self, config: AaveConfig):
         super().__init__(config)
         self.aave_config = config
         
-        # AAVE uses traditional AMM pools, not Uniswap V3
+        # AAVE liquidation parameters (but uses Uniswap V3 for swaps)
         self._setup_aave_liquidation_pools()
         
         # Initialize AAVE specific components
@@ -246,12 +249,20 @@ class AaveProtocolEngine(BaseLendingEngine):
             # Update health factor
             agent._update_health_factor(self.state.current_prices)
             
+            # Debug: Print health factors every few minutes
+            if minute % 5 == 0:
+                print(f"        📊 {agent.agent_id}: HF {agent.state.health_factor:.3f} (BTC: ${self.state.current_prices.get(Asset.BTC, 0):,.0f})")
+            
             # Check if liquidation is needed (HF ≤ 1.0)
             if agent.state.health_factor <= 1.0:
+                print(f"        💥 {agent.agent_id}: HF {agent.state.health_factor:.3f} ≤ 1.0 - LIQUIDATION TRIGGERED")
                 liquidation_event = agent.execute_aave_liquidation(minute, self.state.current_prices)
                 
                 if liquidation_event:
                     self.liquidation_events.append(liquidation_event)
+                    print(f"        ✅ Liquidation executed for {agent.agent_id}")
+                else:
+                    print(f"        ❌ Liquidation failed for {agent.agent_id}")
         
     def _get_tracked_agent(self) -> Optional[AaveAgent]:
         """Get the agent being tracked for position analysis"""

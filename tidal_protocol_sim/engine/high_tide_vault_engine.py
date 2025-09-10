@@ -287,17 +287,17 @@ class HighTideVaultEngine(TidalProtocolEngine):
         
     def _execute_yield_token_sale(self, agent: HighTideAgent, params: dict, minute: int) -> tuple:
         """Execute yield token sale for rebalancing"""
-        amount_needed = params.get("amount_needed", 0.0)
+        moet_amount_needed = params.get("moet_amount_needed", 0.0)
         swap_type = params.get("action_type", "sell_yield_tokens")
         
-        if amount_needed <= 0 and swap_type != "emergency_sell_all_yield":
+        if moet_amount_needed <= 0 and swap_type != "emergency_sell_all_yield":
             return False, None
             
         # Execute sale through agent
         if swap_type == "emergency_sell_all_yield":
             moet_raised = agent.execute_yield_token_sale(float('inf'), minute)
         else:
-            moet_raised = agent.execute_yield_token_sale(amount_needed, minute)
+            moet_raised = agent.execute_yield_token_sale(moet_amount_needed, minute)
         
         if moet_raised > 0:
             # Use MOET directly to pay down debt (no BTC swap needed)
@@ -325,9 +325,11 @@ class HighTideVaultEngine(TidalProtocolEngine):
             self.yield_token_pool.execute_yield_token_sale(moet_raised)
             
             # Calculate slippage using YieldTokenPool's built-in calculator
+            # Note: We need to calculate how much yield token value was actually sold
+            # This will be calculated by the agent's execute_yield_token_sale method
             slippage_result = self.yield_token_pool.slippage_calculator.calculate_swap_slippage(
-                amount_in=amount_needed,
-                token_in="Yield_Token",
+                amount_in=moet_raised,  # Use the actual MOET raised for slippage calculation
+                token_in="MOET",
                 concentrated_range=self.yield_token_pool.concentration_range
             )
             
@@ -337,7 +339,7 @@ class HighTideVaultEngine(TidalProtocolEngine):
             
             # Create swap data for tracking
             swap_data = {
-                "yt_swapped": amount_needed,
+                "yt_swapped": moet_raised,  # This will be calculated by the agent
                 "moet_received": moet_raised,
                 "debt_repayment": debt_repayment,
                 "swap_type": swap_type,
@@ -351,7 +353,7 @@ class HighTideVaultEngine(TidalProtocolEngine):
                 "minute": minute,
                 "agent_id": agent.agent_id,
                 "moet_raised": moet_raised,
-                "amount_needed": amount_needed,
+                "moet_amount_needed": moet_amount_needed,
                 "debt_repayment": debt_repayment,
                 "health_factor_before": agent.state.health_factor,
                 "rebalancing_type": swap_type,
@@ -459,8 +461,15 @@ class HighTideVaultEngine(TidalProtocolEngine):
                 "total_yield_earned": portfolio["yield_token_portfolio"]["total_accrued_yield"],
                 "total_yield_sold": portfolio["total_yield_sold"],
                 "rebalancing_events": len(agent.get_rebalancing_history()),
+                "rebalancing_events_list": agent.get_rebalancing_history(),  # Add actual events for slippage calculation
                 "survived": agent.state.health_factor > 1.0,
-                "yield_token_value": portfolio["yield_token_portfolio"]["total_current_value"]
+                "yield_token_value": portfolio["yield_token_portfolio"]["total_current_value"],
+                # Add debt tracking fields for CSV
+                "initial_moet_debt": portfolio["initial_moet_debt"],
+                "current_moet_debt": portfolio["current_moet_debt"],
+                "total_interest_accrued": portfolio["total_interest_accrued"],
+                "btc_amount": portfolio["btc_amount"],
+                "yield_token_portfolio": portfolio["yield_token_portfolio"]
             }
             
             agent_outcomes.append(outcome)

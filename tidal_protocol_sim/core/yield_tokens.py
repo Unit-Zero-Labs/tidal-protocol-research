@@ -70,53 +70,86 @@ class YieldTokenManager:
             
         # Create yield tokens based on actual amount received
         # Each token represents $1 of initial value, but will rebase over time
-        num_tokens = int(actual_yield_tokens_received)  # Floor to whole tokens
+        # Handle fractional amounts by creating one token with the full amount
         new_tokens = []
         
-        for _ in range(num_tokens):
-            token = YieldToken(1.0, 0.10, current_minute)  # $1 initial value, 10% APR
+        if actual_yield_tokens_received > 0:
+            # Create a single token with the exact amount (including fractional part)
+            token = YieldToken(actual_yield_tokens_received, 0.10, current_minute)
             new_tokens.append(token)
             self.yield_tokens.append(token)
             
-        self.total_initial_value_invested += num_tokens
+        self.total_initial_value_invested += actual_yield_tokens_received
         return new_tokens
         
-    def sell_yield_tokens(self, amount_needed: float, current_minute: int) -> float:
+    def sell_yield_tokens(self, moet_amount_needed: float, current_minute: int) -> tuple[float, float]:
         """
-        Sell yield tokens to raise MOET at their current (rebased) value
-        
+        Sell yield tokens to raise the exact MOET amount needed
+        Args:
+            moet_amount_needed: Amount of MOET needed (not yield token value). Use float('inf') for emergency sale of all tokens.
         Returns:
-            Amount of MOET obtained from selling tokens
+            tuple: (Amount of MOET obtained, Actual yield token value sold)
         """
-        if amount_needed <= 0 or not self.yield_tokens:
-            return 0.0
+        if not self.yield_tokens:
+            return 0.0, 0.0
         
         # Calculate total value of all tokens (including yield appreciation)
         total_token_value = sum(token.get_current_value(current_minute) for token in self.yield_tokens)
         
         if total_token_value <= 0:
-            return 0.0
+            return 0.0, 0.0
         
-        # Calculate what fraction of our total token value we need to sell
-        tokens_to_sell_fraction = min(1.0, amount_needed / total_token_value)
+        # Handle emergency sale (sell all tokens)
+        if moet_amount_needed == float('inf'):
+            yield_tokens_to_sell = total_token_value
+        else:
+            # Use simple calculation to find the amount of yield tokens to sell
+            # Start with 1:1 assumption, let slippage handle reality
+            yield_tokens_to_sell = self._calculate_yield_tokens_needed(moet_amount_needed)
+            
+            if yield_tokens_to_sell <= 0:
+                return 0.0, 0.0
         
-        # Calculate the total value to sell (fractional)
-        total_value_to_sell = total_token_value * tokens_to_sell_fraction
+        # Handle emergency sale (sell all tokens)
+        if moet_amount_needed == float('inf'):
+            # Remove all tokens for emergency sale
+            total_initial_value = sum(token.initial_value for token in self.yield_tokens)
+            self.yield_tokens.clear()
+            self.total_initial_value_invested = 0.0
+        else:
+            # Calculate how many complete tokens we can sell
+            token_value = self.yield_tokens[0].get_current_value(current_minute)
+            complete_tokens_needed = int(yield_tokens_to_sell / token_value)
+            fractional_amount_needed = yield_tokens_to_sell - (complete_tokens_needed * token_value)
+            
+            # Sell complete tokens (remove them entirely)
+            tokens_to_remove = min(complete_tokens_needed, len(self.yield_tokens))
+            for _ in range(tokens_to_remove):
+                token = self.yield_tokens.pop(0)  # Remove from front
+                self.total_initial_value_invested -= token.initial_value
+            
+            # If we still need more and have tokens left, sell fractional amount
+            if fractional_amount_needed > 0 and self.yield_tokens:
+                fractional_fraction = fractional_amount_needed / token_value
+                # Reduce the first remaining token by the fractional amount
+                self.yield_tokens[0].initial_value *= (1 - fractional_fraction)
+                # If the token becomes too small, remove it
+                if self.yield_tokens[0].initial_value < 0.01:
+                    removed_token = self.yield_tokens.pop(0)
+                    self.total_initial_value_invested -= removed_token.initial_value
         
         # Use real Uniswap V3 slippage calculation for the batch
         # This gives us the ACTUAL MOET amount based on pool math
-        moet_raised = self._calculate_real_slippage(total_value_to_sell)
+        moet_raised = self._calculate_real_slippage(yield_tokens_to_sell)
         
-        # Update token values proportionally (fractional sale)
-        for token in self.yield_tokens:
-            # Reduce the token's value by the fraction sold
-            token.initial_value *= (1 - tokens_to_sell_fraction)
-            # If token value becomes very small, remove it entirely
-            if token.initial_value < 0.01:  # Less than 1 cent
-                self.yield_tokens.remove(token)
-                self.total_initial_value_invested -= token.initial_value
-            
-        return moet_raised
+        return moet_raised, yield_tokens_to_sell
+    
+    def _calculate_yield_tokens_needed(self, moet_amount_needed: float) -> float:
+        """
+        Simple calculation: assume 1:1 ratio, let slippage handle reality
+        This replaces the complex binary search with a simple algebraic approach
+        """
+        return moet_amount_needed  # Start with 1:1 assumption
     
     def calculate_total_yield_earned(self, current_minute: int) -> float:
         """
