@@ -43,7 +43,7 @@ Initial YT Purchase: $61,538.46 worth ✅
 
 **Healthy Decline (Minutes 1-7):**
 - **BTC Price:** $100,000 → $94,833 (-5.2% decline)
-- **Health Factor:** 1.30 → 1.244 (approaching trigger point)
+- **Health Factor:** 1.30 → 1.244 (hits trigger point)
 - **Pool Status:** Stable, no trades yet
 
 ### Phase 2: First Rebalancing Success (Minute 8)
@@ -63,7 +63,6 @@ Target Debt: $76,531.87 ÷ 1.30 = $58,870.67
 Debt Reduction Needed: $61,538.46 - $58,870.67 = $2,667.79
 ```
 
-
 **First Rebalancing Execution:**
 ```
 SUCCESSFUL REBALANCING
@@ -82,6 +81,8 @@ Utilization Rate: 2.5% (97.4% liquidity consumed)
 MOET Reserves: $243,131.36 
 YT Reserves: $256,868.64
 Pool Status: BROKEN - Extreme price deviation
+
+See Section 5 **Uniswap V3 Concentrated Liquidity Mathematics**
 
 CONCENTRATED LIQUIDITY DEATH SPIRAL EXPLAINED:
 With 95% concentration in ±1% range (±100 ticks):
