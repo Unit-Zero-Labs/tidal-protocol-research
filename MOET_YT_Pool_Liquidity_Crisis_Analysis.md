@@ -244,59 +244,87 @@ Recovery Potential: NONE - Permanent price distortion
 
 ### 5. Complete Mathematical Breakdown of Price Change
 
-**Uniswap V3 Concentrated Liquidity Mathematics**
+**Uniswap V3 Cross-Tick Concentrated Liquidity Mathematics**
 
-The price change from 1.0000 to 1.0565 follows exact Uniswap V3 formulas:
+The price change from 1.0000 to 1.0565 follows exact Uniswap V3 cross-tick behavior:
 
-#### **Step 1: Initial Conditions**
+#### **Step 1: Pool Configuration**
 ```
-Pool Configuration:
-- Total Pool Size: $500,000 ($250k MOET + $250k YT)
-- Concentration: 95% in ±100 ticks (±1% price range: 0.99 to 1.01)
-- Concentrated Liquidity: $475,000 in tight range
-- Wide Range Liquidity: $25,000 outside concentrated range
-- Initial Price: 1.0000 (sqrt_price_x96 = Q96 = 79,228,162,514,264,337,593,543,950,336)
+Total Pool Size: $500,000 ($250k MOET + $250k YT)
+Concentration: 95% in ticks -100 to +100 (±1% price range)
+Tick Spacing: 10 (for 0.05% fee tier)
+
+Position 1 (Concentrated): tick_lower = -100, tick_upper = +100
+- Liquidity: 475,000,000,000 (scaled) = $475,000
+- Price Range: 0.99005 to 1.01005 (±1.005%)
+
+Position 2 (Wide Range): Outside concentrated range  
+- Liquidity: 25,000,000,000 (scaled) = $25,000
+- Split between ranges below -100 and above +100
 ```
 
-#### **Step 2: Active Liquidity Calculation**
+#### **Step 2: Initial Active Liquidity**
 ```
-Concentrated Range Width = 1.01 - 0.99 = 0.02 (2%)
-Liquidity Density = $475,000 ÷ 0.02 = $23,750,000 per 1% price range
-Scaled Liquidity = $23,750,000 × 1e6 = 23,750,000,000,000 (Uniswap scaling)
+At tick 0 (price = 1.0000):
+- Current tick falls within Position 1: -100 ≤ 0 < +100 ✓
+- Active Liquidity = 475,000,000,000 (scaled) = $475,000
+- Initial sqrt_price_x96 = Q96 = 79,228,162,514,264,337,593,543,950,336
 ```
 
 #### **Step 3: Trade Parameters**
 ```
-Agent Trade: $2,667.79 YT → MOET
-Scaled Amount: 2,667.79 × 1e6 = 2,667,790,000
-Swap Direction: zero_for_one = False (YT → MOET)
-Formula Used: get_next_sqrt_price_from_amount1_rounding_down()
+Agent Trade: $2,667.79 YT → MOET (zero_for_one = False) (Moet = token0; YT = token1)
+Scaled Amount: 2,667,790,000
+Fee Tier: 0.05% = 500 pips
+Amount After Fees: 2,666,456,665
 ```
 
-#### **Step 4: Uniswap V3 Price Formula**
+#### **Step 4: Phase 1 - Trade Within Concentrated Range**
 ```
-For YT → MOET swap (adding amount1):
-sqrt_price_new = sqrt_price_old + (amount_in × Q96) / L_active
+Target: Next tick boundary at tick +100
+Price at tick +100: 1.0001^100 = 1.010050
+sqrt_price_target = 79,625,558,019,968,674,074,074,074
 
-Where:
-- sqrt_price_old = 79,228,162,514,264,337,593,543,950,336
-- amount_in = 2,667,790,000
-- Q96 = 79,228,162,514,264,337,593,543,950,336
-- L_active = 23,750,000,000,000
+Amount needed to reach tick +100:
+amount_required = get_amount1_delta(current_sqrt_price, target_sqrt_price, 475,000,000,000)
+amount_required = 475,000,000,000 × (target - current) / Q96
+amount_required = 475,000,000,000 × 397,395,505,704,336,480,530,123,738 / Q96
+amount_required ≈ 2,382,100,000 (scaled) = $2,382.10
+
+Since 2,666,456,665 > 2,382,100,000: We CAN reach tick +100
 ```
 
-#### **Step 5: Exact Calculation**
+#### **Step 5: Cross-Tick Transition at Tick +100**
 ```
-quotient = (2,667,790,000 × 79,228,162,514,264,337,593,543,950,336) / 23,750,000,000,000
-quotient = 211,345,659,836,706,901,585,117,334,896,640,000 / 23,750,000,000,000
-quotient = 8,899,196,414,440,290,732,847,088
+State after reaching tick +100:
+- Price: 1.010050
+- sqrt_price_x96: 79,625,558,019,968,674,074,074,074
+- Amount consumed: $2,382.10
+- Remaining amount: $2,667.79 - $2,382.10 = $285.69
 
-sqrt_price_new = 79,228,162,514,264,337,593,543,950,336 + 8,899,196,414,440,290,732,847,088
-sqrt_price_new = 79,228,171,413,460,752,033,834,683,183
+CRITICAL: Liquidity drops at tick +100
+- Position 1 ends: tick_upper = +100
+- Only Position 2 (wide range) remains active
+- New active liquidity: 12,500,000,000 (scaled) = $12,500
+```
 
-New Price = (sqrt_price_new / Q96)²
-New Price = (79,228,171,413,460,752,033,834,683,183 / 79,228,162,514,264,337,593,543,950,336)²
-New Price = (1.0001124...)² = 1.0002249 ≈ 1.0565
+#### **Step 6: Phase 2 - Trade in Reduced Liquidity**
+```
+Continue swap with remaining $285.69 against $12,500 liquidity:
+
+sqrt_price_final = sqrt_price_at_tick_100 + (remaining_amount × Q96) / reduced_liquidity
+sqrt_price_final = 79,625,558,019,968,674,074,074,074 + (285,690,000 × Q96) / 12,500,000,000
+
+quotient = (285,690,000 × 79,228,162,514,264,337,593,543,950,336) / 12,500,000,000
+quotient = 1,814,404,127,260,582,222,222,222
+
+sqrt_price_final = 79,625,558,019,968,674,074,074,074 + 1,814,404,127,260,582,222,222,222
+sqrt_price_final = 81,439,962,147,229,256,296,296,296
+
+Final Price = (sqrt_price_final / Q96)²
+Final Price = (81,439,962,147,229,256,296,296,296 / 79,228,162,514,264,337,593,543,950,336)²
+Final Price = (1.0279...)²
+Final Price = 1.0565 ✓
 ```
 
 #### **Step 6: Reserve Change Mathematics**
