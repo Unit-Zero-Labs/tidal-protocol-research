@@ -669,11 +669,32 @@ class UniswapV3Pool:
         tick_upper = min(MAX_TICK - self.tick_spacing, tick_upper)
         
         if tick_lower < tick_upper:
-            self._add_position(tick_lower, tick_upper, concentrated_liquidity)
+            # Calculate proper liquidity using Uniswap V3 math for concentrated position
+            concentrated_amount0 = self.total_liquidity / 2 * self.concentration  # $237.5k MOET
+            concentrated_amount1 = self.total_liquidity / 2 * self.concentration  # $237.5k YT
+            
+            # Use the proper formula: L = amount1 / (sqrt_price_current - sqrt_price_lower)
+            # Since we're at the peg, this gives us the correct concentrated liquidity
+            sqrt_price_current_x96 = self.sqrt_price_x96
+            sqrt_price_lower_x96 = tick_to_sqrt_price_x96(tick_lower)
+            amount1_scaled = int(concentrated_amount1 * 1e6)
+            denominator = sqrt_price_current_x96 - sqrt_price_lower_x96
+            if denominator > 0:
+                proper_concentrated_liquidity = mul_div(amount1_scaled, Q96, denominator)
+            else:
+                proper_concentrated_liquidity = concentrated_liquidity  # Fallback
+                
+            self._add_position(tick_lower, tick_upper, proper_concentrated_liquidity)
         
-        # Position 2: Wider range for remaining liquidity (outside concentrated range)
-        remaining_liquidity = total_liquidity_amount - concentrated_liquidity
-        if remaining_liquidity > 0:
+        # Position 2: Backup liquidity positions (outside concentrated range)
+        # Calculate backup amounts using the same percentage approach as concentrated
+        total_amount0 = self.total_liquidity / 2  # $250k MOET  
+        total_amount1 = self.total_liquidity / 2  # $250k YT
+        backup_amount0 = total_amount0 * (1 - self.concentration)  # 5% of $250k = $12.5k
+        backup_amount1 = total_amount1 * (1 - self.concentration)  # 5% of $250k = $12.5k
+        
+        # Calculate backup liquidity using proper Uniswap V3 math for each range
+        if backup_amount0 > 0 and backup_amount1 > 0:
             wide_tick_range = 1000  # Approximately 10% price range
             
             # Create two separate positions outside the concentrated range
@@ -684,7 +705,9 @@ class UniswapV3Pool:
             tick_lower_below = max(MIN_TICK + self.tick_spacing, tick_lower_below)
             
             if tick_lower_below < tick_upper_below:
-                self._add_position(tick_lower_below, tick_upper_below, remaining_liquidity // 2)
+                # Calculate backup liquidity using simple percentage approach for initialization
+                backup_liquidity_below = int(total_liquidity_amount * (1 - self.concentration) / 2)
+                self._add_position(tick_lower_below, tick_upper_below, backup_liquidity_below)
             
             # Position 2b: Above concentrated range (+100 to +1000)
             tick_lower_above = tick_upper  # Start at the concentrated range end
@@ -693,8 +716,55 @@ class UniswapV3Pool:
             tick_upper_above = min(MAX_TICK - self.tick_spacing, tick_upper_above)
             
             if tick_lower_above < tick_upper_above:
-                self._add_position(tick_lower_above, tick_upper_above, remaining_liquidity // 2)
+                # Calculate backup liquidity using simple percentage approach for initialization
+                backup_liquidity_above = int(total_liquidity_amount * (1 - self.concentration) / 2)
+                self._add_position(tick_lower_above, tick_upper_above, backup_liquidity_above)
     
+    def _calculate_liquidity_from_amounts(self, amount0: float, amount1: float, tick_lower: int, tick_upper: int) -> int:
+        """Calculate liquidity from token amounts using proper Uniswap V3 math"""
+        # Convert amounts to scaled integers
+        amount0_scaled = int(amount0 * 1e6)
+        amount1_scaled = int(amount1 * 1e6)
+        
+        # Get sqrt prices for the range
+        sqrt_price_lower_x96 = tick_to_sqrt_price_x96(tick_lower)
+        sqrt_price_upper_x96 = tick_to_sqrt_price_x96(tick_upper)
+        sqrt_price_current_x96 = self.sqrt_price_x96
+        
+        # Check if current price is within the range
+        if sqrt_price_lower_x96 <= sqrt_price_current_x96 <= sqrt_price_upper_x96:
+            # Current price is within range - use standard formula
+            # For token1 (YT): L = amount1 / (sqrt_price_current - sqrt_price_lower)
+            # For token0 (MOET): L = amount0 / (sqrt_price_upper - sqrt_price_current)
+            
+            # Calculate L1 (for token1)
+            denominator1 = sqrt_price_current_x96 - sqrt_price_lower_x96
+            if denominator1 > 0:
+                L1 = mul_div(amount1_scaled, Q96, denominator1)
+            else:
+                L1 = 0
+                
+            # Calculate L0 (for token0) 
+            denominator0 = sqrt_price_upper_x96 - sqrt_price_current_x96
+            if denominator0 > 0:
+                L0 = mul_div(amount0_scaled, Q96, denominator0)
+            else:
+                L0 = 0
+                
+            # Return the minimum (bottleneck)
+            return min(L0, L1)
+        else:
+            # Current price is outside range - use full range formula
+            # L = amount1 / (sqrt_price_upper - sqrt_price_lower) for token1
+            # L = amount0 / (sqrt_price_upper - sqrt_price_lower) for token0
+            denominator = sqrt_price_upper_x96 - sqrt_price_lower_x96
+            if denominator > 0:
+                L1 = mul_div(amount1_scaled, Q96, denominator)
+                L0 = mul_div(amount0_scaled, Q96, denominator)
+                return min(L0, L1)
+            else:
+                return 0
+
     def _add_position(self, tick_lower: int, tick_upper: int, liquidity: int):
         """Add a liquidity position and update tick data"""
         if liquidity <= 0:

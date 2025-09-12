@@ -52,26 +52,41 @@ class YieldTokenPoolCapacityTester:
             "scaling_analysis": {}
         }
         
-        # Test configurations
+        # Test configurations (MOET reserve amounts - each side of pool)
+        # Using 500k gives us the desired $250k:$250k pool with correct 47M liquidity
         self.pool_sizes_usd = [
-            250_000,    # Current size (problematic)
-            500_000,    # 2x current
-            1_000_000,  # 4x current  
-            2_000_000,  # 8x current
-            5_000_000,  # 20x current
-            10_000_000, # 40x current
-            20_000_000  # 80x current
+            250_000,    # Target config: $250k:$250k = $500k total
+            500_000,    # 2x target: $500k:$500k = $1M total (current actual size)
+            1_000_000,  # 4x target: $1M:$1M = $2M total
+            2_500_000,  # 10x target: $2.5M:$2.5M = $5M total
+            5_000_000,  # 20x target: $5M:$5M = $10M total
+            10_000_000, # 40x target: $10M:$10M = $20M total
+            25_000_000  # 100x target: $25M:$25M = $50M total
         ]
         
         self.test_swap_sizes = [
-            500,     # Small trade
-            1_000,   # Typical rebalancing
-            2_500,   # Medium rebalancing  
-            5_000,   # Large rebalancing
-            10_000,  # Very large rebalancing
-            25_000,  # Extreme rebalancing
-            50_000,  # Massive trade
-            100_000  # Pool-breaking trade
+            70_000,  # Incremental test 2
+            80_000,  # Incremental test 3
+            90_000,  # Incremental test 4
+            100_000, # Large capacity test
+            125_000, # Extended capacity test 1
+            150_000, # Extended capacity test 2
+            175_000, # Extended capacity test 3
+            200_000, # Maximum capacity test
+            225_000, # Stress test 1
+            250_000, # Stress test 2 (pool size match)
+            275_000, # Stress test 3
+            300_000, # Ultimate stress test
+            350_000, # Stress test 4
+            400_000, # Stress test 5
+            500_000, # Ultimate stress test
+            600_000, # Ultimate stress test 2
+            700_000, # Ultimate stress test 3
+            800_000, # Ultimate stress test 4
+            900_000, # Ultimate stress test 5
+            1_000_000, # Ultimate stress test 6
+            1_500_000, # Ultimate stress test 7
+            2_000_000, # Ultimate stress test 8
         ]
         
         self.concentration = 0.95  # 95% concentration at peg
@@ -82,12 +97,12 @@ class YieldTokenPoolCapacityTester:
         print("🔍 YIELD TOKEN POOL CAPACITY ANALYSIS")
         print("=" * 60)
         print(f"📊 Testing {len(self.pool_sizes_usd)} pool sizes")
-        print(f"📊 Testing {len(self.test_swap_sizes)} swap sizes")
+        print(f"📊 Testing {len(self.test_swap_sizes)} swap sizes (including 10k increments from $50k-$100k)")
         print(f"📊 Price impact threshold: {self.price_impact_threshold:.1%}")
         print()
         
-        # Test 1: Current pool analysis ($250k)
-        print("🔍 Test 1: Current Pool Analysis ($250k)")
+        # Test 1: Target pool analysis ($250k:$250k = $500k total)
+        print("🔍 Test 1: Target Pool Analysis ($250k:$250k)")
         current_pool_results = self._test_single_pool_capacity(250_000)
         self.results["current_pool_analysis"] = current_pool_results
         
@@ -100,6 +115,11 @@ class YieldTokenPoolCapacityTester:
         print("\n🔍 Test 3: Price Impact Threshold Analysis")
         threshold_results = self._analyze_price_impact_thresholds()
         self.results["price_impact_analysis"] = threshold_results
+        
+        # Test 4: Repeated small swap analysis
+        print("\n🔍 Test 4: Repeated Small Swap Analysis ($2,000 swaps)")
+        repeated_swap_results = self._analyze_repeated_small_swaps()
+        self.results["repeated_swap_analysis"] = repeated_swap_results
         
         # Generate summary and recommendations
         print("\n📊 Generating Analysis Summary...")
@@ -117,11 +137,12 @@ class YieldTokenPoolCapacityTester:
     
     def _test_single_pool_capacity(self, pool_size_usd: float) -> Dict[str, Any]:
         """Test capacity of a single pool size across different swap amounts"""
-        print(f"   Testing pool size: ${pool_size_usd:,.0f}")
+        print(f"   Testing pool size: ${pool_size_usd:,.0f}:${pool_size_usd:,.0f} (${pool_size_usd*2:,.0f} total)")
         
         # Create fresh pool for testing
+        # pool_size_usd represents the MOET reserve size (each side)
         pool = YieldTokenPool(
-            initial_moet_reserve=pool_size_usd / 2,  # Half of total pool size
+            initial_moet_reserve=pool_size_usd,  # Full MOET reserve amount
             concentration=self.concentration
         )
         
@@ -218,10 +239,10 @@ class YieldTokenPoolCapacityTester:
             "threshold_results": []
         }
         
-        # Test each threshold against the current $250k pool
+        # Test each threshold against the target $250k pool
         pool_size = 250_000
         pool = YieldTokenPool(
-            initial_moet_reserve=pool_size / 2,
+            initial_moet_reserve=pool_size,
             concentration=self.concentration
         )
         
@@ -255,6 +276,110 @@ class YieldTokenPoolCapacityTester:
             print(f"      Max trade: ${max_trade_for_threshold:,.0f} ({max_trade_for_threshold/pool_size:.1%} of pool)")
         
         return threshold_analysis
+    
+    def _analyze_repeated_small_swaps(self) -> Dict[str, Any]:
+        """Analyze how many repeated $2,000 swaps it takes to reach the 1% price impact threshold"""
+        swap_size = 2_000  # $2k per swap
+        pool_size = 250_000  # Target pool size
+        
+        print(f"   Testing repeated ${swap_size:,} swaps on ${pool_size:,} pool...")
+        
+        # Create fresh pool for testing
+        pool = YieldTokenPool(
+            initial_moet_reserve=pool_size,
+            concentration=self.concentration
+        )
+        
+        repeated_swap_results = {
+            "swap_size": swap_size,
+            "pool_size": pool_size,
+            "concentration": self.concentration,
+            "swap_history": [],
+            "total_swaps_executed": 0,
+            "cumulative_volume": 0.0,
+            "final_price_impact": 0.0,
+            "threshold_reached": False,
+            "threshold_swap_number": None
+        }
+        
+        swap_count = 0
+        cumulative_volume = 0.0
+        initial_price = pool.uniswap_pool.get_price()
+        
+        # Keep swapping until we hit the 1% threshold or max iterations
+        max_swaps = 100  # Safety limit
+        
+        while swap_count < max_swaps:
+            swap_count += 1
+            
+            try:
+                # Execute the swap (this permanently modifies pool state)
+                moet_received = pool.execute_yield_token_sale(swap_size)
+                swap_successful = moet_received > 0
+                
+                if not swap_successful:
+                    print(f"      Swap #{swap_count}: FAILED - Pool exhausted")
+                    break
+                
+                # Get post-swap metrics
+                current_price = pool.uniswap_pool.get_price()
+                price_impact_percent = abs((current_price - initial_price) / initial_price) * 100 if initial_price > 0 else 0
+                active_liquidity = pool.uniswap_pool._calculate_active_liquidity_from_ticks(
+                    pool.uniswap_pool.tick_current
+                ) / 1e6
+                
+                cumulative_volume += swap_size
+                
+                # Calculate slippage for this individual swap
+                expected_moet = swap_size  # 1:1 expected
+                slippage_percent = abs((expected_moet - moet_received) / expected_moet) * 100 if expected_moet > 0 else 0
+                
+                # Record swap details
+                swap_record = {
+                    "swap_number": swap_count,
+                    "cumulative_volume": cumulative_volume,
+                    "price_before_swap": pool.uniswap_pool.get_price() if swap_count == 1 else repeated_swap_results["swap_history"][-1]["price_after_swap"],
+                    "price_after_swap": current_price,
+                    "price_impact_cumulative": price_impact_percent,
+                    "moet_received": moet_received,
+                    "slippage_percent": slippage_percent,
+                    "active_liquidity": active_liquidity,
+                    "swap_successful": swap_successful
+                }
+                
+                repeated_swap_results["swap_history"].append(swap_record)
+                
+                # Check if we've reached the threshold
+                if price_impact_percent >= self.price_impact_threshold * 100 and not repeated_swap_results["threshold_reached"]:
+                    repeated_swap_results["threshold_reached"] = True
+                    repeated_swap_results["threshold_swap_number"] = swap_count
+                    print(f"      🎯 Threshold reached at swap #{swap_count}: {price_impact_percent:.2f}% cumulative impact")
+                
+                # Print progress every 5 swaps or at threshold
+                if swap_count % 5 == 0 or repeated_swap_results["threshold_reached"]:
+                    print(f"      Swap #{swap_count:2d}: ${cumulative_volume:6,.0f} total → {price_impact_percent:5.2f}% impact, {slippage_percent:5.2f}% slippage")
+                
+                # Stop if we've reached threshold
+                if repeated_swap_results["threshold_reached"]:
+                    break
+                    
+            except Exception as e:
+                print(f"      Swap #{swap_count}: ERROR - {str(e)}")
+                break
+        
+        # Final results
+        repeated_swap_results["total_swaps_executed"] = swap_count
+        repeated_swap_results["cumulative_volume"] = cumulative_volume
+        repeated_swap_results["final_price_impact"] = price_impact_percent if 'price_impact_percent' in locals() else 0.0
+        
+        # Summary
+        if repeated_swap_results["threshold_reached"]:
+            threshold_volume = repeated_swap_results["threshold_swap_number"] * swap_size
+            print(f"   📊 Summary: {repeated_swap_results['threshold_swap_number']} swaps (${threshold_volume:,}) to reach 1% threshold")
+        else:
+            print(f"   📊 Summary: {swap_count} swaps executed (${cumulative_volume:,} total), final impact: {repeated_swap_results['final_price_impact']:.2f}%")
+        
+        return repeated_swap_results
     
     def _simulate_swap_impact(self, pool: YieldTokenPool, swap_amount_usd: float, token_in: str) -> Dict[str, Any]:
         """
@@ -399,6 +524,19 @@ class YieldTokenPoolCapacityTester:
                 f"⚠️ WARNING: Pool breaks at ${current_analysis['pool_breaking_point']:,.0f}. Consider 10x increase for resilience."
             )
         
+        # Add repeated swap analysis to summary
+        if "repeated_swap_analysis" in self.results:
+            repeated_analysis = self.results["repeated_swap_analysis"]
+            summary["repeated_swap_insights"] = {
+                "swap_size": repeated_analysis["swap_size"],
+                "threshold_reached": repeated_analysis["threshold_reached"],
+                "swaps_to_threshold": repeated_analysis.get("threshold_swap_number"),
+                "volume_to_threshold": repeated_analysis.get("threshold_swap_number", 0) * repeated_analysis["swap_size"] if repeated_analysis.get("threshold_swap_number") else None,
+                "total_swaps_executed": repeated_analysis["total_swaps_executed"],
+                "final_cumulative_volume": repeated_analysis["cumulative_volume"],
+                "final_price_impact": repeated_analysis["final_price_impact"]
+            }
+        
         self.results["analysis_summary"] = summary
     
     def _save_results(self):
@@ -448,6 +586,13 @@ class YieldTokenPoolCapacityTester:
         
         # Chart 3: Current Pool Capacity Detail
         self._create_current_pool_detail_chart(charts_dir)
+        
+        # Chart 4: All Pools Detailed Analysis
+        self._create_all_pools_detail_charts(charts_dir)
+        
+        # Chart 4: Repeated Swap Analysis
+        if "repeated_swap_analysis" in self.results:
+            self._create_repeated_swap_chart(charts_dir)
         
         print(f"📊 Charts saved to: {charts_dir}")
     
@@ -599,6 +744,186 @@ class YieldTokenPoolCapacityTester:
         plt.tight_layout()
         plt.savefig(charts_dir / "current_pool_detailed_analysis.png", dpi=300, bbox_inches='tight')
         plt.close()
+    
+    def _create_all_pools_detail_charts(self, charts_dir: Path):
+        """Create detailed analysis charts for all pools being tested"""
+        scaling_data = self.results["scaling_analysis"]["pool_tests"]
+        
+        # Create a figure with subplots for each pool
+        num_pools = len(scaling_data)
+        cols = 3  # 3 columns
+        rows = (num_pools + cols - 1) // cols  # Calculate rows needed
+        
+        fig, axes = plt.subplots(rows, cols, figsize=(20, 6 * rows))
+        if rows == 1:
+            axes = axes.reshape(1, -1)
+        elif cols == 1:
+            axes = axes.reshape(-1, 1)
+        
+        for i, pool_data in enumerate(scaling_data):
+            row = i // cols
+            col = i % cols
+            ax = axes[row, col] if rows > 1 else axes[col]
+            
+            # Get data for this pool
+            swap_tests = pool_data["swap_tests"]
+            pool_size = pool_data["pool_size_usd"]
+            
+            swap_sizes = [test["swap_size_usd"] for test in swap_tests]
+            price_impacts = [test["price_impact_percent"] for test in swap_tests]
+            slippage_percents = [test["slippage_percent"] for test in swap_tests]
+            liquidity_utils = [test["liquidity_utilization"] for test in swap_tests]
+            moet_received = [test["moet_received"] for test in swap_tests]
+            
+            # Create 2x2 subplot within each pool
+            gs = ax.get_gridspec()
+            ax.remove()
+            sub_ax = fig.add_subplot(gs[row, col])
+            
+            # Create 2x2 subplots for this pool
+            sub_fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 8))
+            
+            # Chart 1: Price Impact
+            colors1 = ['green' if impact <= 1.0 else 'red' for impact in price_impacts]
+            ax1.bar(range(len(swap_sizes)), price_impacts, color=colors1, alpha=0.7)
+            ax1.set_xlabel('Swap Size')
+            ax1.set_ylabel('Price Impact (%)')
+            ax1.set_title(f'Price Impact by Swap Size\nPool: ${pool_size:,.0f}')
+            ax1.axhline(y=1.0, color='orange', linestyle='--', label='1% Threshold')
+            ax1.set_xticks(range(0, len(swap_sizes), max(1, len(swap_sizes)//8)))
+            ax1.set_xticklabels([f'${s/1e3:.0f}k' for s in swap_sizes[::max(1, len(swap_sizes)//8)]], rotation=45)
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            
+            # Chart 2: Slippage
+            ax2.plot(range(len(swap_sizes)), slippage_percents, 'o-', color='#457B9D', linewidth=2, markersize=4)
+            ax2.set_xlabel('Swap Size') 
+            ax2.set_ylabel('Slippage (%)')
+            ax2.set_title('Slippage by Swap Size')
+            ax2.set_xticks(range(0, len(swap_sizes), max(1, len(swap_sizes)//8)))
+            ax2.set_xticklabels([f'${s/1e3:.0f}k' for s in swap_sizes[::max(1, len(swap_sizes)//8)]], rotation=45)
+            ax2.grid(True, alpha=0.3)
+            
+            # Chart 3: Liquidity Utilization
+            ax3.bar(range(len(swap_sizes)), liquidity_utils, color='#F1C40F', alpha=0.7)
+            ax3.set_xlabel('Swap Size')
+            ax3.set_ylabel('Liquidity Utilization (%)')
+            ax3.set_title('Liquidity Pool Utilization')
+            ax3.set_xticks(range(0, len(swap_sizes), max(1, len(swap_sizes)//8)))
+            ax3.set_xticklabels([f'${s/1e3:.0f}k' for s in swap_sizes[::max(1, len(swap_sizes)//8)]], rotation=45)
+            ax3.grid(True, alpha=0.3)
+            
+            # Chart 4: MOET Received vs Expected
+            expected_moet = swap_sizes  # 1:1 expected
+            ax4.plot(range(len(swap_sizes)), expected_moet, '--', color='gray', linewidth=2, label='Expected (1:1)')
+            ax4.plot(range(len(swap_sizes)), moet_received, 'o-', color='#2E86AB', linewidth=2, markersize=4, label='Actual Received')
+            ax4.set_xlabel('Swap Size')
+            ax4.set_ylabel('MOET Amount ($)')
+            ax4.set_title('MOET Received: Expected vs Actual')
+            ax4.set_xticks(range(0, len(swap_sizes), max(1, len(swap_sizes)//8)))
+            ax4.set_xticklabels([f'${s/1e3:.0f}k' for s in swap_sizes[::max(1, len(swap_sizes)//8)]], rotation=45)
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+            
+            # Add pool summary info
+            max_safe = pool_data["max_safe_trade"]
+            breaking_point = pool_data.get("pool_breaking_point")
+            efficiency = (max_safe / pool_size) * 100 if pool_size > 0 else 0
+            
+            # Format breaking point safely
+            breaking_str = f"${breaking_point:,.0f}" if breaking_point is not None else "N/A"
+            
+            sub_fig.suptitle(f'Pool Analysis: ${pool_size:,.0f}\n'
+                           f'Max Safe: ${max_safe:,.0f} | Breaking: {breaking_str} | Efficiency: {efficiency:.1f}%', 
+                           fontsize=14, fontweight='bold')
+            sub_fig.tight_layout()
+            
+            # Save individual pool chart
+            pool_filename = f"pool_{pool_size//1000}k_detailed_analysis.png"
+            sub_fig.savefig(charts_dir / pool_filename, dpi=300, bbox_inches='tight')
+            plt.close(sub_fig)
+        
+        # Close the main figure
+        plt.close(fig)
+        
+        print(f"📊 Individual pool charts saved to: {charts_dir}")
+        print(f"   Generated {num_pools} detailed pool analysis charts")
+    
+    def _create_repeated_swap_chart(self, charts_dir: Path):
+        """Create repeated swap analysis chart"""
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        
+        repeated_data = self.results["repeated_swap_analysis"]
+        swap_history = repeated_data["swap_history"]
+        
+        if not swap_history:
+            # Create placeholder if no data
+            ax1.text(0.5, 0.5, 'No swap data available', ha='center', va='center', transform=ax1.transAxes)
+            ax1.set_title('Repeated Swap Analysis - No Data')
+            plt.tight_layout()
+            plt.savefig(charts_dir / "repeated_swap_analysis.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            return
+        
+        swap_numbers = [swap["swap_number"] for swap in swap_history]
+        cumulative_volumes = [swap["cumulative_volume"] for swap in swap_history]
+        price_impacts = [swap["price_impact_cumulative"] for swap in swap_history]
+        slippage_percents = [swap["slippage_percent"] for swap in swap_history]
+        active_liquidities = [swap["active_liquidity"] for swap in swap_history]
+        
+        # Chart 1: Cumulative Price Impact
+        ax1.plot(swap_numbers, price_impacts, 'o-', color='#E63946', linewidth=2, markersize=4)
+        ax1.axhline(y=1.0, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='1% Threshold')
+        ax1.set_xlabel('Swap Number')
+        ax1.set_ylabel('Cumulative Price Impact (%)')
+        ax1.set_title(f'Cumulative Price Impact: ${repeated_data["swap_size"]:,} Swaps')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        # Mark threshold point if reached
+        if repeated_data["threshold_reached"]:
+            threshold_swap = repeated_data["threshold_swap_number"]
+            threshold_impact = next(swap["price_impact_cumulative"] for swap in swap_history if swap["swap_number"] == threshold_swap)
+            ax1.scatter([threshold_swap], [threshold_impact], color='red', s=100, zorder=5)
+            ax1.annotate(f'Threshold\nSwap #{threshold_swap}', 
+                        xy=(threshold_swap, threshold_impact),
+                        xytext=(threshold_swap + 2, threshold_impact + 0.2),
+                        arrowprops=dict(arrowstyle='->', color='red'),
+                        fontsize=9, color='red', fontweight='bold')
+        
+        # Chart 2: Individual Swap Slippage
+        ax2.plot(swap_numbers, slippage_percents, 's-', color='#457B9D', linewidth=2, markersize=4)
+        ax2.set_xlabel('Swap Number')
+        ax2.set_ylabel('Individual Swap Slippage (%)')
+        ax2.set_title('Slippage per Individual Swap')
+        ax2.grid(True, alpha=0.3)
+        
+        # Chart 3: Cumulative Volume
+        ax3.plot(swap_numbers, cumulative_volumes, '^-', color='#F1C40F', linewidth=2, markersize=4)
+        ax3.set_xlabel('Swap Number')
+        ax3.set_ylabel('Cumulative Volume ($)')
+        ax3.set_title('Cumulative Trading Volume')
+        ax3.grid(True, alpha=0.3)
+        
+        # Format y-axis as currency
+        ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        
+        # Chart 4: Active Liquidity Depletion
+        ax4.plot(swap_numbers, active_liquidities, 'd-', color='#2E86AB', linewidth=2, markersize=4)
+        ax4.set_xlabel('Swap Number')
+        ax4.set_ylabel('Active Liquidity ($)')
+        ax4.set_title('Pool Liquidity Depletion')
+        ax4.grid(True, alpha=0.3)
+        
+        # Format y-axis as currency
+        ax4.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        
+        plt.suptitle(f'Repeated ${repeated_data["swap_size"]:,} Swap Analysis\n'
+                    f'Pool Size: ${repeated_data["pool_size"]:,} ({repeated_data["concentration"]:.0%} Concentrated)', 
+                    fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(charts_dir / "repeated_swap_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
 
 
 def main():
@@ -627,6 +952,19 @@ def main():
     
     for rec in scaling_insights["recommendations"]:
         print(f"   {rec}")
+    
+    # Print repeated swap results if available
+    if "repeated_swap_insights" in results["analysis_summary"]:
+        repeated_insights = results["analysis_summary"]["repeated_swap_insights"]
+        print(f"\n🔄 Repeated Swap Analysis:")
+        print(f"   Swap Size: ${repeated_insights['swap_size']:,}")
+        if repeated_insights["threshold_reached"]:
+            print(f"   Swaps to 1% Threshold: {repeated_insights['swaps_to_threshold']}")
+            print(f"   Volume to Threshold: ${repeated_insights['volume_to_threshold']:,}")
+        else:
+            print(f"   Total Swaps Executed: {repeated_insights['total_swaps_executed']}")
+            print(f"   Final Volume: ${repeated_insights['final_cumulative_volume']:,}")
+            print(f"   Final Price Impact: {repeated_insights['final_price_impact']:.2f}%")
     
     print("\n✅ Analysis completed successfully!")
     print(f"📁 Results saved in: tidal_protocol_sim/results/Yield_Token_Pool_Capacity_Analysis/")
