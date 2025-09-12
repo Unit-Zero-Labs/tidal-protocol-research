@@ -1,7 +1,7 @@
 ---
 title: "MOET:YT Pool Swap Efficiency Analysis"
 subtitle: "Concentrated Liquidity Performance Under Rebalancing Scenarios"
-author: "Tidal Protocol Research"
+author: "Unit Zero Labs"
 date: "September 11, 2025"
 geometry: margin=1in
 fontsize: 11pt
@@ -190,16 +190,14 @@ Based on the analysis, the following capacity guidelines are recommended:
 
 ## Uniswap V3 Mathematics
 
-The analysis confirms proper implementation of Uniswap V3 concentrated liquidity mathematics:
-
 - **Tick-based Pricing:** Accurate price calculations using sqrt price representation
 - **Liquidity Distribution:** Proper allocation across discrete ranges
-- **Cross-tick Swaps:** Correct handling of swaps that cross multiple liquidity ranges
+- **Cross-tick Swaps:** Handling of swaps that cross multiple liquidity ranges
 - **Slippage Calculation:** Accurate cost estimation based on pool state
 
 ## Pool State Management
 
-The test results validate robust pool state management:
+The test results validate pool state management:
 
 - **Position Tracking:** Accurate monitoring of liquidity across all ranges
 - **State Persistence:** Proper maintenance of cumulative effects in consecutive tests
@@ -210,7 +208,7 @@ The test results validate robust pool state management:
 
 # Conclusion
 
-The $250,000:$250,000 MOET:YT pool with 95% concentrated liquidity demonstrates robust performance characteristics suitable for production DeFi applications. The analysis reveals clear capacity limits and performance patterns that enable effective risk management and trading optimization.
+The $250,000:$250,000 MOET:YT pool with 95% concentrated liquidity demonstrates  performance characteristics suitable for production DeFi applications. The analysis reveals clear capacity limits and performance patterns that enable effective risk management and trading optimization.
 
 ## Key Takeaways
 

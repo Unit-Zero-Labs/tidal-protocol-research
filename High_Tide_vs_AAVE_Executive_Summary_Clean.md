@@ -1,7 +1,7 @@
 ---
 title: "High Tide vs AAVE: Executive Summary"
 subtitle: "Automated Rebalancing Delivers 99.8% Cost Savings Over Traditional Liquidations"
-author: "Tidal Protocol Research"
+author: "Unit Zero Labs"
 date: "September 11, 2025"
 geometry: margin=1in
 fontsize: 11pt
@@ -159,7 +159,7 @@ We simulated a severe market crash:
 **3. Optimal Execution**
 
 - **Concentrated liquidity pools** (95% liquidity within ±1% of peg)
-- **Minimal slippage** due to proper Uniswap V3 mathematics
+- **Minimal slippage** leveraging Uniswap v3 mechanics
 - **Gradual rebalancing** prevents market impact
 
 **4. Position Preservation**
@@ -203,10 +203,8 @@ If BTC recovers to $90,000 (18% gain from $76,342):
 
 ## Simulation Accuracy
 
-Our analysis uses **production-grade DeFi mathematics**:
-
 - **Concentrated liquidity** calculations with realistic tick-based pricing
-- **Actual slippage costs** based on real pool mechanics
+- **Accurate slippage costs** based on pool mechanics
 - **Standard fee structures** (0.05% for stable pairs, 0.3% for volatile pairs)
 - **Shared liquidity pools** - multiple agents compete for the same resources
 
@@ -221,7 +219,7 @@ Our analysis uses **production-grade DeFi mathematics**:
 
 # Conclusion
 
-High Tide's automated rebalancing delivers **transformational improvements** over traditional liquidation systems:
+High Tide's automated rebalancing delivers **significant improvements** over traditional liquidation systems:
 
 ## Financial Impact
 

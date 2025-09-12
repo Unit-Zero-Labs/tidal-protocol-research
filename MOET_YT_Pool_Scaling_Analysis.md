@@ -1,7 +1,7 @@
 ---
 title: "MOET:YT Pool Scaling Analysis"
 subtitle: "Concentrated Liquidity Performance Across Pool Sizes"
-author: "Tidal Protocol Research"
+author: "Unit Zero Labs"
 date: "September 11, 2025"
 geometry: margin=1in
 fontsize: 11pt
@@ -199,11 +199,9 @@ The analysis reveals consistent utilization patterns across all pool sizes:
 
 ## Uniswap V3 Mathematics
 
-The analysis confirms proper implementation of Uniswap V3 concentrated liquidity mathematics across all pool sizes:
-
 - **Tick-based Pricing:** Accurate price calculations using sqrt price representation
 - **Liquidity Distribution:** Proper allocation across discrete ranges
-- **Cross-tick Swaps:** Correct handling of swaps that cross multiple liquidity ranges
+- **Cross-tick Swaps:** Handling of swaps that cross multiple liquidity ranges
 - **Slippage Calculation:** Accurate cost estimation based on pool state
 
 ## Pool State Management
