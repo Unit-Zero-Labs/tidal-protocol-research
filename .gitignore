@@ -87,10 +87,7 @@ tidal_protocol_sim/results/
 *.temp
 *.log
 
-# Analysis outputs
-*.pdf
-!**/documentation*.pdf
-!**/whitepaper*.pdf
+
 
 # Backup files
 *.bak
