@@ -13,6 +13,30 @@ from .protocol import Asset
 from .uniswap_v3_math import create_yield_token_pool, UniswapV3SlippageCalculator
 
 
+def calculate_true_yield_token_price(current_minute: int, apr: float = 0.10, initial_price: float = 1.0) -> float:
+    """
+    Calculate the true yield token price at any point in time based on APR
+    
+    This is the "oracle" price that pool rebalancers use as their target.
+    Yield tokens start at $1.00 and appreciate continuously at the specified APR.
+    
+    Args:
+        current_minute: Current simulation minute
+        apr: Annual Percentage Rate (default 0.10 for 10%)
+        initial_price: Initial token price (default 1.0)
+    
+    Returns:
+        True yield token price including accrued yield
+    """
+    if current_minute <= 0:
+        return initial_price
+        
+    # Convert APR to per-minute rate: APR * (minutes_elapsed / minutes_per_year)
+    minutes_per_year = 365 * 24 * 60  # 525,600 minutes per year
+    minute_rate = apr * (current_minute / minutes_per_year)
+    return initial_price * (1 + minute_rate)
+
+
 @dataclass
 class YieldToken:
     """Individual yield token with continuous yield accrual (rebasing)"""
@@ -264,12 +288,16 @@ class YieldTokenPool:
     Now leverages sophisticated Uniswap V3 concentrated liquidity mathematics.
     """
     
-    def __init__(self, initial_moet_reserve: float = 250_000.0, concentration: float = 0.95):
-        # Create the underlying Uniswap V3 pool
-        pool_size_usd = initial_moet_reserve * 2  # Total pool size (both sides)
+    def __init__(self, total_pool_size: float, token0_ratio: float, concentration: float = 0.95):
+        # Validate inputs
+        if not (0.1 <= token0_ratio <= 0.9):
+            raise ValueError(f"token0_ratio must be between 0.1 and 0.9, got {token0_ratio}")
+        
+        # Create the underlying Uniswap V3 pool with asymmetric ratio
         self.uniswap_pool = create_yield_token_pool(
-            pool_size_usd=pool_size_usd,
-            concentration=concentration
+            pool_size_usd=total_pool_size,
+            concentration=concentration,
+            token0_ratio=token0_ratio
         )
         
         # Create slippage calculator for accurate cost calculations
@@ -280,6 +308,8 @@ class YieldTokenPool:
         
         # Store configuration
         self.concentration = concentration
+        self.token0_ratio = token0_ratio
+        self.total_pool_size = total_pool_size
     
     def _update_legacy_properties(self):
         """Update legacy properties for backward compatibility"""
@@ -374,6 +404,13 @@ class YieldTokenPool:
             
             # Convert back to USD amounts
             moet_received = amount_out_actual / 1e6
+            
+            # Check if swap was successful (got meaningful output)
+            if moet_received <= 0:
+                print(f"🚨 Yield token sale failed: Pool liquidity exhausted")
+                print(f"   Requested: ${yield_token_value:,.2f} YT -> MOET")
+                print(f"   Received: ${moet_received:,.2f} MOET (insufficient liquidity)")
+                return 0.0
             
             # Swap completed successfully
             

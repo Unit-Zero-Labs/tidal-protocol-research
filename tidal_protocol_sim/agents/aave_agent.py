@@ -17,13 +17,13 @@ from ..core.uniswap_v3_math import calculate_liquidation_cost_with_slippage
 
 
 class AaveAgentState(HighTideAgentState):
-    """Extended agent state for AAVE-style scenario - same as High Tide but no rebalancing"""
+    """Extended agent state for AAVE-style scenario with tri-health factor system (no rebalancing)"""
     
-    def __init__(self, agent_id: str, initial_balance: float, initial_hf: float, target_hf: float):
-        # Initialize exactly like High Tide agent
-        super().__init__(agent_id, initial_balance, initial_hf, target_hf)
+    def __init__(self, agent_id: str, initial_balance: float, initial_hf: float, rebalancing_hf: float, target_hf: float):
+        # Initialize exactly like High Tide agent with tri-health factor system
+        super().__init__(agent_id, initial_balance, initial_hf, rebalancing_hf, target_hf)
         
-        # Override to disable automatic rebalancing
+        # Override to disable automatic rebalancing (health factors kept for comparison only)
         self.automatic_rebalancing = False
         
         # Track liquidation events
@@ -37,11 +37,16 @@ class AaveAgent(BaseAgent):
     AAVE-style agent with traditional liquidation mechanism (no auto-rebalancing)
     """
     
-    def __init__(self, agent_id: str, initial_hf: float, target_hf: float, initial_balance: float = 100_000.0):
+    def __init__(self, agent_id: str, initial_hf: float, rebalancing_hf: float, target_hf: float = None, initial_balance: float = 100_000.0):
         super().__init__(agent_id, "aave_agent", initial_balance)
         
-        # Replace state with AaveAgentState (same parameters as High Tide)
-        self.state = AaveAgentState(agent_id, initial_balance, initial_hf, target_hf)
+        # Handle backward compatibility: if target_hf is None, use rebalancing_hf as target (old 2-factor system)
+        if target_hf is None:
+            target_hf = rebalancing_hf
+            print(f"⚠️  Warning: {agent_id} using 2-factor compatibility mode. Consider updating to tri-health factor system.")
+        
+        # Replace state with AaveAgentState (tri-health factor system but no rebalancing)
+        self.state = AaveAgentState(agent_id, initial_balance, initial_hf, rebalancing_hf, target_hf)
         
         # Risk profile based on initial health factor (same as High Tide)
         if initial_hf >= 2.1:
@@ -300,7 +305,12 @@ class AaveAgent(BaseAgent):
 
 def create_aave_agents(num_agents: int, monte_carlo_variation: bool = True) -> list:
     """
-    Create AAVE agents with SAME risk profile distribution as High Tide agents
+    Create AAVE agents with SAME risk profile distribution as High Tide agents using tri-health factor system
+    
+    Tri-Health Factor System (for comparison only - AAVE doesn't rebalance):
+    - Initial HF: Starting position health
+    - Rebalancing HF: Not used by AAVE (kept for comparison)
+    - Target HF: Not used by AAVE (kept for comparison)
     
     This ensures fair comparison between High Tide and AAVE strategies
     """
@@ -320,13 +330,17 @@ def create_aave_agents(num_agents: int, monte_carlo_variation: bool = True) -> l
     # Create conservative agents (same parameters as High Tide)
     for i in range(conservative_count):
         initial_hf = random.uniform(2.1, 2.4)
-        # Conservative: Small buffer (0.05-0.15 below initial)
-        target_hf = initial_hf - random.uniform(0.05, 0.15)
+        # Conservative: Small rebalancing buffer (0.05-0.15 below initial)
+        rebalancing_hf = initial_hf - random.uniform(0.05, 0.15)
+        rebalancing_hf = max(rebalancing_hf, 1.1)  # Minimum rebalancing HF is 1.1
+        # Target HF: Small safety buffer above rebalancing HF
+        target_hf = rebalancing_hf + random.uniform(0.01, 0.05)
         target_hf = max(target_hf, 1.1)  # Minimum target HF is 1.1
         
         agent = AaveAgent(
             f"aave_conservative_{agent_id}",
             initial_hf,
+            rebalancing_hf,
             target_hf
         )
         agents.append(agent)
@@ -335,13 +349,17 @@ def create_aave_agents(num_agents: int, monte_carlo_variation: bool = True) -> l
     # Create moderate agents (same parameters as High Tide)
     for i in range(moderate_count):
         initial_hf = random.uniform(1.5, 1.8)
-        # Moderate: Medium buffer (0.15-0.25 below initial)
-        target_hf = initial_hf - random.uniform(0.15, 0.25)
+        # Moderate: Medium rebalancing buffer (0.15-0.25 below initial)
+        rebalancing_hf = initial_hf - random.uniform(0.15, 0.25)
+        rebalancing_hf = max(rebalancing_hf, 1.1)  # Minimum rebalancing HF is 1.1
+        # Target HF: Small safety buffer above rebalancing HF
+        target_hf = rebalancing_hf + random.uniform(0.01, 0.05)
         target_hf = max(target_hf, 1.1)  # Minimum target HF is 1.1
         
         agent = AaveAgent(
             f"aave_moderate_{agent_id}",
             initial_hf,
+            rebalancing_hf,
             target_hf
         )
         agents.append(agent)
@@ -350,13 +368,17 @@ def create_aave_agents(num_agents: int, monte_carlo_variation: bool = True) -> l
     # Create aggressive agents (same parameters as High Tide)
     for i in range(aggressive_count):
         initial_hf = random.uniform(1.3, 1.5)
-        # Aggressive: Larger buffer (0.15-0.4 below initial)
-        target_hf = initial_hf - random.uniform(0.15, 0.4)
+        # Aggressive: Larger rebalancing buffer (0.15-0.4 below initial)
+        rebalancing_hf = initial_hf - random.uniform(0.15, 0.4)
+        rebalancing_hf = max(rebalancing_hf, 1.1)  # Minimum rebalancing HF is 1.1
+        # Target HF: Small safety buffer above rebalancing HF
+        target_hf = rebalancing_hf + random.uniform(0.01, 0.05)
         target_hf = max(target_hf, 1.1)  # Minimum target HF is 1.1
         
         agent = AaveAgent(
             f"aave_aggressive_{agent_id}",
             initial_hf,
+            rebalancing_hf,
             target_hf
         )
         agents.append(agent)

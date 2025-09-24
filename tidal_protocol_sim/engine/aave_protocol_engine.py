@@ -33,6 +33,8 @@ class AaveConfig(TidalConfig):
         # Yield token parameters (for fair comparison)
         self.yield_apr = 0.10  # 10% APR
         self.moet_btc_pool_size = 500_000  # Same as Tidal for comparison
+        self.yield_token_concentration = 0.95  # 95% concentration for MOET:Yield Tokens
+        self.yield_token_ratio = 0.5  # Default to 50/50 MOET:YT ratio (will be overridden by config)
         
         # Uniswap V3 pool parameters (inherited from TidalConfig)
         self.moet_btc_concentration = 0.80  # 80% concentration around BTC price
@@ -65,7 +67,16 @@ class AaveProtocolEngine(TidalProtocolEngine):
         self._setup_aave_liquidation_pools()
         
         # Initialize AAVE specific components
-        self.yield_token_pool = YieldTokenPool(config.moet_btc_pool_size)
+        # Convert old interface to new interface
+        total_pool_size = config.moet_btc_pool_size * 2  # Convert from single-side to total
+        token0_ratio = getattr(config, 'yield_token_ratio', 0.5)  # Use configured ratio or default to 50/50
+        concentration = getattr(config, 'yield_token_concentration', 0.95)  # Use configured concentration or default
+        
+        self.yield_token_pool = YieldTokenPool(
+            total_pool_size=total_pool_size,
+            token0_ratio=token0_ratio,
+            concentration=concentration
+        )
         self.btc_price_manager = BTCPriceDeclineManager(
             initial_price=config.btc_initial_price,
             duration=config.btc_decline_duration,

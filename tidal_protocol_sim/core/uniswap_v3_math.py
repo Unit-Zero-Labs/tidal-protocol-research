@@ -504,6 +504,7 @@ class UniswapV3Pool:
     fee_tier: float = None  # Will be set based on pool type
     concentration: float = None  # Will be set based on pool type
     tick_spacing: int = None  # Will be set based on pool type
+    token0_ratio: float = 0.5  # Ratio of token0 (MOET) in the pool (0.5 = 50/50, 0.75 = 75/25)
     
     # Core Uniswap V3 state
     sqrt_price_x96: int = Q96  # Current sqrt price in Q64.96 format
@@ -527,6 +528,11 @@ class UniswapV3Pool:
     
     def __post_init__(self):
         """Initialize Uniswap V3 pool with proper tick-based math"""
+        # Validate token0_ratio
+        self._validate_token0_ratio()
+        
+        # Enable debug mode for liquidity tracking
+        self.debug_liquidity = False  # Disable for clean simulation output
         # Initialize tick and position data structures
         self.ticks = {} if self.ticks is None else self.ticks
         self.positions = [] if self.positions is None else self.positions
@@ -593,6 +599,17 @@ class UniswapV3Pool:
         # Calculate legacy fields for backward compatibility
         self._update_legacy_fields()
     
+    def _validate_token0_ratio(self):
+        """Validate token0_ratio is within acceptable bounds"""
+        if not (0.1 <= self.token0_ratio <= 0.9):
+            raise ValueError(f"token0_ratio must be between 0.1 and 0.9, got {self.token0_ratio}")
+        
+        if self.token0_ratio < 0.1:
+            raise ValueError("token0_ratio too low: minimum 10% allocation required for token0 (MOET)")
+        
+        if self.token0_ratio > 0.9:
+            raise ValueError("token0_ratio too high: minimum 10% allocation required for token1")
+    
     def _initialize_concentrated_positions(self):
         """Initialize concentrated liquidity positions using proper Uniswap V3 math"""
         if self.concentration_type == "moet_btc":
@@ -657,6 +674,18 @@ class UniswapV3Pool:
         total_liquidity_amount = int(self.total_liquidity * 1e6)
         concentrated_liquidity = int(total_liquidity_amount * self.concentration)
         
+        # Check if we should use symmetric or asymmetric initialization
+        if abs(self.token0_ratio - 0.5) < 0.01:  # Close to 50/50, use symmetric logic
+            self._initialize_symmetric_yield_token_positions()
+        else:
+            # Use asymmetric bounds calculation for non-50/50 ratios
+            self._initialize_asymmetric_yield_token_positions()
+    
+    def _initialize_symmetric_yield_token_positions(self):
+        """Initialize symmetric 50/50 yield token positions (fallback logic)"""
+        total_liquidity_amount = int(self.total_liquidity * 1e6)
+        concentrated_liquidity = int(total_liquidity_amount * self.concentration)
+        
         # Position 1: Tight range around 1:1 peg (±1% = ~100 ticks)
         peg_tick = self.tick_current  # Should be 0 for 1:1 peg
         tick_range = 100  # Approximately 1% price range
@@ -685,17 +714,104 @@ class UniswapV3Pool:
                 proper_concentrated_liquidity = concentrated_liquidity  # Fallback
                 
             self._add_position(tick_lower, tick_upper, proper_concentrated_liquidity)
+    
+    def _initialize_asymmetric_yield_token_positions(self):
+        """Initialize asymmetric yield token positions using your step-by-step computation"""
+        import math
+        
+        total_liquidity_amount = int(self.total_liquidity * 1e6)
+        concentrated_liquidity_usd = self.total_liquidity * self.concentration
+        
+        # Step 1: Fix upper bound at +1%
+        P_upper = 1.01
+        b = math.sqrt(P_upper)
+        
+        # Step 2: Solve for lower bound to get desired ratio
+        R = self.token0_ratio / (1 - self.token0_ratio)  # e.g., 75/25 = 3
+        x = 1  # Current sqrt price at peg
+        a = 1 - (b - 1) / (R * b)
+        
+        # Step 3: Convert to price bounds
+        P_lower = a ** 2
+        
+        # Step 4: Calculate coefficients and liquidity
+        coeff_0 = (b - 1) / b  # MOET coefficient
+        coeff_1 = 1 - a        # YT coefficient
+        coeff_sum = coeff_0 + coeff_1
+        
+        if coeff_sum <= 0:
+            raise ValueError(f"Invalid coefficient sum {coeff_sum} for token0_ratio {self.token0_ratio}")
+        
+        L = concentrated_liquidity_usd / coeff_sum
+        
+        # Step 5: Calculate actual token amounts
+        amount_0 = L * coeff_0  # MOET amount
+        amount_1 = L * coeff_1  # YT amount
+        
+        # Convert bounds to ticks
+        tick_lower_exact = math.log(P_lower) / math.log(1.0001)
+        tick_upper_exact = math.log(P_upper) / math.log(1.0001)
+        
+        # Smart rounding: try both directions and pick the one closest to target ratio
+        def test_ratio(tick_l, tick_u):
+            price_l = 1.0001 ** tick_l
+            price_u = 1.0001 ** tick_u
+            b_test = math.sqrt(price_u)
+            a_test = math.sqrt(price_l)
+            coeff_0_test = (b_test - 1) / b_test
+            coeff_1_test = 1 - a_test
+            return coeff_0_test / (coeff_0_test + coeff_1_test)
+        
+        # Generate rounding options
+        lower_down = (int(tick_lower_exact) // self.tick_spacing) * self.tick_spacing
+        lower_up = lower_down + self.tick_spacing
+        upper_down = (int(tick_upper_exact) // self.tick_spacing) * self.tick_spacing
+        upper_up = upper_down + self.tick_spacing
+        
+        # Test combinations and pick best
+        options = [(lower_down, upper_down), (lower_up, upper_up), 
+                  (lower_down, upper_up), (lower_up, upper_down)]
+        
+        best_deviation = float('inf')
+        tick_lower, tick_upper = options[0]  # fallback
+        
+        for tick_l, tick_u in options:
+            if tick_l < tick_u:  # valid range
+                ratio = test_ratio(tick_l, tick_u)
+                deviation = abs(ratio - self.token0_ratio)
+                if deviation < best_deviation:
+                    best_deviation = deviation
+                    tick_lower, tick_upper = tick_l, tick_u
+        
+        # Ensure valid bounds
+        tick_lower = max(MIN_TICK + self.tick_spacing, tick_lower)
+        tick_upper = min(MAX_TICK - self.tick_spacing, tick_upper)
+        
+        if tick_lower < tick_upper:
+            # Calculate proper concentrated liquidity using Uniswap V3 math
+            sqrt_price_current_x96 = self.sqrt_price_x96
+            sqrt_price_lower_x96 = tick_to_sqrt_price_x96(tick_lower)
+            amount1_scaled = int(amount_1 * 1e6)
+            denominator = sqrt_price_current_x96 - sqrt_price_lower_x96
+            if denominator > 0:
+                proper_concentrated_liquidity = mul_div(amount1_scaled, Q96, denominator)
+            else:
+                # Fallback calculation
+                proper_concentrated_liquidity = int(concentrated_liquidity_usd * 1e6)
+                
+            self._add_position(tick_lower, tick_upper, proper_concentrated_liquidity)
         
         # Position 2: Backup liquidity positions (outside concentrated range)
-        # Calculate backup amounts using the same percentage approach as concentrated
-        total_amount0 = self.total_liquidity / 2  # $250k MOET  
-        total_amount1 = self.total_liquidity / 2  # $250k YT
-        backup_amount0 = total_amount0 * (1 - self.concentration)  # 5% of $250k = $12.5k
-        backup_amount1 = total_amount1 * (1 - self.concentration)  # 5% of $250k = $12.5k
+        # Calculate backup amounts using the configured ratio
+        total_amount0 = self.total_liquidity * self.token0_ratio  # e.g., $375k MOET for 75%
+        total_amount1 = self.total_liquidity * (1 - self.token0_ratio)  # e.g., $125k YT for 25%
+        backup_amount0 = total_amount0 * (1 - self.concentration)  # e.g., 5% of $375k = $18.75k
+        backup_amount1 = total_amount1 * (1 - self.concentration)  # e.g., 5% of $125k = $6.25k
         
         # Calculate backup liquidity using proper Uniswap V3 math for each range
         if backup_amount0 > 0 and backup_amount1 > 0:
             wide_tick_range = 1000  # Approximately 10% price range
+            peg_tick = self.tick_current  # Should be 0 for 1:1 peg
             
             # Create two separate positions outside the concentrated range
             # Position 2a: Below concentrated range (-1000 to -100)
@@ -920,11 +1036,11 @@ class UniswapV3Pool:
             
             # Update swap state
             if exact_input:
-                state['amount_specified_remaining'] -= (amount_in + fee_amount)
+                state['amount_specified_remaining'] -= amount_in  # Fee already deducted in compute_swap_step
                 state['amount_calculated'] -= amount_out
             else:
                 state['amount_specified_remaining'] += amount_out
-                state['amount_calculated'] += (amount_in + fee_amount)
+                state['amount_calculated'] += amount_in  # Fee already deducted in compute_swap_step
             
             # Update price
             state['sqrt_price_x96'] = sqrt_price_after_step
@@ -955,12 +1071,13 @@ class UniswapV3Pool:
             
             # Safety check: ensure liquidity remains positive
             if state['liquidity'] <= 0:
-                if self.debug_cross_tick:
-                    print(f"Liquidity exhausted ({state['liquidity']}), exiting swap at iteration {iteration_count}")
-                # Try to find liquidity at current position
-                state['liquidity'] = max(1, self._calculate_liquidity_at_tick(state['tick']))
-                if state['liquidity'] <= 1:
-                    break
+                if hasattr(self, 'debug_liquidity') and self.debug_liquidity:
+                    print(f"🚨 LIQUIDITY EXHAUSTED: {state['liquidity']} at iteration {iteration_count}")
+                    print(f"   Pool: {self.pool_name}")
+                    print(f"   TRADE FAILED - Pool limits reached")
+                # CRITICAL FIX: When liquidity is exhausted, FAIL the trade
+                # Do not create artificial liquidity - respect pool limits
+                break
         
         # Warn if we hit the iteration limit
         if iteration_count >= self.max_swap_iterations:
@@ -1058,8 +1175,9 @@ class UniswapV3Pool:
     
     def get_total_active_liquidity(self) -> float:
         """Get total liquidity across all active positions"""
-        total_liquidity = sum(position.liquidity for position in self.positions)
-        return total_liquidity / 1e6  # Convert back to USD
+        # Return the configured total liquidity in USD
+        # The raw position.liquidity values are Uniswap V3 mathematical units, not USD amounts
+        return self.total_liquidity
     
     def get_liquidity_distribution(self) -> Tuple[List[float], List[float]]:
         """Get price and liquidity arrays for charting"""
@@ -1185,24 +1303,15 @@ class UniswapV3Pool:
     
     def _update_legacy_fields(self):
         """Update legacy fields for backward compatibility"""
-        # For yield token pools, calculate reserves based on current price and liquidity
+        # For yield token pools, calculate reserves based on configured ratio
         if "Yield_Token" in self.pool_name:
-            # Calculate reserves based on current pool state and price
-            current_price = self.get_price()  # YT price in MOET terms
             total_liquidity_usd = self.get_total_active_liquidity()
             
-            # Split liquidity based on current price ratio
-            # If price > 1, yield tokens are more expensive, so fewer YT in pool
-            if current_price > 0:
-                # Reserve split based on price: more expensive token has less quantity
-                self.token0_reserve = total_liquidity_usd / (1 + current_price)  # MOET reserve
-                self.token1_reserve = total_liquidity_usd - self.token0_reserve   # YT reserve
-            else:
-                # Fallback to 50/50 split
-                self.token0_reserve = total_liquidity_usd / 2
-                self.token1_reserve = total_liquidity_usd / 2
+            # Use configured ratio instead of price-based calculation
+            self.token0_reserve = total_liquidity_usd * self.token0_ratio  # MOET reserve
+            self.token1_reserve = total_liquidity_usd * (1 - self.token0_ratio)  # YT reserve
         else:
-            # For other pools, use the original method
+            # For BTC pools, use the original method (50/50 split)
             total_active_liquidity = self.get_total_active_liquidity()
             self.token0_reserve = total_active_liquidity / 2  # MOET reserve
             self.token1_reserve = total_active_liquidity / 2  # BTC reserve
@@ -1540,13 +1649,14 @@ def create_moet_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, con
     )
 
 
-def create_yield_token_pool(pool_size_usd: float, concentration: float = 0.95) -> UniswapV3Pool:
+def create_yield_token_pool(pool_size_usd: float, concentration: float = 0.95, token0_ratio: float = 0.5) -> UniswapV3Pool:
     """
     Create a MOET:Yield Token Uniswap v3 pool with concentrated liquidity
     
     Args:
         pool_size_usd: Total pool size in USD
         concentration: Liquidity concentration level (0.95 = 95% at peg)
+        token0_ratio: Ratio of token0 (MOET) in the pool (0.5 = 50/50, 0.75 = 75/25)
         
     Returns:
         UniswapV3Pool instance with concentrated liquidity positions
@@ -1556,7 +1666,8 @@ def create_yield_token_pool(pool_size_usd: float, concentration: float = 0.95) -
         pool_name="MOET:Yield_Token",
         total_liquidity=pool_size_usd,
         btc_price=100_000.0,  # Default value, not used for yield tokens
-        concentration=concentration
+        concentration=concentration,
+        token0_ratio=token0_ratio
         # fee_tier and tick_spacing will be set automatically based on pool type
     )
 

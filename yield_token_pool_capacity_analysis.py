@@ -92,6 +92,11 @@ class YieldTokenPoolCapacityTester:
         self.concentration = 0.95  # 95% concentration at peg
         self.price_impact_threshold = 0.01  # 1% price impact threshold
         
+        # Pool rebalancing/arbitrage configuration
+        self.enable_pool_arbing = False  # Default to False for backward compatibility
+        self.alm_rebalance_interval_minutes = 720  # 12 hours for ALM rebalancer
+        self.algo_deviation_threshold_bps = 50.0  # 50 basis points for Algo rebalancer
+        
     def run_comprehensive_analysis(self) -> Dict[str, Any]:
         """Run comprehensive pool capacity analysis"""
         print("🔍 YIELD TOKEN POOL CAPACITY ANALYSIS")
@@ -140,9 +145,14 @@ class YieldTokenPoolCapacityTester:
         print(f"   Testing pool size: ${pool_size_usd:,.0f}:${pool_size_usd:,.0f} (${pool_size_usd*2:,.0f} total)")
         
         # Create fresh pool for testing
-        # pool_size_usd represents the MOET reserve size (each side)
+        # pool_size_usd represents the MOET reserve size for backwards compatibility
+        # Convert to new format: total pool size and token ratio
+        total_pool_size = pool_size_usd * 2  # Convert from single-side to total pool size
+        token0_ratio = 0.75  # Use 75% MOET, 25% YT ratio
+        
         pool = YieldTokenPool(
-            initial_moet_reserve=pool_size_usd,  # Full MOET reserve amount
+            total_pool_size=total_pool_size,
+            token0_ratio=token0_ratio,
             concentration=self.concentration
         )
         
@@ -241,8 +251,12 @@ class YieldTokenPoolCapacityTester:
         
         # Test each threshold against the target $250k pool
         pool_size = 250_000
+        total_pool_size = pool_size * 2  # Convert to total pool size
+        token0_ratio = 0.75  # Use 75% MOET, 25% YT ratio
+        
         pool = YieldTokenPool(
-            initial_moet_reserve=pool_size,
+            total_pool_size=total_pool_size,
+            token0_ratio=token0_ratio,
             concentration=self.concentration
         )
         
@@ -285,8 +299,12 @@ class YieldTokenPoolCapacityTester:
         print(f"   Testing repeated ${swap_size:,} swaps on ${pool_size:,} pool...")
         
         # Create fresh pool for testing
+        total_pool_size = pool_size * 2  # Convert to total pool size
+        token0_ratio = 0.75  # Use 75% MOET, 25% YT ratio
+        
         pool = YieldTokenPool(
-            initial_moet_reserve=pool_size,
+            total_pool_size=total_pool_size,
+            token0_ratio=token0_ratio,
             concentration=self.concentration
         )
         

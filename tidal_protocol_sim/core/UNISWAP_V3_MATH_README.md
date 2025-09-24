@@ -173,6 +173,7 @@ class UniswapV3Pool:
     fee_tier: float = None  # Will be set based on pool type
     concentration: float = None  # Will be set based on pool type
     tick_spacing: int = None  # Will be set based on pool type
+    token0_ratio: float = 0.5  # Ratio of token0 (MOET) in the pool
     
     # Core Uniswap V3 state
     sqrt_price_x96: int = Q96  # Current sqrt price in Q64.96 format
@@ -207,7 +208,8 @@ class UniswapV3Pool:
 - **Fee Tier**: 0.05% (500 pips)
 - **Tick Spacing**: 10
 - **Concentration**: 95% around peg
-- **Use Case**: Stable, highly correlated assets
+- **Token Ratio**: Configurable (e.g., 75% MOET, 25% YT)
+- **Use Case**: Stable, highly correlated assets with asymmetric bounds
 
 ### Liquidity Position Management
 
@@ -530,13 +532,14 @@ def create_moet_btc_pool():
 ### Yield Token Pool Configuration
 
 ```python
-def create_yield_token_pool():
+def create_yield_token_pool(pool_size_usd: float, concentration: float = 0.95, token0_ratio: float = 0.5):
     """
     Create a MOET:Yield Token Uniswap v3 pool with concentrated liquidity
     
     - 95% liquidity concentrated around 1:1 peg
     - 0.05% fee tier for stable pairs
     - Tick spacing of 10 for tight price control
+    - Configurable token ratios with asymmetric bounds
     """
 ```
 
@@ -552,10 +555,11 @@ pool = create_moet_btc_pool(
     concentration=0.80
 )
 
-# Create a $1M yield token pool
+# Create a $1M yield token pool with 75/25 ratio
 yt_pool = create_yield_token_pool(
     pool_size_usd=1_000_000,
-    concentration=0.95
+    concentration=0.95,
+    token0_ratio=0.75  # 75% MOET, 25% YT
 )
 ```
 

@@ -31,6 +31,7 @@ class HighTideConfig(TidalConfig):
         
         # Yield Token Pool Configuration (Internal protocol trading)
         self.yield_token_concentration = 0.95  # 95% concentration for MOET:Yield Tokens
+        self.yield_token_ratio = 0.5  # Default to 50/50 MOET:YT ratio (will be overridden by config)
         
         # Agent configuration for High Tide
         self.num_high_tide_agents = 20
@@ -55,8 +56,13 @@ class HighTideVaultEngine(TidalProtocolEngine):
         self.high_tide_config = config
                 
         # Initialize High Tide specific components
+        # Convert old interface to new interface
+        total_pool_size = config.moet_yield_pool_size * 2  # Convert from single-side to total
+        token0_ratio = getattr(config, 'yield_token_ratio', 0.5)  # Use configured ratio or default to 50/50
+        
         self.yield_token_pool = YieldTokenPool(
-            initial_moet_reserve=config.moet_yield_pool_size,
+            total_pool_size=total_pool_size,
+            token0_ratio=token0_ratio,
             concentration=config.yield_token_concentration
         )
         # BTC Price Manager is used for BTC price decline

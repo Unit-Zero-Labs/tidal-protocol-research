@@ -159,16 +159,18 @@ class YieldTokenPool:
     """
     Global pool for MOET <-> Yield Token trading using Uniswap V3 math
     
-    This represents the internal protocol pool with tight concentration (95% at peg).
+    This represents the internal protocol pool with tight concentration (95% at peg)
+    and configurable token ratios for optimal capital efficiency.
     """
 ```
 
 #### Pool Configuration
 
 - **Concentration**: 95% liquidity at 1:1 peg
+- **Token Ratio**: Configurable MOET:YT ratios (e.g., 75:25, 50:50)
 - **Fee Tier**: 0.05% (500 pips) for stable pairs
 - **Tick Spacing**: 10 for tight price control
-- **Price Range**: Concentrated around 1:1 peg with minimal deviation
+- **Price Range**: Asymmetric bounds optimized for target ratios
 
 #### Real Swap Execution Methods
 
@@ -369,7 +371,7 @@ def get_portfolio_summary(self, current_minute: int) -> Dict[str, float]:
 
 ### Pool Configuration
 
-The yield token pool uses Uniswap V3's most stable configuration optimized for 1:1 peg assets:
+The yield token pool uses Uniswap V3's most stable configuration optimized for 1:1 peg assets with flexible token ratios:
 
 ```python
 # Pool configuration for yield tokens
@@ -377,7 +379,8 @@ pool_config = {
     "fee_tier": 0.0005,      # 0.05% fee tier (lowest available)
     "tick_spacing": 10,       # 10 tick spacing for precision
     "concentration": 0.95,    # 95% liquidity concentrated at peg
-    "price_range": "±0.1%"    # Tight range around 1:1 peg
+    "token0_ratio": 0.75,     # 75% MOET, 25% YT (configurable)
+    "price_range": "±1%"      # Optimized range around 1:1 peg
 }
 ```
 
@@ -393,8 +396,12 @@ pool_config = {
 ### Basic Yield Token Operations
 
 ```python
-# Create yield token pool and manager
-pool = YieldTokenPool(initial_moet_reserve=250_000)
+# Create yield token pool and manager with asymmetric 75/25 ratio
+pool = YieldTokenPool(
+    total_pool_size=500_000,
+    token0_ratio=0.75,  # 75% MOET, 25% YT
+    concentration=0.95
+)
 manager = YieldTokenManager(yield_token_pool=pool)
 
 # Convert $10,000 MOET to yield tokens using direct minting (minute 0)
@@ -491,8 +498,12 @@ class HighTideAgent:
 ### Pool Trading Operations
 
 ```python
-# Create yield token pool
-pool = YieldTokenPool(initial_moet_reserve=250_000)
+# Create yield token pool with configurable ratio
+pool = YieldTokenPool(
+    total_pool_size=500_000,
+    token0_ratio=0.75,  # 75% MOET, 25% YT
+    concentration=0.95
+)
 
 # Quote yield token purchase
 quote = pool.quote_yield_token_purchase(10_000)

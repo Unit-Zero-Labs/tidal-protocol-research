@@ -91,6 +91,11 @@ class RebalanceLiquidityTester:
         # Pool breaking criteria (when concentrated liquidity range is exceeded)
         self.price_deviation_threshold = 0.05  # 5% deviation from 1:1 peg indicates range break
         
+        # Pool rebalancing/arbitrage configuration
+        self.enable_pool_arbing = False  # Default to False for backward compatibility
+        self.alm_rebalance_interval_minutes = 720  # 12 hours for ALM rebalancer
+        self.algo_deviation_threshold_bps = 50.0  # 50 basis points for Algo rebalancer
+        
     def run_comprehensive_test(self) -> Dict[str, Any]:
         """Run comprehensive rebalancing liquidity tests"""
         print("🔍 REBALANCE LIQUIDITY TEST")
@@ -299,17 +304,15 @@ class RebalanceLiquidityTester:
     
     def _create_fresh_pool(self) -> YieldTokenPool:
         """Create a fresh MOET:YT pool with proper configuration"""
-        # Create High Tide engine configuration to get proper pool setup
-        ht_config = HighTideConfig()
-        ht_config.moet_yield_pool_size = self.pool_size_usd
-        ht_config.yield_token_concentration = self.concentration
-        ht_config.use_direct_minting_for_initial = True
+        # Create pool directly with new interface
+        total_pool_size = self.pool_size_usd * 2  # Convert to total pool size
+        token0_ratio = 0.75  # Use 75% MOET, 25% YT ratio
         
-        # Create engine to get properly configured pool
-        ht_engine = HighTideVaultEngine(ht_config)
-        
-        # Extract the yield token pool
-        yield_token_pool = ht_engine.yield_token_pool
+        yield_token_pool = YieldTokenPool(
+            total_pool_size=total_pool_size,
+            token0_ratio=token0_ratio,
+            concentration=self.concentration
+        )
         
         return yield_token_pool
     

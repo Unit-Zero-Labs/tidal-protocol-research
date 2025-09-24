@@ -15,15 +15,16 @@ from ..core.uniswap_v3_math import calculate_rebalancing_cost_with_slippage
 
 
 class HighTideAgentState(AgentState):
-    """Extended agent state for High Tide scenario"""
+    """Extended agent state for High Tide scenario with tri-health factor system"""
     
-    def __init__(self, agent_id: str, initial_balance: float, initial_hf: float, target_hf: float, yield_token_pool=None):
+    def __init__(self, agent_id: str, initial_balance: float, initial_hf: float, rebalancing_hf: float, target_hf: float, yield_token_pool=None):
         # Initialize with BTC collateral focus
         super().__init__(agent_id, initial_balance, "high_tide_agent")
         
-        # High Tide specific parameters
-        self.initial_health_factor = initial_hf  # The HF when position was first opened
-        self.target_health_factor = target_hf    # Lower buffer HF that triggers rebalancing
+        # Tri-Health Factor System Parameters
+        self.initial_health_factor = initial_hf        # The HF when position was first opened
+        self.rebalancing_health_factor = rebalancing_hf # Threshold that triggers automated rebalancing
+        self.target_health_factor = target_hf          # Post-rebalancing health target (safety buffer)
         self.automatic_rebalancing = True
         
         # Override default initialization for High Tide scenario
@@ -80,11 +81,16 @@ class HighTideAgent(BaseAgent):
     High Tide agent with automatic yield token purchase and rebalancing
     """
     
-    def __init__(self, agent_id: str, initial_hf: float, target_hf: float, initial_balance: float = 100_000.0, yield_token_pool=None):
+    def __init__(self, agent_id: str, initial_hf: float, rebalancing_hf: float, target_hf: float = None, initial_balance: float = 100_000.0, yield_token_pool=None):
         super().__init__(agent_id, "high_tide_agent", initial_balance)
         
-        # Replace state with HighTideAgentState
-        self.state = HighTideAgentState(agent_id, initial_balance, initial_hf, target_hf, yield_token_pool)
+        # Handle backward compatibility: if target_hf is None, use rebalancing_hf as target (old 2-factor system)
+        if target_hf is None:
+            target_hf = rebalancing_hf
+            print(f"⚠️  Warning: {agent_id} using 2-factor compatibility mode. Consider updating to tri-health factor system.")
+        
+        # Replace state with HighTideAgentState (tri-health factor system)
+        self.state = HighTideAgentState(agent_id, initial_balance, initial_hf, rebalancing_hf, target_hf, yield_token_pool)
         
         # CRITICAL FIX: Add reference to engine for real swap recording
         self.engine = None  # Will be set by engine during initialization
@@ -167,16 +173,17 @@ class HighTideAgent(BaseAgent):
         return (AgentAction.HOLD, {})
     
     def _needs_rebalancing(self) -> bool:
-        """Check if position needs rebalancing"""
+        """Check if position needs rebalancing using tri-health factor system"""
         if not self.state.automatic_rebalancing:
             return False
             
-        # Rebalance when current HF falls below the TARGET HF (the trigger threshold)
-        needs_rebalancing = self.state.health_factor < self.state.target_health_factor
+        # TRI-HEALTH FACTOR: Rebalance when current HF falls below the REBALANCING HF (trigger threshold)
+        needs_rebalancing = self.state.health_factor < self.state.rebalancing_health_factor
         
         # Debug logging for rebalancing decisions
         if needs_rebalancing:
-            print(f"        🔄 {self.agent_id}: HF {self.state.health_factor:.3f} < Target {self.state.target_health_factor:.3f} - REBALANCING NEEDED")
+            print(f"        🔄 {self.agent_id}: HF {self.state.health_factor:.3f} < Rebalancing HF {self.state.rebalancing_health_factor:.3f} - REBALANCING TRIGGERED")
+            print(f"           Target: Rebalance until HF >= {self.state.target_health_factor:.3f}")
         
         return needs_rebalancing
     
@@ -231,7 +238,9 @@ class HighTideAgent(BaseAgent):
         rebalance_cycle = 0
         
         print(f"        🔄 {self.agent_id}: Starting iterative rebalancing - need ${moet_needed:,.2f} MOET")
+        print(f"           Current HF: {self.state.health_factor:.3f}, Target HF: {self.state.target_health_factor:.3f}")
         
+        # TRI-HEALTH FACTOR: Continue rebalancing until TARGET HF is reached (not rebalancing HF)
         while (self.state.health_factor < self.state.target_health_factor and 
                self.state.yield_token_manager.yield_tokens and
                rebalance_cycle < 10):  # Max 10 cycles to prevent infinite loops
@@ -323,10 +332,11 @@ class HighTideAgent(BaseAgent):
                 "rebalance_cycles": rebalance_cycle
             })
         
-        # Check if we need to continue rebalancing
+        # TRI-HEALTH FACTOR: Check if we need to continue rebalancing to reach TARGET HF
         if (self.state.health_factor < self.state.target_health_factor and 
             not self.state.yield_token_manager.yield_tokens):
-            print(f"        ❌ All yield tokens sold but HF still below target: {self.state.health_factor:.3f} < {self.state.target_health_factor:.3f}")
+            print(f"        ❌ All yield tokens sold but HF still below TARGET HF: {self.state.health_factor:.3f} < {self.state.target_health_factor:.3f}")
+            print(f"           Rebalancing HF was: {self.state.rebalancing_health_factor:.3f} (trigger)")
             return (AgentAction.HOLD, {"emergency": True})
         
         return (AgentAction.HOLD, {})
@@ -590,8 +600,9 @@ class HighTideAgent(BaseAgent):
         high_tide_metrics = {
             "risk_profile": self.risk_profile,
             "color": self.color,
-            "initial_health_factor": self.state.initial_health_factor,  # Changed from target_health_factor
-            "target_health_factor": self.state.target_health_factor,    # Same as initial
+            "initial_health_factor": self.state.initial_health_factor,      # Starting position health
+            "rebalancing_health_factor": self.state.rebalancing_health_factor,  # Trigger threshold
+            "target_health_factor": self.state.target_health_factor,        # Post-rebalancing target
             "btc_amount": self.state.btc_amount,
             "initial_moet_debt": self.state.initial_moet_debt,
             "current_moet_debt": self.state.moet_debt,
@@ -617,14 +628,19 @@ class HighTideAgent(BaseAgent):
 
 def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True, yield_token_pool = None) -> list:
     """
-    Create High Tide agents with varied risk profiles
+    Create High Tide agents with varied risk profiles using tri-health factor system
     
-    Risk Profile Distribution:
-    - Conservative (30%): Initial HF = 2.1-2.4, Target HF = Initial - 0.05-0.15
-    - Moderate (40%): Initial HF = 1.5-1.8, Target HF = Initial - 0.15-0.25
-    - Aggressive (30%): Initial HF = 1.3-1.5, Target HF = Initial - 0.15-0.4
+    Tri-Health Factor System:
+    - Initial HF: Starting position health
+    - Rebalancing HF: Trigger threshold for rebalancing
+    - Target HF: Post-rebalancing safety buffer
     
-    Minimum Target HF = 1.2 for all agents
+    Risk Profile Distribution (backward compatibility with 2-factor system):
+    - Conservative (30%): Initial HF = 2.1-2.4, Rebalancing HF = Initial - 0.05-0.15, Target HF = Rebalancing HF + 0.01-0.05
+    - Moderate (40%): Initial HF = 1.5-1.8, Rebalancing HF = Initial - 0.15-0.25, Target HF = Rebalancing HF + 0.01-0.05
+    - Aggressive (30%): Initial HF = 1.3-1.5, Rebalancing HF = Initial - 0.15-0.4, Target HF = Rebalancing HF + 0.01-0.05
+    
+    Minimum Target HF = 1.1 for all agents
     """
     if monte_carlo_variation:
         # Randomize agent count between 10-50
@@ -642,13 +658,17 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True,
     # Create conservative agents
     for i in range(conservative_count):
         initial_hf = random.uniform(2.1, 2.4)
-        # Conservative: Small buffer (0.05-0.15 below initial)
-        target_hf = initial_hf - random.uniform(0.05, 0.15)
+        # Conservative: Small rebalancing buffer (0.05-0.15 below initial)
+        rebalancing_hf = initial_hf - random.uniform(0.05, 0.15)
+        rebalancing_hf = max(rebalancing_hf, 1.1)  # Minimum rebalancing HF is 1.1
+        # Target HF: Small safety buffer above rebalancing HF
+        target_hf = rebalancing_hf + random.uniform(0.01, 0.05)
         target_hf = max(target_hf, 1.1)  # Minimum target HF is 1.1
         
         agent = HighTideAgent(
             f"high_tide_conservative_{agent_id}",
             initial_hf,
+            rebalancing_hf,
             target_hf,
             yield_token_pool=yield_token_pool
         )
@@ -658,13 +678,17 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True,
     # Create moderate agents
     for i in range(moderate_count):
         initial_hf = random.uniform(1.5, 1.8)
-        # Moderate: Medium buffer (0.15-0.25 below initial)
-        target_hf = initial_hf - random.uniform(0.15, 0.25)
+        # Moderate: Medium rebalancing buffer (0.15-0.25 below initial)
+        rebalancing_hf = initial_hf - random.uniform(0.15, 0.25)
+        rebalancing_hf = max(rebalancing_hf, 1.1)  # Minimum rebalancing HF is 1.1
+        # Target HF: Small safety buffer above rebalancing HF
+        target_hf = rebalancing_hf + random.uniform(0.01, 0.05)
         target_hf = max(target_hf, 1.1)  # Minimum target HF is 1.1
         
         agent = HighTideAgent(
             f"high_tide_moderate_{agent_id}",
             initial_hf,
+            rebalancing_hf,
             target_hf,
             yield_token_pool=yield_token_pool
         )
@@ -674,13 +698,17 @@ def create_high_tide_agents(num_agents: int, monte_carlo_variation: bool = True,
     # Create aggressive agents
     for i in range(aggressive_count):
         initial_hf = random.uniform(1.3, 1.5)
-        # Aggressive: Larger buffer (0.15-0.4 below initial)
-        target_hf = initial_hf - random.uniform(0.15, 0.4)
+        # Aggressive: Larger rebalancing buffer (0.15-0.4 below initial)
+        rebalancing_hf = initial_hf - random.uniform(0.15, 0.4)
+        rebalancing_hf = max(rebalancing_hf, 1.1)  # Minimum rebalancing HF is 1.1
+        # Target HF: Small safety buffer above rebalancing HF
+        target_hf = rebalancing_hf + random.uniform(0.01, 0.05)
         target_hf = max(target_hf, 1.1)  # Minimum target HF is 1.1
         
         agent = HighTideAgent(
             f"high_tide_aggressive_{agent_id}",
             initial_hf,
+            rebalancing_hf,
             target_hf,
             yield_token_pool=yield_token_pool
         )

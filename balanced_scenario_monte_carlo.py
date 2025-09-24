@@ -215,6 +215,7 @@ class ComprehensiveComparisonConfig:
         self.moet_yt_pool_config = {
             "size": 500_000,  
             "concentration": 0.95,  # 95% concentration at 1:1 peg
+            "token0_ratio": 0.75,  # NEW: 75% MOET, 25% YT
             "fee_tier": 0.0005,  # 0.05% fee tier for stable pairs
             "tick_spacing": 10,  # Tight tick spacing for price control
             "pool_name": "MOET:Yield_Token"
@@ -231,6 +232,11 @@ class ComprehensiveComparisonConfig:
         self.collect_lp_curve_data = True
         self.collect_agent_portfolio_snapshots = True
         
+        # Pool rebalancing/arbitrage configuration
+        self.enable_pool_arbing = False  # Default to False for backward compatibility
+        self.alm_rebalance_interval_minutes = 720  # 12 hours for ALM rebalancer
+        self.algo_deviation_threshold_bps = 50.0  # 50 basis points for Algo rebalancer
+        
         # Output configuration
         self.scenario_name = "Balanced_Scenario_Monte_Carlo"
         self.generate_charts = True
@@ -241,6 +247,7 @@ class ComprehensiveComparisonConfig:
         self.moet_yield_pool_size = self.moet_yt_pool_config["size"]
         self.moet_yt_pool_size = self.moet_yt_pool_config["size"]  # Alias for whitepaper
         self.yield_token_concentration = self.moet_yt_pool_config["concentration"]
+        self.yield_token_ratio = self.moet_yt_pool_config["token0_ratio"]  # NEW: Token ratio configuration
 
 
 def create_custom_aave_agents(initial_hf_range: Tuple[float, float], target_hf: float, 
@@ -459,6 +466,7 @@ class ComprehensiveHTvsAaveAnalysis:
         ht_config.moet_btc_concentration = self.config.moet_btc_pool_config["concentration"]
         ht_config.moet_yield_pool_size = self.config.moet_yt_pool_config["size"]
         ht_config.yield_token_concentration = self.config.moet_yt_pool_config["concentration"]
+        ht_config.yield_token_ratio = self.config.moet_yt_pool_config["token0_ratio"]  # NEW: Pass token ratio
         ht_config.use_direct_minting_for_initial = self.config.use_direct_minting_for_initial
         
         # Reset seed for consistent agent creation
@@ -532,6 +540,7 @@ class ComprehensiveHTvsAaveAnalysis:
         aave_config.moet_btc_concentration = self.config.moet_btc_pool_config["concentration"]
         aave_config.moet_yield_pool_size = self.config.moet_yt_pool_config["size"]
         aave_config.yield_token_concentration = self.config.moet_yt_pool_config["concentration"]
+        aave_config.yield_token_ratio = self.config.moet_yt_pool_config["token0_ratio"]  # NEW: Pass token ratio
         
         # Create analysis engine with built-in tracking
         aave_engine = AnalysisAaveEngine(aave_config)
