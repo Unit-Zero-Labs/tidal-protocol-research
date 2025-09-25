@@ -26,7 +26,9 @@ Two new agents have been created in `tidal_protocol_sim/agents/pool_rebalancer.p
 
 **Shared Liquidity Pool**: Both agents share $500,000 total liquidity (all in MOET initially)
 
-**External YT Sales**: When agents acquire YT through rebalancing, they immediately "sell" it externally at true price to replenish MOET reserves, simulating real-world arbitrage.
+**External YT Sales**: When agents acquire YT through rebalancing, they "sell" it externally at true price to replenish MOET reserves. This process can be configured with an optional arbitrage delay to simulate real-world settlement times.
+
+**Arbitrage Delay Mechanism**: Configurable delay period (default: 1 hour, auto-converted based on simulation time scale) that prevents immediate external YT sales, creating realistic capital constraints and testing system resilience under liquidity pressure.
 
 **True Price Oracle**: Uses `calculate_true_yield_token_price()` function to determine the target price based on 10% APR yield accrual.
 
@@ -39,12 +41,16 @@ Enhanced agent state tracking:
 - MOET and YT balances
 - Rebalancing activity metrics
 - Profit tracking from arbitrage
+- Arbitrage delay configuration and pending YT sales queue
+- Automatic time scale detection for delay conversion
 
 #### PoolRebalancerManager
 Unified interface coordinating both rebalancers:
 - Enable/disable functionality
 - Pool reference management
 - Event processing and logging
+- Arbitrage delay configuration for both rebalancers
+- Processing of pending YT sales based on time delays
 
 ### 4. Integration Points
 
@@ -123,8 +129,9 @@ config.simulation_duration_months = 12
 3. **Amount Calculation**: Scale rebalance size with price deviation magnitude
 4. **Balance Check**: Ensure sufficient MOET or YT balance for operation
 5. **Execution**: Perform Uniswap V3 swap through pool
-6. **External Sale**: Immediately sell acquired YT at true price externally
-7. **Inventory Management**: Build YT inventory through underpriced purchases for future overpriced sales
+6. **External Sale**: Sell acquired YT at true price externally (immediate or delayed based on configuration)
+7. **Delay Processing**: If arbitrage delay is enabled, queue YT sales for future execution after delay period
+8. **Inventory Management**: Build YT inventory through underpriced purchases for future overpriced sales
 
 ### 9. Profit Mechanism
 
@@ -172,6 +179,10 @@ config.simulation_duration_months = 12
 enable_pool_arbing = False                    # Disabled by default
 alm_rebalance_interval_minutes = 720          # 12 hours
 algo_deviation_threshold_bps = 50.0           # 50 basis points
+
+# Arbitrage Delay Configuration
+enable_arb_delay = False                      # Disabled by default
+arb_delay_time_units = 60                     # 1 hour (auto-converted based on simulation time scale)
 
 # Rebalancer Liquidity
 total_rebalancer_liquidity = 500_000          # $500k total

@@ -201,7 +201,7 @@ class ComprehensiveComparisonConfig:
         # BTC decline scenarios
         self.btc_decline_duration = 60  # 60 minutes
         self.btc_initial_price = 100_000.0
-        self.btc_final_price = 76_342.50  # 23.66% decline (consistent with previous analysis)
+        self.btc_final_price = 90_000.0  # 25.00% decline (consistent with previous analysis)
         
         # Enhanced Uniswap V3 Pool Configurations
         self.moet_btc_pool_config = {

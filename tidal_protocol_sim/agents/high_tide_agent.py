@@ -218,10 +218,10 @@ class HighTideAgent(BaseAgent):
             return (AgentAction.HOLD, {})
         
         # Calculate how much debt reduction is needed using the specified formula:
-        # Debt Reduction Needed = Current Debt - (Effective Collateral Value / Initial Health Factor)
+        # Debt Reduction Needed = Current Debt - (Effective Collateral Value / Target Health Factor)
         collateral_value = self._calculate_effective_collateral_value(asset_prices)
         current_debt = self.state.moet_debt
-        target_debt = collateral_value / self.state.initial_health_factor  # Use initial HF as target
+        target_debt = collateral_value / self.state.target_health_factor  # FIXED: Use target HF, not initial HF
         debt_reduction_needed = current_debt - target_debt
         
         if debt_reduction_needed <= 0:
@@ -240,10 +240,11 @@ class HighTideAgent(BaseAgent):
         print(f"        🔄 {self.agent_id}: Starting iterative rebalancing - need ${moet_needed:,.2f} MOET")
         print(f"           Current HF: {self.state.health_factor:.3f}, Target HF: {self.state.target_health_factor:.3f}")
         
-        # TRI-HEALTH FACTOR: Continue rebalancing until TARGET HF is reached (not rebalancing HF)
-        while (self.state.health_factor < self.state.target_health_factor and 
+        # FIXED: Stop when above rebalancing threshold, not when reaching exact target
+        # Agent should AIM for target HF but STOP when safe (above rebalancing HF)
+        while (self.state.health_factor < self.state.rebalancing_health_factor and 
                self.state.yield_token_manager.yield_tokens and
-               rebalance_cycle < 10):  # Max 10 cycles to prevent infinite loops
+               rebalance_cycle < 3):  # Max 3 cycles - should only need 1-2 in practice
             
             rebalance_cycle += 1
             print(f"        🔄 Rebalance Cycle {rebalance_cycle}: Need ${moet_needed:,.2f} MOET")
@@ -293,14 +294,14 @@ class HighTideAgent(BaseAgent):
             
             print(f"        📊 Cycle {rebalance_cycle}: Received ${moet_received:,.2f} MOET, repaid ${debt_repayment:,.2f} debt, new HF: {self.state.health_factor:.3f}")
             
-            # Check if we've reached target
-            if self.state.health_factor >= self.state.target_health_factor:
-                print(f"        ✅ Target HF reached: {self.state.health_factor:.3f} >= {self.state.target_health_factor:.3f}")
+            # Check if we're back above rebalancing threshold (safe zone)
+            if self.state.health_factor >= self.state.rebalancing_health_factor:
+                print(f"        ✅ Rebalancing successful: HF {self.state.health_factor:.3f} > threshold {self.state.rebalancing_health_factor:.3f}")
                 break
             
             # Calculate remaining MOET needed for next cycle
             collateral_value = self._calculate_effective_collateral_value(asset_prices)
-            target_debt = collateral_value / self.state.initial_health_factor
+            target_debt = collateral_value / self.state.target_health_factor  # FIXED: Use target HF, not initial HF
             moet_needed = self.state.moet_debt - target_debt
             
             if moet_needed <= 0:
