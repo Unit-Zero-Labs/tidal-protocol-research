@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This document provides a comprehensive mathematical walkthrough of the Tidal Protocol simulation engine, detailing all mathematical formulas, system interactions, and computational methodologies used in the simulation. The engine implements sophisticated DeFi protocols including High Tide Vault strategies, AAVE-style lending, Uniswap V3 concentrated liquidity mathematics, and yield token systems with real economic constraints.
+This document provides a comprehensive mathematical walkthrough of the Tidal Protocol simulation engine, detailing all mathematical formulas, system interactions, and computational methodologies used in the simulation. The engine implements sophisticated DeFi protocols including the base Tidal Protocol and High Tide Vault strategies, AAVE-style lending, Uniswap V3 concentrated liquidity mathematics, and yield token systems with real economic constraints.
 
 ## Table of Contents
 
@@ -203,6 +203,181 @@ def get_next_sqrt_price_from_amount1_rounding_down(sqrt_price_x96, liquidity, am
 - Price Range: [1.01005, 1.1052] (~+1.005% to +10%)
 - Liquidity Allocation: 2.5%
 
+### 2.4.1 Symmetric Liquidity Ranges
+
+**Traditional 50/50 Pool Structure:**
+
+Symmetric pools maintain equal token ratios (50% Token0, 50% Token1) with price bounds that are symmetric around the current price.
+
+**Mathematical Foundation:**
+```
+Token0_Amount = Token1_Amount × Current_Price
+Ratio = 0.5 (50% each token)
+```
+
+**Symmetric Bounds Calculation:**
+For a target price range of ±1% around the peg:
+```
+P_center = 1.0 (peg price)
+P_lower = P_center × (1 - 0.01) = 0.99
+P_upper = P_center × (1 + 0.01) = 1.01
+```
+
+**Tick Conversion:**
+```python
+tick_lower = math.log(P_lower) / math.log(1.0001)  # ≈ -100
+tick_upper = math.log(P_upper) / math.log(1.0001)  # ≈ +100
+```
+
+**Liquidity Distribution (Symmetric):**
+```
+Range 1: [-100, +100] → 95% liquidity
+Range 2: [-1000, -100] → 2.5% liquidity  
+Range 3: [+100, +1000] → 2.5% liquidity
+```
+
+**Implementation:**
+```python
+def _initialize_symmetric_yield_token_positions(self):
+    """Initialize symmetric 50/50 MOET:YT positions"""
+    
+    # Equal amounts at current price
+    moet_amount = self.total_liquidity * 0.5
+    yt_amount = self.total_liquidity * 0.5
+    
+    # Symmetric tick ranges
+    tick_lower = -100  # 0.99 price
+    tick_upper = +100  # 1.01 price
+    
+    liquidity = self._calculate_liquidity_from_amounts(
+        moet_amount, yt_amount, tick_lower, tick_upper
+    )
+    
+    return liquidity
+```
+
+### 2.4.2 Asymmetric Liquidity Ranges
+
+**Configurable Token Ratio Pool Structure:**
+
+Asymmetric pools support any MOET:YT ratio between 10:90 and 90:10, with intelligent price bounds calculated to achieve precise target ratios at the $1 peg.
+
+**Mathematical Foundation:**
+For a target ratio R = Token0_Ratio / Token1_Ratio (e.g., 75/25 = 3):
+
+**Asymmetric Bounds Calculation:**
+```
+Given:
+- P_upper = 1.01 (fixed upper bound)
+- R = desired_ratio (e.g., 3 for 75/25)
+- x = sqrt(P_current) = 1.0 (at peg)
+- b = sqrt(P_upper) = sqrt(1.01) ≈ 1.00498756
+
+Solve for lower bound:
+a = 1 - (b - 1) / (R × b)
+
+For 75/25 pool:
+a = 1 - (1.00498756 - 1) / (3 × 1.00498756)
+a ≈ 0.99834573
+P_lower = a² ≈ 0.996694
+```
+
+**Token Amount Calculations:**
+```
+At the peg price (P = 1.0):
+Token0_Amount = Total_Liquidity × token0_ratio
+Token1_Amount = Total_Liquidity × (1 - token0_ratio)
+
+For 75/25 pool with $500k total:
+MOET_Amount = $500k × 0.75 = $375k
+YT_Amount = $500k × 0.25 = $125k
+```
+
+**Tick Alignment Optimization:**
+```python
+def _calculate_asymmetric_bounds(self, token0_ratio: float) -> tuple:
+    """Calculate asymmetric price bounds for target ratio"""
+    
+    # Fixed upper bound
+    P_upper = 1.01
+    b = math.sqrt(P_upper)  # sqrt(1.01)
+    
+    # Calculate ratio
+    R = token0_ratio / (1 - token0_ratio)
+    
+    # Solve for lower bound
+    a = 1 - (b - 1) / (R * b)
+    P_lower = a ** 2
+    
+    # Convert to ticks
+    tick_lower_exact = math.log(P_lower) / math.log(1.0001)
+    tick_upper_exact = math.log(P_upper) / math.log(1.0001)
+    
+    # Align to tick spacing (10 for yield token pools)
+    tick_lower = round(tick_lower_exact / 10) * 10
+    tick_upper = round(tick_upper_exact / 10) * 10
+    
+    return tick_lower, tick_upper
+```
+
+**Implementation:**
+```python
+def _initialize_asymmetric_yield_token_positions(self):
+    """Initialize asymmetric MOET:YT positions with calculated bounds"""
+    
+    # Calculate asymmetric bounds
+    tick_lower, tick_upper = self._calculate_asymmetric_bounds(self.token0_ratio)
+    
+    # Calculate token amounts based on target ratio
+    moet_amount = self.total_liquidity * self.token0_ratio
+    yt_amount = self.total_liquidity * (1 - self.token0_ratio)
+    
+    # Calculate liquidity for asymmetric range
+    liquidity = self._calculate_liquidity_from_amounts(
+        moet_amount, yt_amount, tick_lower, tick_upper
+    )
+    
+    return liquidity
+```
+
+**Example Configurations:**
+```python
+# Conservative 60/40 pool
+pool_60_40 = YieldTokenPool(
+    total_pool_size=500_000,
+    token0_ratio=0.60,  # 60% MOET, 40% YT
+    concentration=0.95
+)
+
+# Aggressive 75/25 pool  
+pool_75_25 = YieldTokenPool(
+    total_pool_size=500_000,
+    token0_ratio=0.75,  # 75% MOET, 25% YT
+    concentration=0.95
+)
+
+# Extreme 90/10 pool
+pool_90_10 = YieldTokenPool(
+    total_pool_size=500_000,
+    token0_ratio=0.90,  # 90% MOET, 10% YT
+    concentration=0.95
+)
+```
+
+**Validation Logic:**
+```python
+def _validate_token0_ratio(self):
+    """Validate token0_ratio is within acceptable bounds"""
+    if not (0.1 <= self.token0_ratio <= 0.9):
+        raise ValueError(f"token0_ratio must be between 0.1 and 0.9, got {self.token0_ratio}")
+    
+    if self.token0_ratio < 0.1:
+        raise ValueError("token0_ratio too low: minimum 10% allocation required")
+    
+    if self.token0_ratio > 0.9:
+        raise ValueError("token0_ratio too high: minimum 10% allocation required")
+```
+
 ### 2.5 Swap Step Computation
 
 **Core Swap Logic:**
@@ -342,31 +517,14 @@ def decide_action(self, protocol_state: dict, asset_prices: Dict[Asset, float]) 
     return (AgentAction.HOLD, {})
 ```
 
-### 3.3 Risk Profile Distribution
+### 3.3 Tri-Health Factor System
 
-**Monte Carlo Agent Risk Profiles:**
-
-**Conservative (30% of agents):**
+**Health Factor Framework (30% of agents):**
 ```
-Initial HF: [2.1, 2.4]
-Target HF: Initial HF - [0.05, 0.15]
-Minimum Target HF: 1.1
+Initial HF: (Collateral Value × Collateral Factor) / Initial Debt Value
+Target HF: (Collateral Value × Collateral Factor) / Target Debt Value Post Rebalancing
+Rebalancing HF: HF that triggers agent rebalancing
 ```
-
-**Moderate (40% of agents):**
-```
-Initial HF: [1.5, 1.8]  
-Target HF: Initial HF - [0.15, 0.25]
-Minimum Target HF: 1.1
-```
-
-**Aggressive (30% of agents):**
-```
-Initial HF: [1.3, 1.5]
-Target HF: Initial HF - [0.15, 0.4]  
-Minimum Target HF: 1.1
-```
-
 ---
 
 ## 4. Yield Token System Mathematics
@@ -520,6 +678,8 @@ def _calculate_rebalance_amount(self, deviation_bps: float, base_amount: float =
 
 ### 5.4 External YT Sales with Arbitrage Delay
 
+Used to simulate constrained environment with delay in conversion of yield tokens back to MOET for future arbitrage.
+
 **Immediate External Sale (Default):**
 ```python
 def _execute_external_yt_sale(self, yt_amount: float, true_yt_price: float) -> float:
@@ -581,62 +741,120 @@ def decide_action(self, protocol_state: dict, asset_prices: Dict[Asset, float]) 
     return (AgentAction.HOLD, {})
 ```
 
-### 6.2 Iterative Rebalancing Algorithm
+### 6.2 Tri-Health Factor Iterative Rebalancing Algorithm
 
-**Multi-Cycle Rebalancing:**
+**Updated Multi-Cycle Rebalancing with Tri-Health Factor System:**
+
+The current implementation uses a tri-health factor system with improved stopping conditions and cycle limits.
+
 ```python
-def _execute_iterative_rebalancing(self, asset_prices: Dict[Asset, float], 
-                                 current_minute: int) -> tuple:
-    """Execute iterative rebalancing with slippage monitoring"""
+def _execute_iterative_rebalancing(self, initial_moet_needed: float, current_minute: int, 
+                                 asset_prices: Dict[Asset, float]) -> tuple:
+    """Execute iterative rebalancing with tri-health factor system and slippage monitoring"""
     
-    initial_moet_needed = self._calculate_moet_needed_for_target_hf(asset_prices)
     moet_needed = initial_moet_needed
     total_moet_raised = 0.0
+    total_yield_tokens_sold = 0.0
     rebalance_cycle = 0
     
-    while (self.state.health_factor < self.state.target_health_factor and 
+    print(f"🔄 {self.agent_id}: Starting iterative rebalancing - need ${moet_needed:,.2f} MOET")
+    print(f"   Current HF: {self.state.health_factor:.3f}, Target HF: {self.state.target_health_factor:.3f}")
+    
+    # Agent should AIM for target HF but STOP when safe (above rebalancing HF)
+    while (self.state.health_factor < self.state.rebalancing_health_factor and 
            self.state.yield_token_manager.yield_tokens and
-           rebalance_cycle < 10):  # Max 10 cycles
+           rebalance_cycle < 3):  # Max 3 cycles - should only need 1-2 in practice
         
         rebalance_cycle += 1
+        print(f"🔄 Rebalance Cycle {rebalance_cycle}: Need ${moet_needed:,.2f} MOET")
         
-        # Execute real swap through engine
-        success, swap_data = self.engine._execute_yield_token_sale(
-            self, 
-            {"moet_needed": moet_needed, "swap_type": "rebalancing"}, 
-            current_minute
-        )
+        # Calculate yield tokens to sell (1:1 assumption)
+        yield_tokens_to_sell = moet_needed
         
-        if success and swap_data:
-            moet_received = swap_data.get("moet_received", 0.0)
+        # Uses engine's real swap execution for accurate pool state mutations
+        if self.engine:
+            success, swap_data = self.engine._execute_yield_token_sale(
+                self, 
+                {"moet_needed": moet_needed, "swap_type": "rebalancing"}, 
+                current_minute
+            )
             
-            # Check slippage threshold (>5%)
-            expected_moet = swap_data.get("yt_swapped", 0.0)
-            if moet_received < 0.95 × expected_moet:
-                slippage_percent = (1 - moet_received / expected_moet) × 100
-                print(f"HIGH SLIPPAGE: {slippage_percent:.1f}%")
-            
-            # Pay down debt and update health factor
-            debt_repayment = min(moet_received, self.state.moet_debt)
-            self.state.moet_debt -= debt_repayment
-            total_moet_raised += moet_received
-            
-            self._update_health_factor(asset_prices)
-            
-            # Check if target reached
-            if self.state.health_factor >= self.state.target_health_factor:
-                break
-            
-            # Calculate remaining MOET needed for next cycle
-            collateral_value = self._calculate_effective_collateral_value(asset_prices)
-            target_debt = collateral_value / self.state.target_health_factor
-            moet_needed = self.state.moet_debt - target_debt
-            
+            if success and swap_data:
+                moet_received = swap_data.get("moet_received", 0.0)
+                actual_yield_tokens_sold_value = swap_data.get("yt_swapped", 0.0)
+            else:
+                moet_received = 0.0
+                actual_yield_tokens_sold_value = 0.0
         else:
-            break  # No more liquidity available
+            # Fallback (should not happen in production)
+            print(f"⚠️  WARNING: Agent {self.agent_id} using YieldTokenManager fallback")
+            moet_received, actual_yield_tokens_sold_value = self.state.yield_token_manager.sell_yield_tokens(
+                yield_tokens_to_sell, current_minute
+            )
+        
+        if moet_received <= 0:
+            print(f"❌ No MOET received from yield token sale - liquidity exhausted")
+            break
+        
+        # Check slippage threshold (>5% slippage)
+        if moet_received < 0.95 * actual_yield_tokens_sold_value:
+            slippage_percent = (1 - moet_received / actual_yield_tokens_sold_value) * 100
+            print(f"⚠️  HIGH SLIPPAGE: {actual_yield_tokens_sold_value:,.2f} YT → ${moet_received:,.2f} MOET ({slippage_percent:.1f}%)")
+        
+        # Pay down debt using MOET from agent's balance
+        available_moet = self.state.token_balances.get(Asset.MOET, 0.0)
+        debt_repayment = min(available_moet, self.state.moet_debt)
+        self.state.moet_debt -= debt_repayment
+        self.state.token_balances[Asset.MOET] -= debt_repayment
+        total_moet_raised += moet_received
+        total_yield_tokens_sold += actual_yield_tokens_sold_value
+        
+        # Update health factor with actual prices
+        self._update_health_factor(asset_prices)
+        
+        print(f"📊 Cycle {rebalance_cycle}: Received ${moet_received:,.2f} MOET, repaid ${debt_repayment:,.2f} debt, new HF: {self.state.health_factor:.3f}")
+        
+        # Check if we're back above rebalancing threshold (safe zone)
+        if self.state.health_factor >= self.state.rebalancing_health_factor:
+            print(f"✅ Rebalancing successful: HF {self.state.health_factor:.3f} > threshold {self.state.rebalancing_health_factor:.3f}")
+            break
+        
+        # Calculate remaining MOET needed for next cycle
+        collateral_value = self._calculate_effective_collateral_value(asset_prices)
+        target_debt = collateral_value / self.state.target_health_factor
+        moet_needed = self.state.moet_debt - target_debt
+        
+        if moet_needed <= 0:
+            break
+    
+    # Record rebalancing event in engine
+    if total_moet_raised > 0 and self.engine:
+        slippage_cost = total_yield_tokens_sold - total_moet_raised
+        self.engine.record_agent_rebalancing_event(
+            self.agent_id, current_minute, total_moet_raised, 
+            total_moet_raised, slippage_cost, self.state.health_factor
+        )
     
     return (AgentAction.SWAP, {"total_moet_raised": total_moet_raised})
 ```
+
+**Rebalancing Framework:**
+
+1. **Tri-Health Factor System Integration:**
+   - Uses `rebalancing_health_factor` as stopping condition (not `target_health_factor`)
+   - Aims for `target_health_factor` but stops when safe above `rebalancing_health_factor`
+
+2. **Enhanced Engine Integration:**
+   - Uses `engine._execute_yield_token_sale()` for pool state mutations
+   - Records events directly in engine for accurate tracking
+
+4. **Improved Slippage Monitoring:**
+   - 5% slippage threshold with detailed logging
+   - Tracks both received MOET and yield tokens sold value
+
+5. **Debt Management:**
+   - Uses agent's MOET balance for debt repayment
+   - Tracks available MOET before attempting debt reduction
 
 ### 6.3 Leverage Management
 
@@ -669,73 +887,164 @@ def _execute_leverage_increase(self, asset_prices: Dict[Asset, float],
 
 ## 7. Price Evolution and Market Stress Modeling
 
-### 7.1 BTC Price Decline Patterns
+### 7.1 Short-Term Price Decline Patterns (Hourly Test)
+
+The short-term stress testing uses controlled decline patterns to validate agent rebalancing behavior under market pressure.
 
 **Gradual Decline (Linear):**
 ```python
-def get_btc_price_gradual(self, minute: int) -> float:
-    """Linear price decline over simulation duration"""
+def get_btc_price_at_minute(self, minute: int) -> float:
+    """Calculate BTC price at given minute based on decline pattern"""
+    
     progress = minute / self.simulation_duration_minutes
     total_decline = self.btc_initial_price - self.btc_final_price
-    price_decline = total_decline × progress
     
-    return self.btc_initial_price - price_decline
+    if self.btc_decline_pattern == "gradual":
+        # Linear decline: $100k → $50k over 36 hours
+        price_decline = total_decline * progress
+        return self.btc_initial_price - price_decline
+```
+
+**Test Configuration (36-Hour Stress Test):**
+```python
+# BTC price scenario - 50% drawdown over 36 hours
+self.btc_initial_price = 100_000.0
+self.btc_final_price = 50_000.0  # 50% decline over 36 hours
+self.btc_decline_pattern = "gradual"  # Linear progression
 ```
 
 **Sudden Decline (Front-Loaded):**
 ```python
-def get_btc_price_sudden(self, minute: int) -> float:
-    """Sharp drop in first 6 hours, then stabilize"""
+elif self.btc_decline_pattern == "sudden":
+    # Sharp drop in first 6 hours, then stabilize
     if minute <= 360:  # First 6 hours
         drop_progress = minute / 360
-        price_decline = total_decline × drop_progress
+        price_decline = total_decline * drop_progress
     else:
         price_decline = total_decline
-        
     return self.btc_initial_price - price_decline
 ```
 
 **Volatile Decline (Random Walk):**
 ```python
-def get_btc_price_volatile(self, minute: int) -> float:
-    """Add volatility around main trend"""
-    progress = minute / self.simulation_duration_minutes
-    base_decline = total_decline × progress
-    
-    # Add random volatility (±2% around trend)
-    volatility = 0.02 × self.btc_initial_price × (random.random() - 0.5) × 2
-    
+elif self.btc_decline_pattern == "volatile":
+    # Add volatility around the main trend
+    base_decline = total_decline * progress
+    # Add some random volatility (±2% around trend)
+    volatility = 0.02 * self.btc_initial_price * (random.random() - 0.5) * 2
     return max(self.btc_initial_price - base_decline + volatility, 10_000.0)
 ```
 
-### 7.2 Long-Term Price Modeling
+### 7.2 Long-Term Price Modeling (Full Year Simulation)
 
-**Geometric Brownian Motion:**
+The full-year simulation uses real 2024 BTC pricing data for authentic market dynamics and agent behavior validation.
+
+**Real 2024 BTC Data Integration:**
 ```python
-def update_btc_price_gbm(self, current_price: float, dt: float = 1/365) -> float:
-    """Update BTC price using Geometric Brownian Motion"""
+def _load_2024_btc_data(self) -> List[float]:
+    """Load 2024 BTC pricing data from CSV file"""
+    btc_prices = []
     
-    # GBM parameters
-    mu = 0.20      # 20% annual drift (bull market)
-    sigma = 0.65   # 65% annual volatility
-    
-    # Random normal component
-    dW = np.random.normal(0, np.sqrt(dt))
-    
-    # GBM price update: dS = μS dt + σS dW
-    price_change = current_price × (mu × dt + sigma × dW)
-    new_price = current_price + price_change
-    
-    return max(new_price, 1_000.0)  # Floor at $1,000
+    try:
+        with open(self.btc_csv_path, 'r') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                # Check if this is a 2024 date
+                if '2024-' in row['snapped_at']:
+                    price = float(row['price'])
+                    btc_prices.append(price)
+        
+        print(f"📊 Loaded {len(btc_prices)} days of 2024 BTC pricing data")
+        print(f"📈 2024 BTC Range: ${btc_prices[0]:,.2f} → ${btc_prices[-1]:,.2f}")
+        
+        return btc_prices
 ```
 
-**Flash Crash Events:**
+**Performance-Optimized Price Interpolation:**
 ```python
-def apply_flash_crash(self, current_price: float, severity: float = 0.30) -> float:
-    """Apply sudden price drop (flash crash)"""
-    crash_multiplier = 1.0 - severity  # 30% crash = 0.70 multiplier
-    return current_price × crash_multiplier
+def _precompute_minute_prices(self) -> List[float]:
+    """Pre-compute all minute-level BTC prices for optimal performance"""
+    precomputed_prices = []
+    minutes_per_day = 24 * 60  # 1440 minutes per day
+    
+    for minute in range(self.simulation_duration_minutes):
+        # Calculate which day we're on (0-365)
+        day_of_year = minute // minutes_per_day
+        
+        # Get current day price
+        current_day_price = self.btc_2024_data[day_of_year]
+        
+        # Linear interpolation within the day if we have next day data
+        if day_of_year + 1 < len(self.btc_2024_data):
+            next_day_price = self.btc_2024_data[day_of_year + 1]
+            
+            # Calculate progress within the current day (0.0 to 1.0)
+            minutes_into_day = minute % minutes_per_day
+            daily_progress = minutes_into_day / minutes_per_day
+            
+            # Linear interpolation between daily prices
+            interpolated_price = current_day_price + (next_day_price - current_day_price) * daily_progress
+            precomputed_prices.append(interpolated_price)
+        else:
+            precomputed_prices.append(current_day_price)
+    
+    return precomputed_prices
 ```
+
+**2024 BTC Price Journey Configuration:**
+```python
+# BTC pricing data configuration - Real 2024 journey
+self.btc_csv_path = "btc-usd-max.csv"
+self.btc_2024_data = self._load_2024_btc_data()
+
+# BTC price scenario - Real 2024 data
+self.btc_initial_price = 42208.20  # 2024-01-01 price
+self.btc_final_price = 92627.28   # 2024-12-31 price (+119% over year)
+self.btc_price_pattern = "real_2024_data"  # Use actual historical data
+```
+
+### 7.3 Agent Leverage Increase Mechanics
+
+**Leverage Opportunity Detection:**
+```python
+def _check_leverage_opportunity(self, asset_prices: Dict[Asset, float]) -> bool:
+    """Check if agent can increase leverage when HF > initial HF"""
+    return self.state.health_factor > self.state.initial_health_factor
+
+def _execute_leverage_increase(self, asset_prices: Dict[Asset, float], 
+                             current_minute: int) -> tuple:
+    """Increase leverage by borrowing more MOET to restore initial HF"""
+    
+    collateral_value = self._calculate_effective_collateral_value(asset_prices)
+    current_debt = self.state.moet_debt
+    target_debt = collateral_value / self.state.initial_health_factor
+    additional_moet_needed = target_debt - current_debt
+    
+    if additional_moet_needed <= 0:
+        return (AgentAction.HOLD, {})
+    
+    return (AgentAction.BORROW, {
+        "amount": additional_moet_needed,
+        "current_minute": current_minute,
+        "leverage_increase": True
+    })
+```
+
+### 7.4 Market Stress Testing Scenarios
+
+**36-Hour Stress Test Validation:**
+- **Duration:** 2160 minutes (36 hours)
+- **Price Decline:** $100,000 → $50,000 (50% decline)
+- **Agent Count:** 120 High Tide agents
+- **Expected Rebalancing Events:** ~500-1000 individual agent rebalances
+- **ALM Rebalancer Triggers:** 3 scheduled events (12h, 24h, 36h)
+
+**Full-Year Market Cycle Validation:**
+- **Duration:** 525,600 minutes (365 days)
+- **Price Journey:** $42,208 → $92,627 (+119% bull market)
+- **Agent Count:** 120 High Tide agents
+- **Expected Leverage Increases:** ~2000-5000 events during BTC rallies
+- **ALM Rebalancer Triggers:** 730 scheduled events (12h intervals)
 
 ---
 
@@ -909,7 +1218,7 @@ def calculate_liquidation_cost_with_slippage(btc_amount: float, btc_price: float
 
 ### 9.2 Pool State Synchronization
 
-**Shared Liquidity Competition:**
+**Shared Liquidity:**
 ```python
 class UniswapV3Pool:
     """Shared pool state across all agents"""
@@ -1043,7 +1352,7 @@ Expected Avg: 15-35 bps
 
 ## Conclusion
 
-This mathematical whitepaper provides a comprehensive foundation for understanding the Tidal Protocol simulation engine's sophisticated mathematical framework. The engine implements authentic DeFi mathematics including:
+This mathematical whitepaper provides a comprehensive foundation for understanding the Tidal Protocol simulation engine's mathematical framework. The engine implements authentic DeFi mathematics including:
 
 1. **Uniswap V3 Concentrated Liquidity**: Full implementation with Q64.96 arithmetic, tick-based pricing, and discrete liquidity ranges
 2. **Health Factor Management**: Dynamic rebalancing algorithms with multi-cycle optimization

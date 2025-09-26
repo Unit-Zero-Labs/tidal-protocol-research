@@ -819,14 +819,175 @@ class AlgoRebalancer(BaseAgent):
         return 10_000.0  # Final fallback
 
 
+class LiquidityRangeManager:
+    """
+    Manages dynamic liquidity range adjustments for MOET:YT pool
+    
+    Tracks ALM rebalance count and periodically updates the concentrated
+    liquidity range to stay centered around the true yield token price,
+    maintaining the asymmetric token ratio while preserving total liquidity.
+    """
+    
+    def __init__(self, range_update_interval: int = 6, range_width: float = 0.01, 
+                 enable_pool_replenishment: bool = True, target_pool_size: float = 500_000):
+        """
+        Initialize the Liquidity Range Manager
+        
+        Args:
+            range_update_interval: Update range every N ALM rebalances (default: 6 = 3 days)
+            range_width: Range width as percentage around center (default: 1% = 0.01)
+            enable_pool_replenishment: Whether to automatically replenish pool reserves (default: True)
+            target_pool_size: Target pool size in USD (default: $500,000)
+        """
+        self.range_update_interval = range_update_interval
+        self.range_width = range_width
+        self.enable_pool_replenishment = enable_pool_replenishment
+        self.target_pool_size = target_pool_size
+        self.alm_rebalance_count = 0
+        self.last_range_update_minute = 0
+        self.range_update_history = []
+        self.replenishment_history = []
+        
+    def should_update_range(self) -> bool:
+        """Check if it's time to update the liquidity range"""
+        return self.alm_rebalance_count > 0 and self.alm_rebalance_count % self.range_update_interval == 0
+    
+    def on_alm_rebalance(self):
+        """Call this after each ALM rebalance to track count"""
+        self.alm_rebalance_count += 1
+    
+    def update_liquidity_range(self, pool, true_yt_price: float, current_minute: int) -> dict:
+        """
+        Update the pool's liquidity range around the true YT price
+        
+        Args:
+            pool: YieldTokenPool with uniswap_pool to update
+            true_yt_price: Current true yield token price (center of new range)
+            current_minute: Current simulation minute for logging
+            
+        Returns:
+            dict: Results of the range update operation
+        """
+        try:
+            # Get the Uniswap V3 pool
+            uniswap_pool = pool.uniswap_pool
+            
+            # ENHANCEMENT: Pool replenishment to maintain $500k size with 75/25 skew
+            current_moet_reserve = pool.moet_reserve
+            current_yt_reserve = pool.yield_token_reserve
+            current_total_value = current_moet_reserve + (current_yt_reserve * true_yt_price)
+            
+            if self.enable_pool_replenishment:
+                target_token0_ratio = 0.75   # 75% MOET, 25% YT
+                target_moet_value = self.target_pool_size * target_token0_ratio  # $375k MOET
+                target_yt_amount = (self.target_pool_size * (1 - target_token0_ratio)) / true_yt_price  # $125k worth of YT
+                
+                # Always adjust to exact target (can be positive or negative)
+                pool.moet_reserve = target_moet_value
+                pool.yield_token_reserve = target_yt_amount
+                
+                # CRITICAL: Update the underlying Uniswap V3 pool's total_liquidity to match new reserves
+                # This ensures the range update works with the correct liquidity amount
+                pool.uniswap_pool.total_liquidity = self.target_pool_size
+                
+                # CRITICAL: Force recalculation of liquidity positions to match new $500k density
+                # We need to reinitialize the pool with fresh positions based on $500k
+                # Instead of clearing positions and causing range update to fail, reinitialize properly
+                pool._initialize_asymmetric_yield_token_positions()
+                
+                moet_adjustment = target_moet_value - current_moet_reserve
+                yt_adjustment = target_yt_amount - current_yt_reserve
+                
+                # Record replenishment
+                replenishment_event = {
+                    "minute": current_minute,
+                    "pool_value_before": current_total_value,
+                    "pool_value_after": self.target_pool_size,
+                    "moet_adjustment": moet_adjustment,
+                    "yt_adjustment": yt_adjustment,
+                    "target_moet": target_moet_value,
+                    "target_yt": target_yt_amount
+                }
+                self.replenishment_history.append(replenishment_event)
+                
+                print(f"💰 POOL REPLENISHMENT at minute {current_minute}:")
+                print(f"   📊 Pool value: ${current_total_value:,.0f} → ${self.target_pool_size:,.0f}")
+                print(f"   🔄 MOET: ${current_moet_reserve:,.0f} → ${target_moet_value:,.0f} ({moet_adjustment:+,.0f})")
+                print(f"   🔄 YT: {current_yt_reserve:,.2f} → {target_yt_amount:,.2f} ({yt_adjustment:+,.2f})")
+                print(f"   🎯 Skew: 75/25 MOET/YT | Total adjustments: {len(self.replenishment_history)}")
+
+            # Use existing token ratio to maintain asymmetric position
+            token0_ratio = uniswap_pool.token0_ratio
+            
+            # Update the liquidity range
+            result = uniswap_pool.update_liquidity_range(
+                center_price=true_yt_price,
+                range_width=self.range_width,
+                token0_ratio=token0_ratio
+            )
+            
+            # Add timing information
+            result["minute"] = current_minute
+            result["alm_rebalance_count"] = self.alm_rebalance_count
+            result["days_since_start"] = current_minute / (24 * 60)
+            
+            # Log the range update
+            if result["success"]:
+                print(f"🔄 RANGE UPDATE at minute {current_minute} (Day {result['days_since_start']:.1f}):")
+                print(f"   📊 ALM Rebalance #{self.alm_rebalance_count} → Range update triggered")
+                print(f"   🎯 Center Price: ${true_yt_price:.6f}")
+                print(f"   📏 New Range: {result['actual_range']} (±{self.range_width*100:.1f}%)")
+                print(f"   🔢 Ticks: {result['tick_range']}")
+                print(f"   💧 Liquidity: {result['liquidity_preserved']:,} → {result['new_liquidity']:,}")
+                print(f"   ⚖️  Token Ratio: {token0_ratio*100:.1f}% MOET / {(1-token0_ratio)*100:.1f}% YT")
+                
+                # Store in history
+                self.range_update_history.append(result)
+                self.last_range_update_minute = current_minute
+            else:
+                print(f"❌ RANGE UPDATE FAILED at minute {current_minute}: {result.get('reason', 'Unknown error')}")
+            
+            return result
+            
+        except Exception as e:
+            error_result = {
+                "success": False,
+                "reason": f"Exception during range update: {str(e)}",
+                "minute": current_minute,
+                "alm_rebalance_count": self.alm_rebalance_count
+            }
+            print(f"❌ RANGE UPDATE ERROR at minute {current_minute}: {str(e)}")
+            return error_result
+    
+    def get_range_update_summary(self) -> dict:
+        """Get summary of all range updates performed"""
+        return {
+            "total_updates": len(self.range_update_history),
+            "alm_rebalances_tracked": self.alm_rebalance_count,
+            "update_interval": self.range_update_interval,
+            "range_width": self.range_width,
+            "last_update_minute": self.last_range_update_minute,
+            "update_history": self.range_update_history
+        }
+
+
 class PoolRebalancerManager:
     """
     Manager class to coordinate both rebalancer agents and provide unified interface
     """
     
-    def __init__(self, alm_interval_minutes: int = 720, algo_threshold_bps: float = 50.0):
+    def __init__(self, alm_interval_minutes: int = 720, algo_threshold_bps: float = 50.0, 
+                 enable_pool_replenishment: bool = True, target_pool_size: float = 500_000):
         self.alm_rebalancer = ALMRebalancer("alm_rebalancer", alm_interval_minutes)
         self.algo_rebalancer = AlgoRebalancer("algo_rebalancer", algo_threshold_bps)
+        
+        # Add Liquidity Range Manager with pool replenishment
+        self.range_manager = LiquidityRangeManager(
+            range_update_interval=6,  # Every 6 ALM rebalances = 3 days
+            range_width=0.01,  # ±1% range around true YT price
+            enable_pool_replenishment=enable_pool_replenishment,
+            target_pool_size=target_pool_size
+        )
         
         self.enabled = False  # Default to disabled for backward compatibility
         
@@ -859,6 +1020,10 @@ class PoolRebalancerManager:
             "alm_time_scale": self.alm_rebalancer.state._simulation_time_scale,
             "algo_time_scale": self.algo_rebalancer.state._simulation_time_scale
         }
+    
+    def get_range_management_status(self) -> Dict:
+        """Get liquidity range management status and history"""
+        return self.range_manager.get_range_update_summary()
         
     def process_rebalancing(self, protocol_state: dict, asset_prices: Dict[Asset, float]) -> List[Dict]:
         """Process both rebalancers and execute any needed rebalancing"""
@@ -891,6 +1056,30 @@ class PoolRebalancerManager:
                     "params": alm_params,
                     "success": True
                 })
+                
+                # Track ALM rebalance for range management
+                self.range_manager.on_alm_rebalance()
+                
+                # Check if we should update liquidity range
+                if self.range_manager.should_update_range():
+                    # Calculate true YT price for range centering
+                    from ..core.yield_tokens import calculate_true_yield_token_price
+                    true_yt_price = calculate_true_yield_token_price(current_time, 0.10, 1.0)
+                    
+                    # Update the range
+                    range_result = self.range_manager.update_liquidity_range(
+                        pool=self.alm_rebalancer.yield_token_pool,
+                        true_yt_price=true_yt_price,
+                        current_minute=current_time
+                    )
+                    
+                    # Add range update to rebalancing events
+                    rebalancing_events.append({
+                        "rebalancer": "RANGE_MANAGER",
+                        "minute": current_time,
+                        "params": range_result,
+                        "success": range_result["success"]
+                    })
         
         # Process Algo rebalancer
         algo_action, algo_params = self.algo_rebalancer.decide_action(enhanced_protocol_state, asset_prices)

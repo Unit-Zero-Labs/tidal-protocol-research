@@ -921,6 +921,157 @@ class UniswapV3Pool:
         if tick_lower <= self.tick_current < tick_upper:
             self.liquidity += liquidity
     
+    def _remove_position(self, tick_lower: int, tick_upper: int, liquidity: int):
+        """Remove liquidity from a position and update tick data"""
+        if liquidity <= 0:
+            return
+            
+        # Find and remove the position
+        for i, position in enumerate(self.positions):
+            if position.tick_lower == tick_lower and position.tick_upper == tick_upper:
+                if position.liquidity >= liquidity:
+                    if position.liquidity == liquidity:
+                        # Remove entire position
+                        self.positions.pop(i)
+                    else:
+                        # Reduce position liquidity
+                        position.liquidity -= liquidity
+                    break
+        
+        # Update tick data
+        if tick_lower in self.ticks:
+            self.ticks[tick_lower].liquidity_net -= liquidity
+            self.ticks[tick_lower].liquidity_gross -= liquidity
+            if self.ticks[tick_lower].liquidity_gross <= 0:
+                self.ticks[tick_lower].initialized = False
+                if self.use_tick_bitmap:
+                    self.tick_bitmap.flip_tick(tick_lower, self.tick_spacing)
+        
+        if tick_upper in self.ticks:
+            self.ticks[tick_upper].liquidity_net += liquidity  # Reverse of add
+            self.ticks[tick_upper].liquidity_gross -= liquidity
+            if self.ticks[tick_upper].liquidity_gross <= 0:
+                self.ticks[tick_upper].initialized = False
+                if self.use_tick_bitmap:
+                    self.tick_bitmap.flip_tick(tick_upper, self.tick_spacing)
+        
+        # Update current liquidity if position includes current tick
+        if tick_lower <= self.tick_current < tick_upper:
+            self.liquidity -= liquidity
+    
+    def update_liquidity_range(self, center_price: float, range_width: float = 0.01, token0_ratio: float = None):
+        """
+        Atomically update concentrated liquidity range around new center price
+        
+        Args:
+            center_price: New center price for the range (true YT price)
+            range_width: Range width as percentage (default 1% = 0.01)
+            token0_ratio: Token0 ratio to maintain (defaults to current pool ratio)
+        
+        Returns:
+            dict: Summary of the range update operation
+        """
+        import math
+        
+        # Use existing token0_ratio if not specified
+        if token0_ratio is None:
+            token0_ratio = self.token0_ratio
+        
+        # Calculate total liquidity to preserve
+        total_liquidity_to_preserve = sum(pos.liquidity for pos in self.positions)
+        
+        if total_liquidity_to_preserve == 0:
+            return {"success": False, "reason": "No liquidity to rebalance"}
+        
+        # Calculate new range bounds
+        lower_price = center_price * (1 - range_width)
+        upper_price = center_price * (1 + range_width)
+        
+        # Convert prices to ticks with proper rounding
+        lower_tick_raw = math.log(lower_price) / math.log(1.0001)
+        upper_tick_raw = math.log(upper_price) / math.log(1.0001)
+        
+        # Round to valid tick spacing
+        tick_lower = int(lower_tick_raw // self.tick_spacing) * self.tick_spacing
+        tick_upper = int(upper_tick_raw // self.tick_spacing + 1) * self.tick_spacing
+        
+        # Ensure valid tick range
+        tick_lower = max(MIN_TICK, tick_lower)
+        tick_upper = min(MAX_TICK, tick_upper)
+        
+        if tick_lower >= tick_upper:
+            return {"success": False, "reason": "Invalid tick range"}
+        
+        # Store old positions for logging
+        old_positions = self.positions.copy()
+        
+        # Remove all existing positions
+        for position in old_positions:
+            self._remove_position(position.tick_lower, position.tick_upper, position.liquidity)
+        
+        # Calculate liquidity amounts for new asymmetric position
+        # Use the asymmetric yield token position logic
+        total_amount0 = self.total_liquidity * token0_ratio  # MOET side
+        total_amount1 = self.total_liquidity * (1 - token0_ratio)  # YT side
+        
+        # Calculate concentrated liquidity using Uniswap V3 math
+        sqrt_price_current_x96 = self.sqrt_price_x96
+        sqrt_price_lower_x96 = tick_to_sqrt_price_x96(tick_lower)
+        sqrt_price_upper_x96 = tick_to_sqrt_price_x96(tick_upper)
+        
+        # Use concentrated portion (95% by default)
+        concentrated_amount0 = total_amount0 * self.concentration
+        concentrated_amount1 = total_amount1 * self.concentration
+        
+        # Calculate proper liquidity using Uniswap V3 formulas
+        amount0_scaled = int(concentrated_amount0 * 1e6)
+        amount1_scaled = int(concentrated_amount1 * 1e6)
+        
+        # Calculate liquidity from amounts
+        if sqrt_price_current_x96 <= sqrt_price_lower_x96:
+            # Price below range - all token0
+            liquidity = mul_div(amount0_scaled, sqrt_price_lower_x96 * sqrt_price_upper_x96, Q96 * (sqrt_price_upper_x96 - sqrt_price_lower_x96))
+        elif sqrt_price_current_x96 >= sqrt_price_upper_x96:
+            # Price above range - all token1
+            liquidity = mul_div(amount1_scaled, Q96, sqrt_price_upper_x96 - sqrt_price_lower_x96)
+        else:
+            # Price in range - use both tokens
+            liquidity0 = mul_div(amount0_scaled, sqrt_price_current_x96 * sqrt_price_upper_x96, Q96 * (sqrt_price_upper_x96 - sqrt_price_current_x96))
+            liquidity1 = mul_div(amount1_scaled, Q96, sqrt_price_current_x96 - sqrt_price_lower_x96)
+            liquidity = min(liquidity0, liquidity1)
+        
+        # Ensure we preserve total liquidity
+        if liquidity <= 0:
+            liquidity = total_liquidity_to_preserve
+        
+        # Add the new concentrated position
+        self._add_position(tick_lower, tick_upper, liquidity)
+        
+        # Add remaining liquidity as wide position (5% by default)
+        if self.concentration < 1.0:
+            remaining_liquidity = int(total_liquidity_to_preserve * (1 - self.concentration))
+            if remaining_liquidity > 0:
+                wide_tick_lower = max(MIN_TICK, tick_lower - 1000 * self.tick_spacing)
+                wide_tick_upper = min(MAX_TICK, tick_upper + 1000 * self.tick_spacing)
+                self._add_position(wide_tick_lower, wide_tick_upper, remaining_liquidity)
+        
+        # Calculate actual price range for logging
+        actual_lower_price = 1.0001 ** tick_lower
+        actual_upper_price = 1.0001 ** tick_upper
+        
+        return {
+            "success": True,
+            "old_positions": len(old_positions),
+            "new_positions": len(self.positions),
+            "center_price": center_price,
+            "target_range": f"${lower_price:.6f} - ${upper_price:.6f}",
+            "actual_range": f"${actual_lower_price:.6f} - ${actual_upper_price:.6f}",
+            "tick_range": f"{tick_lower} - {tick_upper}",
+            "liquidity_preserved": total_liquidity_to_preserve,
+            "new_liquidity": sum(pos.liquidity for pos in self.positions),
+            "token0_ratio": token0_ratio
+        }
+    
     def swap(
         self,
         zero_for_one: bool,

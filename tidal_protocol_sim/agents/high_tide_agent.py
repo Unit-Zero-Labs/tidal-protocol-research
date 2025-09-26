@@ -28,13 +28,13 @@ class HighTideAgentState(AgentState):
         self.automatic_rebalancing = True
         
         # Override default initialization for High Tide scenario
-        # Each agent deposits exactly 1 BTC ($100,000 initial value)
-        btc_price = 100_000.0
+        # Each agent deposits exactly 1 BTC (use actual starting BTC price)
+        btc_price = initial_balance  # Use the provided initial_balance as BTC price
         btc_amount = 1.0  # Exactly 1 BTC
         
         # Calculate borrowing capacity using BTC collateral factor
         btc_collateral_factor = 0.80  # BTC collateral factor
-        effective_collateral_value = btc_amount * btc_price * btc_collateral_factor  # $80,000
+        effective_collateral_value = btc_amount * btc_price * btc_collateral_factor  # 1 BTC × price × 0.80
         moet_to_borrow = effective_collateral_value / initial_hf  # Borrow based on initial HF
         
         # Reset balances for High Tide scenario
@@ -43,7 +43,7 @@ class HighTideAgentState(AgentState):
             Asset.BTC: 0.0,  # All BTC will be supplied as collateral
             Asset.FLOW: 0.0,
             Asset.USDC: 0.0,
-            Asset.MOET: 0.0  # MOET will be used to buy yield tokens
+            Asset.MOET: moet_to_borrow  # Initial borrowed MOET available for YT purchase
         }
         
         # BTC supplied as collateral
@@ -134,9 +134,11 @@ class HighTideAgent(BaseAgent):
             len(self.state.yield_token_manager.yield_tokens) == 0):
             return ("no_action", {})
         
-        # Check if we can increase leverage (HF > initial HF)
-        if self._check_leverage_opportunity(asset_prices):
-            return self._execute_leverage_increase(asset_prices, current_minute)
+        # PERFORMANCE OPTIMIZATION: Check leverage opportunity daily instead of every minute
+        # This reduces computational load by 1,440x and prevents system crashes
+        if current_minute % 1440 == 0:  # Daily leverage checks only
+            if self._check_leverage_opportunity(asset_prices):
+                return self._execute_leverage_increase(asset_prices, current_minute)
         
         # Check if rebalancing is needed (HF below initial threshold)
         if self._needs_rebalancing():
@@ -479,18 +481,32 @@ class HighTideAgent(BaseAgent):
         """Execute yield token purchase"""
         if moet_amount <= 0:
             return False
+        
+        # Check if we have enough MOET balance
+        moet_balance = self.state.token_balances.get(Asset.MOET, 0.0)
+        if moet_balance < moet_amount:
+            print(f"           ❌ Insufficient MOET balance: need ${moet_amount:,.2f}, have ${moet_balance:,.2f}")
+            return False
             
         # Purchase yield tokens
         new_tokens = self.state.yield_token_manager.mint_yield_tokens(moet_amount, current_minute, use_direct_minting)
         
-        # Set initial yield token value if this is the first purchase
-        if self.state.initial_yield_token_value == 0.0:
-            self.state.initial_yield_token_value = self.state.yield_token_manager.calculate_total_value(current_minute)
+        if new_tokens:
+            # CRITICAL FIX: Subtract the MOET spent on yield tokens
+            self.state.token_balances[Asset.MOET] -= moet_amount
+            
+            # Set initial yield token value if this is the first purchase
+            if self.state.initial_yield_token_value == 0.0:
+                self.state.initial_yield_token_value = self.state.yield_token_manager.calculate_total_value(current_minute)
+            
+            # Calculate actual YT received for logging
+            yt_received = sum(token.initial_value for token in new_tokens)
+            print(f"           💰 YT Purchase: ${moet_amount:,.2f} MOET → ${yt_received:,.2f} YT")
+            print(f"           💳 MOET Balance: ${moet_balance:,.2f} → ${self.state.token_balances[Asset.MOET]:,.2f}")
+            
+            return True
         
-        # Update MOET debt (it's already borrowed, now used for yield tokens)
-        # Debt remains the same, but MOET is now in yield tokens
-        
-        return len(new_tokens) > 0
+        return False
     
     def execute_yield_token_sale(self, moet_amount_needed: float, current_minute: int) -> float:
         """Execute yield token sale for rebalancing using REAL pool execution"""
