@@ -179,8 +179,9 @@ class HighTideVaultEngine(TidalProtocolEngine):
                 agent.update_debt_interest(minute, borrow_rate)
     
     def _process_high_tide_agents(self, minute: int) -> Dict[str, Dict]:
-        """Process High Tide agent actions for current minute"""
+        """Process High Tide agent actions for current minute with intra-loop rebalancing"""
         swap_data = {}
+        agents_processed = 0
         
         for agent in self.high_tide_agents:
             if not agent.active:
@@ -202,7 +203,91 @@ class HighTideVaultEngine(TidalProtocolEngine):
             # Record action
             self._record_agent_action(agent.agent_id, action_type, params)
             
+            agents_processed += 1
+            
+            # INTRA-LOOP REBALANCING: Check pool health after each agent action
+            # Only check if we have a pool rebalancer and this was a leverage increase
+            if (hasattr(self, 'pool_rebalancer') and 
+                action_type == AgentAction.BORROW and 
+                params.get("leverage_increase", False)):
+                
+                # Check if pool needs emergency rebalancing
+                if self._should_trigger_emergency_rebalancing():
+                    print(f"🚨 EMERGENCY REBALANCING triggered after agent {agents_processed} at minute {minute}")
+                    self._execute_emergency_rebalancing(minute)
+            
         return swap_data
+    
+    def _should_trigger_emergency_rebalancing(self) -> bool:
+        """Check if emergency rebalancing should be triggered based on pool health"""
+        try:
+            # Check if yield token pool exists and has liquidity
+            if not hasattr(self, 'yield_token_pool') or not self.yield_token_pool:
+                return False
+            
+            # Get current pool liquidity from Uniswap V3 pool
+            uniswap_pool = self.yield_token_pool.uniswap_pool
+            if not hasattr(uniswap_pool, 'liquidity'):
+                return False
+            
+            # Check if liquidity is critically low (less than 10% of initial)
+            current_liquidity = uniswap_pool.liquidity
+            initial_liquidity = 500_000_000_000  # Based on pool initialization
+            
+            liquidity_threshold = initial_liquidity * 0.1  # 10% threshold
+            
+            if current_liquidity < liquidity_threshold:
+                print(f"⚠️  Pool liquidity critically low: {current_liquidity:,.0f} < {liquidity_threshold:,.0f}")
+                return True
+            
+            # Also check if pool reserves are critically low
+            moet_reserve = getattr(uniswap_pool, 'token0_reserve', 0)
+            yt_reserve = getattr(uniswap_pool, 'token1_reserve', 0)
+            
+            if moet_reserve < 1000 or yt_reserve < 1000:  # Less than $1000 in either token
+                print(f"⚠️  Pool reserves critically low: MOET={moet_reserve:.0f}, YT={yt_reserve:.0f}")
+                return True
+                
+            return False
+            
+        except Exception as e:
+            print(f"❌ Error checking pool health: {str(e)}")
+            return False
+    
+    def _execute_emergency_rebalancing(self, minute: int):
+        """Execute emergency pool rebalancing during agent processing"""
+        try:
+            # Import here to avoid circular imports
+            from tidal_protocol_sim.core.yield_tokens import calculate_true_yield_token_price
+            from tidal_protocol_sim.engine.state import Asset
+            
+            # Calculate current yield token prices and deviations
+            true_yt_price = calculate_true_yield_token_price(minute, 0.10, 1.0)
+            pool_yt_price = self.yield_token_pool.uniswap_pool.get_price()
+            deviation_bps = abs((pool_yt_price - true_yt_price) / true_yt_price) * 10000
+            
+            protocol_state = {
+                "current_minute": minute,
+                "true_yield_token_price": true_yt_price,
+                "pool_yield_token_price": pool_yt_price,
+                "deviation_bps": deviation_bps,
+                "emergency_rebalancing": True  # Flag to indicate this is emergency
+            }
+            
+            # Get current BTC price
+            current_btc_price = self.state.current_prices.get(Asset.BTC, 50000)
+            asset_prices = {Asset.BTC: current_btc_price}
+            
+            # Execute emergency rebalancing
+            rebalancing_events = self.pool_rebalancer.process_rebalancing(protocol_state, asset_prices)
+            
+            if rebalancing_events:
+                print(f"✅ Emergency rebalancing executed: {len(rebalancing_events)} events")
+            else:
+                print("⚠️  Emergency rebalancing attempted but no actions taken")
+                
+        except Exception as e:
+            print(f"❌ Emergency rebalancing failed: {str(e)}")
             
     def _execute_high_tide_action(self, agent: HighTideAgent, action_type: AgentAction, params: dict, minute: int) -> tuple:
         """Execute High Tide specific actions"""
