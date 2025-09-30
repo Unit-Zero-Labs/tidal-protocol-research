@@ -127,7 +127,7 @@ def get_amount0_delta_economic(
     # Calculate economically correct output
     economic_output = amount_in / denominator_float
     
-    print(f"🔧 ECONOMIC FIX: Input={amount_in:,}, L*√P={l_sqrt_p:,.0f}, Output={economic_output:,.0f} (vs original Uniswap formula)")
+    # Economic fix applied - removed debug logging
     
     return int(economic_output)
 
@@ -816,7 +816,6 @@ class UniswapV3Pool:
         
         # Calculate L using the standard method
         L = concentrated_liquidity_usd / coeff_sum
-        print(f"🔄 LIQUIDITY CALCULATION: coeff_sum={coeff_sum:.8f}, L={L:,.0f}")
         
         # Step 5: Calculate actual token amounts
         amount_0 = L * coeff_0  # MOET amount

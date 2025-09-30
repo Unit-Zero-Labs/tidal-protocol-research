@@ -845,6 +845,12 @@ class FullYearSimulation:
         # Chart 7: Pool Rebalancer Balance Evolution (2x1 layout)
         self._create_pool_balance_evolution_chart(output_dir)
         
+        # Chart 8: Net APY Analysis (Agent Performance vs BTC Hold)
+        self._create_net_apy_analysis_chart(output_dir)
+        
+        # Chart 9: Yield Strategy Comparison (Tidal Protocol vs Base Yield)
+        self._create_yield_strategy_comparison_chart(output_dir)
+        
         print(f"📊 Charts saved to: {output_dir}")
     
     def _create_price_deviation_chart(self, output_dir: Path):
@@ -1066,11 +1072,18 @@ class FullYearSimulation:
         ax1.plot(df['hour'], df['pool_yt_price'], linewidth=2, color='red', 
                  label='Pool YT Price', alpha=0.8)
         
-        # Mark ALM rebalancing events
+        # Mark ALM rebalancing events (sample every 20th event to reduce clutter)
         sell_yt_labeled = False
         buy_yt_labeled = False
         
-        for event in alm_events:
+        # Sample events to reduce visual clutter - show every 20th event or significant ones
+        sampled_events = []
+        for i, event in enumerate(alm_events):
+            # Show every 20th event OR events with large amounts (>$50k)
+            if i % 20 == 0 or event.get('amount', 0) > 50000:
+                sampled_events.append(event)
+        
+        for event in sampled_events:
             color = 'green' if event['direction'] == 'sell_yt_for_moet' else 'orange'
             marker = '^' if event['direction'] == 'sell_yt_for_moet' else 'v'
             
@@ -1083,7 +1096,7 @@ class FullYearSimulation:
                 label = "ALM Buy YT With MOET"
                 buy_yt_labeled = True
             
-            ax1.axvline(x=event['hour'], color=color, linestyle='--', alpha=0.7)
+            ax1.axvline(x=event['hour'], color=color, linestyle='--', alpha=0.5)
             ax1.scatter(event['hour'], event['true_price'], color=color, s=100, 
                        marker=marker, zorder=5, label=label)
         
@@ -1104,10 +1117,10 @@ class FullYearSimulation:
         ax2.axhline(y=50, color='red', linestyle='--', alpha=0.5, label='Algo Threshold (+50 bps)')
         ax2.axhline(y=-50, color='red', linestyle='--', alpha=0.5, label='Algo Threshold (-50 bps)')
         
-        # Mark ALM events on deviation chart
-        for event in alm_events:
+        # Mark ALM events on deviation chart (use same sampled events)
+        for event in sampled_events:
             color = 'green' if event['direction'] == 'sell_yt_for_moet' else 'orange'
-            ax2.axvline(x=event['hour'], color=color, linestyle='--', alpha=0.7)
+            ax2.axvline(x=event['hour'], color=color, linestyle='--', alpha=0.5)
         
         ax2.set_xlabel('Hours')
         ax2.set_ylabel('Deviation (basis points)')
@@ -1205,8 +1218,8 @@ class FullYearSimulation:
     
     def _plot_rebalancer_volume(self, ax, events, title, ylabel):
         """Plot rebalancer volume as stacked bars (sell vs buy)"""
-        # Set consistent x-axis range for both ALM and Algo charts (0-36 hours)
-        max_hours = 36
+        # Set consistent x-axis range for both ALM and Algo charts (full year)
+        max_hours = 8760  # Full year = 365 days * 24 hours = 8760 hours
         ax.set_xlim(0, max_hours)
         
         if not events:
@@ -1240,8 +1253,8 @@ class FullYearSimulation:
     
     def _plot_rebalancer_pnl(self, ax, events, title, ylabel):
         """Plot rebalancer cumulative PnL as line chart"""
-        # Set consistent x-axis range for both ALM and Algo charts (0-36 hours)
-        max_hours = 36
+        # Set consistent x-axis range for both ALM and Algo charts (full year)
+        max_hours = 8760  # Full year = 365 days * 24 hours = 8760 hours
         ax.set_xlim(0, max_hours)
         
         if not events:
@@ -1291,10 +1304,11 @@ class FullYearSimulation:
         btc_history = simulation_results.get("btc_price_history", [])
         btc_data = []
         for i, btc_entry in enumerate(btc_history):
-            hour = i / 60.0  # Convert minutes to hours
+            # BTC data is daily, so convert day to hours (day * 24 hours/day)
+            hour = i * 24.0  # Convert day index to hours
             btc_data.append({
                 "hour": hour,
-                "minute": i,
+                "day": i,
                 "btc_price": btc_entry
             })
         
@@ -1306,7 +1320,8 @@ class FullYearSimulation:
         
         # Extract data from agent health history snapshots
         for i, health_snapshot in enumerate(agent_health_history):
-            hour = i / 60.0  # Convert minutes to hours
+            # Agent data is also daily, so convert day to hours (day * 24 hours/day)
+            hour = i * 24.0  # Convert day index to hours
             if health_snapshot and "agents" in health_snapshot:
                 agents_list = health_snapshot["agents"]
                 if agents_list:
@@ -1351,12 +1366,14 @@ class FullYearSimulation:
             hours = [d["hour"] for d in btc_data]
             prices = [d["btc_price"] for d in btc_data]
             ax1.plot(hours, prices, linewidth=2, color='orange', label='BTC Price')
-            ax1.set_title('BTC Price Decline Over Time')
+            ax1.set_title('BTC Price Evolution Over Full Year')
             ax1.set_xlabel('Hours')
             ax1.set_ylabel('BTC Price ($)')
+            ax1.set_xlim(0, 8760)  # Full year = 365 days * 24 hours = 8760 hours
             ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
             ax1.grid(True, alpha=0.3)
             ax1.legend()
+            print(f"📊 BTC data range: {min(hours):.1f} to {max(hours):.1f} hours ({len(hours)} points)")
         
         # Top Right: Agent Health Factor Evolution
         if agent_time_series:
@@ -1370,21 +1387,24 @@ class FullYearSimulation:
             ax2.axhline(y=self.config.agent_target_hf, color='orange', linestyle='--', alpha=0.7, label=f'Target HF ({self.config.agent_target_hf})')
             ax2.axhline(y=self.config.agent_rebalancing_hf, color='red', linestyle=':', alpha=0.7, label=f'Rebalancing HF ({self.config.agent_rebalancing_hf})')
             
-            ax2.set_title('Agent Health Factor Evolution')
+            ax2.set_title('Agent Health Factor Evolution Over Full Year')
             ax2.set_xlabel('Hours')
             ax2.set_ylabel('Health Factor')
+            ax2.set_xlim(0, 8760)  # Full year
             ax2.set_ylim(1.0, max(1.15, self.config.agent_initial_hf + 0.05))
             ax2.grid(True, alpha=0.3)
             ax2.legend()
+            print(f"📊 Agent data range: {min(hours):.1f} to {max(hours):.1f} hours ({len(hours)} points)")
         
         # Bottom Left: Net Position Value Evolution
         if net_position_data:
             hours = [d["hour"] for d in net_position_data]
             net_positions = [d["net_position"] for d in net_position_data]
             ax3.plot(hours, net_positions, linewidth=2, color='purple', label='Net Position Value')
-            ax3.set_title('Net Position Value Over Time')
+            ax3.set_title('Net Position Value Evolution Over Full Year')
             ax3.set_xlabel('Hours')
             ax3.set_ylabel('Net Position Value ($)')
+            ax3.set_xlim(0, 8760)  # Full year
             ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
             ax3.grid(True, alpha=0.3)
             ax3.legend()
@@ -1394,9 +1414,10 @@ class FullYearSimulation:
             hours = [d["hour"] for d in yt_holdings_data]
             yt_holdings = [d["yt_holdings"] for d in yt_holdings_data]
             ax4.plot(hours, yt_holdings, linewidth=2, color='green', label='YT Holdings')
-            ax4.set_title('Yield Token Holdings Over Time')
+            ax4.set_title('Yield Token Holdings Evolution Over Full Year')
             ax4.set_xlabel('Hours')
             ax4.set_ylabel('YT Holdings')
+            ax4.set_xlim(0, 8760)  # Full year
             ax4.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:,.0f}'))
             ax4.grid(True, alpha=0.3)
             ax4.legend()
@@ -1445,8 +1466,8 @@ class FullYearSimulation:
         current_moet = 500000
         current_yt = 0
         
-        # Create hourly data points
-        for hour in range(37):  # 0 to 36 hours
+        # Create hourly data points for full year
+        for hour in range(8761):  # 0 to 8760 hours (full year)
             # Check if there's a rebalancer event at this hour
             for event in rebalancer_events:
                 if abs(event["hour"] - hour) < 0.5:  # Within 30 minutes of this hour
@@ -1475,13 +1496,17 @@ class FullYearSimulation:
         ax1.grid(True, alpha=0.3)
         ax1.legend()
         
-        # Add rebalancer event markers
-        for event in rebalancer_events:
+        # Add rebalancer event markers (sample every 50th event to reduce clutter)
+        sampled_rebalancer_events = []
+        for i, event in enumerate(rebalancer_events):
+            # Show every 50th event OR significant balance changes (>$100k change)
+            balance_change = abs(event["moet_balance_after"] - event["moet_balance_before"])
+            if i % 50 == 0 or balance_change > 100000:
+                sampled_rebalancer_events.append(event)
+        
+        for event in sampled_rebalancer_events:
             color = 'blue' if event["rebalancer_type"] == "ALM" else 'red'
-            ax1.axvline(x=event["hour"], color=color, linestyle='--', alpha=0.7, linewidth=2)
-            ax1.text(event["hour"], max(max(moet_balances), max(yt_balances)) * 0.9, 
-                    f'{event["rebalancer_type"]}', rotation=90, ha='right', va='top', 
-                    color=color, fontweight='bold')
+            ax1.axvline(x=event["hour"], color=color, linestyle='--', alpha=0.4, linewidth=1)
         
         # Bottom: Percentage composition (100% stacked area chart)
         total_balances = [moet + yt for moet, yt in zip(moet_balances, yt_balances)]
@@ -1499,10 +1524,10 @@ class FullYearSimulation:
         ax2.grid(True, alpha=0.3)
         ax2.legend()
         
-        # Add rebalancer event markers to bottom chart too
-        for event in rebalancer_events:
+        # Add rebalancer event markers to bottom chart too (use same sampled events)
+        for event in sampled_rebalancer_events:
             color = 'blue' if event["rebalancer_type"] == "ALM" else 'red'
-            ax2.axvline(x=event["hour"], color=color, linestyle='--', alpha=0.7, linewidth=2)
+            ax2.axvline(x=event["hour"], color=color, linestyle='--', alpha=0.4, linewidth=1)
         
         plt.tight_layout()
         plt.savefig(output_dir / "pool_balance_evolution_analysis.png", dpi=300, bbox_inches='tight')
@@ -1960,6 +1985,360 @@ class FullYearSimulation:
             json.dump(self._convert_for_json(results), f, indent=2)
         
         print(f"📁 Agent limit test results saved to: {results_path}")
+    
+    def _create_net_apy_analysis_chart(self, output_dir: Path):
+        """Create Net APY analysis chart: Agent performance vs BTC hold strategy"""
+        
+        # Extract time series data from simulation results
+        simulation_results = self.results.get("simulation_results", {})
+        
+        # Get BTC price history
+        btc_history = simulation_results.get("btc_price_history", [])
+        btc_data = []
+        for i, btc_entry in enumerate(btc_history):
+            hour = i * 24.0  # Convert day index to hours
+            btc_data.append({
+                "hour": hour,
+                "day": i,
+                "btc_price": btc_entry
+            })
+        
+        # Get agent health factor history and net position data
+        agent_health_history = simulation_results.get("agent_health_history", [])
+        agent_data = []
+        
+        # Extract data from agent health history snapshots
+        for i, health_snapshot in enumerate(agent_health_history):
+            hour = i * 24.0  # Convert day index to hours
+            if health_snapshot and "agents" in health_snapshot:
+                agents_list = health_snapshot["agents"]
+                if agents_list:
+                    # Use test_agent_03 as representative
+                    target_agent = None
+                    for agent in agents_list:
+                        if agent.get("agent_id") == "test_agent_03":
+                            target_agent = agent
+                            break
+                    
+                    if not target_agent and agents_list:
+                        target_agent = agents_list[0]
+                    
+                    if target_agent:
+                        agent_data.append({
+                            "hour": hour,
+                            "day": i,
+                            "net_position_value": target_agent.get("net_position_value", 100000),
+                            "initial_position": 100000  # Assuming $100k initial position
+                        })
+        
+        if not btc_data or not agent_data:
+            print("⚠️  No data available for Net APY analysis")
+            return
+        
+        # Calculate performance metrics
+        initial_btc_price = btc_data[0]["btc_price"]
+        initial_agent_value = agent_data[0]["net_position_value"]
+        
+        # Create performance time series
+        hours = []
+        agent_apy = []
+        btc_hold_apy = []
+        relative_performance = []
+        
+        for i, (btc_point, agent_point) in enumerate(zip(btc_data, agent_data)):
+            if btc_point["hour"] == agent_point["hour"]:  # Ensure alignment
+                hour = btc_point["hour"]
+                days_elapsed = hour / 24.0
+                
+                if days_elapsed > 0:
+                    # Calculate annualized returns
+                    btc_return = (btc_point["btc_price"] / initial_btc_price - 1) * (365 / days_elapsed) * 100
+                    agent_return = (agent_point["net_position_value"] / initial_agent_value - 1) * (365 / days_elapsed) * 100
+                    
+                    hours.append(hour)
+                    agent_apy.append(agent_return)
+                    btc_hold_apy.append(btc_return)
+                    relative_performance.append(agent_return - btc_return)
+        
+        # Create 2x2 subplot
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Net APY Analysis: Agent Performance vs BTC Hold Strategy', 
+                     fontsize=16, fontweight='bold')
+        
+        # Top Left: Absolute Value Comparison
+        btc_hold_values = [btc_data[i]["btc_price"] / initial_btc_price * initial_agent_value for i in range(len(hours))]
+        agent_values = [agent_data[i]["net_position_value"] for i in range(len(hours))]
+        
+        ax1.plot(hours, btc_hold_values, linewidth=2, color='orange', label='BTC Hold Value', alpha=0.8)
+        ax1.plot(hours, agent_values, linewidth=2, color='blue', label='Agent Net Position', alpha=0.8)
+        
+        ax1.set_title('Portfolio Value Comparison')
+        ax1.set_xlabel('Hours')
+        ax1.set_ylabel('Portfolio Value ($)')
+        ax1.set_xlim(0, 8760)
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        # Top Right: Annualized Return Percentage (APY)
+        ax2.plot(hours, btc_hold_apy, linewidth=2, color='orange', label='BTC Hold APY', alpha=0.8)
+        ax2.plot(hours, agent_apy, linewidth=2, color='blue', label='Agent Strategy APY', alpha=0.8)
+        ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+        
+        ax2.set_title('Annualized Percentage Yield (APY)')
+        ax2.set_xlabel('Hours')
+        ax2.set_ylabel('APY (%)')
+        ax2.set_xlim(0, 8760)
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}%'))
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        
+        # Bottom Left: Relative Performance (Agent APY - BTC Hold APY)
+        positive_mask = [x >= 0 for x in relative_performance]
+        negative_mask = [x < 0 for x in relative_performance]
+        
+        # Plot positive and negative separately for color coding
+        ax3.fill_between(hours, 0, relative_performance, 
+                        where=positive_mask, color='green', alpha=0.7, 
+                        interpolate=True, label='Outperformance')
+        ax3.fill_between(hours, 0, relative_performance, 
+                        where=negative_mask, color='red', alpha=0.7, 
+                        interpolate=True, label='Underperformance')
+        ax3.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+        
+        ax3.set_title('Relative Performance (Agent APY - BTC Hold APY)')
+        ax3.set_xlabel('Hours')
+        ax3.set_ylabel('APY Difference (%)')
+        ax3.set_xlim(0, 8760)
+        ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}%'))
+        ax3.grid(True, alpha=0.3)
+        ax3.legend()
+        
+        # Bottom Right: Average Outperformance
+        average_outperformance = []
+        running_sum = 0
+        for perf in relative_performance:
+            running_sum += perf / len(relative_performance)  # Average the performance
+            average_outperformance.append(running_sum)
+        
+        ax4.plot(hours, average_outperformance, linewidth=2, color='purple', 
+                 label='Average Outperformance')
+        ax4.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+        ax4.fill_between(hours, 0, average_outperformance, 
+                        where=[x >= 0 for x in average_outperformance], 
+                        color='green', alpha=0.3)
+        ax4.fill_between(hours, 0, average_outperformance, 
+                        where=[x < 0 for x in average_outperformance], 
+                        color='red', alpha=0.3)
+        
+        ax4.set_title('Average Outperformance')
+        ax4.set_xlabel('Hours')
+        ax4.set_ylabel('Average APY Difference (%)')
+        ax4.set_xlim(0, 8760)
+        ax4.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}%'))
+        ax4.grid(True, alpha=0.3)
+        ax4.legend()
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "net_apy_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Print summary statistics
+        if hours:
+            final_agent_apy = agent_apy[-1] if agent_apy else 0
+            final_btc_apy = btc_hold_apy[-1] if btc_hold_apy else 0
+            final_outperformance = relative_performance[-1] if relative_performance else 0
+            avg_outperformance = sum(relative_performance) / len(relative_performance) if relative_performance else 0
+            
+            print(f"📊 Net APY Analysis:")
+            print(f"   Final Agent APY: {final_agent_apy:.2f}%")
+            print(f"   Final BTC Hold APY: {final_btc_apy:.2f}%")
+            print(f"   Final Outperformance: {final_outperformance:.2f}%")
+            print(f"   Average Outperformance: {avg_outperformance:.2f}%")
+    
+    def _create_yield_strategy_comparison_chart(self, output_dir: Path):
+        """Create Yield Strategy Comparison chart: Tidal Protocol vs Base 10% APR yield"""
+        
+        # Extract time series data from simulation results
+        simulation_results = self.results.get("simulation_results", {})
+        
+        # Get BTC price history
+        btc_history = simulation_results.get("btc_price_history", [])
+        btc_data = []
+        for i, btc_entry in enumerate(btc_history):
+            hour = i * 24.0  # Convert day index to hours
+            btc_data.append({
+                "hour": hour,
+                "day": i,
+                "btc_price": btc_entry
+            })
+        
+        # Get agent health factor history and net position data
+        agent_health_history = simulation_results.get("agent_health_history", [])
+        agent_data = []
+        
+        # Extract data from agent health history snapshots
+        for i, health_snapshot in enumerate(agent_health_history):
+            hour = i * 24.0  # Convert day index to hours
+            if health_snapshot and "agents" in health_snapshot:
+                agents_list = health_snapshot["agents"]
+                if agents_list:
+                    # Use first agent as representative
+                    target_agent = agents_list[0]
+                    
+                    if target_agent:
+                        agent_data.append({
+                            "hour": hour,
+                            "day": i,
+                            "net_position_value": target_agent.get("net_position_value", 100000),
+                            "btc_price": btc_data[i]["btc_price"] if i < len(btc_data) else btc_data[-1]["btc_price"]
+                        })
+        
+        if not btc_data or not agent_data:
+            print("⚠️  No data available for Yield Strategy Comparison")
+            return
+        
+        # Calculate performance metrics
+        initial_btc_price = btc_data[0]["btc_price"]
+        initial_agent_value = agent_data[0]["net_position_value"]
+        base_apr = 0.10  # 10% APR
+        
+        # Create performance time series
+        hours = []
+        tidal_yield_adjusted = []  # Net Position Value / BTC Price
+        base_yield_value = []      # Just 10% APR compounded
+        base_yield_apy = []        # Annualized base yield
+        tidal_yield_apy = []       # Annualized Tidal yield
+        relative_performance = []   # Tidal vs Base yield difference
+        
+        for i, (btc_point, agent_point) in enumerate(zip(btc_data, agent_data)):
+            if btc_point["hour"] == agent_point["hour"]:  # Ensure alignment
+                hour = btc_point["hour"]
+                days_elapsed = hour / 24.0
+                
+                if days_elapsed >= 0:
+                    # Tidal Protocol: Net Position Value adjusted for BTC price changes
+                    tidal_value_btc_adjusted = agent_point["net_position_value"] / btc_point["btc_price"] * initial_btc_price
+                    
+                    # Base Yield: Simple 10% APR compounded daily
+                    years_elapsed = days_elapsed / 365.0
+                    base_value = initial_agent_value * (1 + base_apr) ** years_elapsed
+                    
+                    hours.append(hour)
+                    tidal_yield_adjusted.append(tidal_value_btc_adjusted)
+                    base_yield_value.append(base_value)
+                    
+                    if days_elapsed > 0:
+                        # Calculate annualized returns
+                        tidal_return = (tidal_value_btc_adjusted / initial_agent_value - 1) * (365 / days_elapsed) * 100
+                        base_return = base_apr * 100  # Always 10%
+                        
+                        tidal_yield_apy.append(tidal_return)
+                        base_yield_apy.append(base_return)
+                        relative_performance.append(tidal_return - base_return)
+                    else:
+                        tidal_yield_apy.append(0)
+                        base_yield_apy.append(0)
+                        relative_performance.append(0)
+        
+        # Create 2x2 subplot
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Yield Strategy Comparison: Tidal Protocol vs Base 10% APR Yield', 
+                     fontsize=16, fontweight='bold')
+        
+        # Top Left: Absolute Value Comparison (BTC-adjusted)
+        ax1.plot(hours, base_yield_value, linewidth=2, color='green', label='Base 10% APR Yield', alpha=0.8)
+        ax1.plot(hours, tidal_yield_adjusted, linewidth=2, color='blue', label='Tidal Protocol (BTC-adjusted)', alpha=0.8)
+        
+        ax1.set_title('Portfolio Value Comparison (BTC-Price Adjusted)')
+        ax1.set_xlabel('Hours')
+        ax1.set_ylabel('Portfolio Value ($)')
+        ax1.set_xlim(0, 8760)
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        # Top Right: Annualized Yield Comparison
+        ax2.plot(hours, base_yield_apy, linewidth=2, color='green', label='Base 10% APR', alpha=0.8)
+        ax2.plot(hours, tidal_yield_apy, linewidth=2, color='blue', label='Tidal Protocol APY', alpha=0.8)
+        ax2.axhline(y=10, color='green', linestyle='--', alpha=0.5, label='10% Target')
+        
+        ax2.set_title('Annualized Yield Comparison')
+        ax2.set_xlabel('Hours')
+        ax2.set_ylabel('APY (%)')
+        ax2.set_xlim(0, 8760)
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}%'))
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        
+        # Bottom Left: Relative Performance (Tidal APY - Base APY)
+        positive_mask = [x >= 0 for x in relative_performance]
+        negative_mask = [x < 0 for x in relative_performance]
+        
+        # Plot positive and negative separately for color coding
+        ax3.fill_between(hours, 0, relative_performance, 
+                        where=positive_mask, color='green', alpha=0.7, 
+                        interpolate=True, label='Tidal Outperformance')
+        ax3.fill_between(hours, 0, relative_performance, 
+                        where=negative_mask, color='red', alpha=0.7, 
+                        interpolate=True, label='Tidal Underperformance')
+        ax3.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+        
+        ax3.set_title('Relative Performance (Tidal APY - Base 10% APR)')
+        ax3.set_xlabel('Hours')
+        ax3.set_ylabel('APY Difference (%)')
+        ax3.set_xlim(0, 8760)
+        ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}%'))
+        ax3.grid(True, alpha=0.3)
+        ax3.legend()
+        
+        # Bottom Right: Average Yield Advantage
+        average_advantage = []
+        running_sum = 0
+        for perf in relative_performance:
+            running_sum += perf / len(relative_performance)  # Average the performance
+            average_advantage.append(running_sum)
+        
+        ax4.plot(hours, average_advantage, linewidth=2, color='purple', 
+                 label='Average Yield Advantage')
+        ax4.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+        ax4.fill_between(hours, 0, average_advantage, 
+                        where=[x >= 0 for x in average_advantage], 
+                        color='green', alpha=0.3)
+        ax4.fill_between(hours, 0, average_advantage, 
+                        where=[x < 0 for x in average_advantage], 
+                        color='red', alpha=0.3)
+        
+        ax4.set_title('Average Yield Advantage Over Time')
+        ax4.set_xlabel('Hours')
+        ax4.set_ylabel('Average APY Advantage (%)')
+        ax4.set_xlim(0, 8760)
+        ax4.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}%'))
+        ax4.grid(True, alpha=0.3)
+        ax4.legend()
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "yield_strategy_comparison.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Print summary statistics
+        if hours:
+            final_tidal_apy = tidal_yield_apy[-1] if tidal_yield_apy else 0
+            final_base_apy = base_yield_apy[-1] if base_yield_apy else 0
+            final_advantage = relative_performance[-1] if relative_performance else 0
+            avg_advantage = sum(relative_performance) / len(relative_performance) if relative_performance else 0
+            
+            # Calculate final values
+            final_tidal_value = tidal_yield_adjusted[-1] if tidal_yield_adjusted else 0
+            final_base_value = base_yield_value[-1] if base_yield_value else 0
+            total_advantage = (final_tidal_value / final_base_value - 1) * 100 if final_base_value > 0 else 0
+            
+            print(f"📊 Yield Strategy Comparison:")
+            print(f"   Final Tidal Protocol APY: {final_tidal_apy:.2f}%")
+            print(f"   Base 10% APR Yield: {final_base_apy:.2f}%")
+            print(f"   Final APY Advantage: {final_advantage:.2f}%")
+            print(f"   Average APY Advantage: {avg_advantage:.2f}%")
+            print(f"   Total Value Advantage: {total_advantage:.2f}%")
 
 
 def main():
