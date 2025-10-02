@@ -56,9 +56,9 @@ class FullYearSimConfig:
         self.num_agents = 120  # 120 agents for comprehensive testing
         self.use_mixed_risk_profiles = False  # Use uniform profile for all agents
         # All agents use the same tri-health factor profile
-        self.agent_initial_hf = 1.1      # All agents start with 1.1 HF
-        self.agent_rebalancing_hf = 1.025  # Trigger rebalancing at 1.025 HF
-        self.agent_target_hf = 1.04      # Rebalance to 1.04 HF target
+        self.agent_initial_hf = 1.05     # All agents start with 1.05 HF (was 1.1 - more aggressive)
+        self.agent_rebalancing_hf = 1.015  # Trigger rebalancing at 1.015 HF (wider band)
+        self.agent_target_hf = 1.03      # Rebalance to 1.03 HF target (aggressive)
         
         # BTC price scenario - Real 2024 data
         self.btc_initial_price = 42208.20  # 2024-01-01 price
@@ -104,6 +104,9 @@ class FullYearSimConfig:
         
         # Progress reporting
         self.progress_report_every_n_minutes = 10080  # Weekly progress reports (7 days)
+        
+        # Advanced MOET system toggle
+        self.enable_advanced_moet_system = True  # Enable sophisticated MOET interest system
         
         # Output configuration
         self.generate_charts = True
@@ -274,6 +277,9 @@ class FullYearSimulation:
         ht_config.btc_decline_duration = self.config.simulation_duration_minutes  # 2160 minutes for 36h
         ht_config.btc_initial_price = self.config.btc_initial_price
         ht_config.btc_final_price_range = (self.config.btc_final_price, self.config.btc_final_price)
+        
+        # Enable advanced MOET system
+        ht_config.enable_advanced_moet_system = self.config.enable_advanced_moet_system
         
         print(f"🔧 DEBUG: Configuring BTC decline over {ht_config.btc_decline_duration} minutes")
         print(f"🔧 DEBUG: Price range: ${ht_config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f}")

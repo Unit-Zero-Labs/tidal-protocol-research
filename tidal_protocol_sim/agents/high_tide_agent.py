@@ -134,9 +134,9 @@ class HighTideAgent(BaseAgent):
             len(self.state.yield_token_manager.yield_tokens) == 0):
             return ("no_action", {})
         
-        # PERFORMANCE OPTIMIZATION: Check leverage opportunity daily instead of every minute
-        # This reduces computational load by 1,440x and prevents system crashes
-        if current_minute % 1440 == 0:  # Daily leverage checks only
+        # PERFORMANCE OPTIMIZATION: Check leverage opportunity weekly instead of every minute
+        # This reduces computational load and demonstrates impact of leverage frequency
+        if current_minute % (7 * 1440) == 0:  # Weekly leverage checks only
             if self._check_leverage_opportunity(asset_prices):
                 return self._execute_leverage_increase(asset_prices, current_minute)
         

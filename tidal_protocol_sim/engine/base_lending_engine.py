@@ -35,7 +35,9 @@ class BaseLendingEngine(ABC):
     
     def __init__(self, config: BaseLendingConfig):
         self.config = config
-        self.protocol = TidalProtocol()
+        # Initialize protocol with advanced MOET system if enabled in config
+        enable_advanced_moet = getattr(config, 'enable_advanced_moet_system', False)
+        self.protocol = TidalProtocol(enable_advanced_moet=enable_advanced_moet)
         self.agents = {}
         self.state = SimulationState()
         self.current_step = 0

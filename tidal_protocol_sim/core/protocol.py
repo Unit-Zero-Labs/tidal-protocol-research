@@ -91,13 +91,14 @@ class AssetPool:
 class TidalProtocol:
     """Streamlined Tidal Protocol implementation focused on lending mechanics"""
     
-    def __init__(self):
+    def __init__(self, enable_advanced_moet: bool = False):
         # Essential state only
         self.asset_pools = self._initialize_asset_pools()
         
         # Import MoetStablecoin here to avoid circular imports
         from .moet import MoetStablecoin
-        self.moet_system = MoetStablecoin()
+        self.moet_system = MoetStablecoin(enable_advanced_system=enable_advanced_moet)
+        self.enable_advanced_moet = enable_advanced_moet
         
         # Uniswap V3 pools are handled by simulation engines, not the core protocol
         self.protocol_treasury = 0.0
@@ -187,6 +188,33 @@ class TidalProtocol:
         """Accrue interest for all asset pools"""
         for asset in self.asset_pools:
             self._accrue_interest(asset)
+    
+    def process_moet_system_update(self, current_minute: int, market_conditions: dict = None) -> dict:
+        """Process MOET system updates including bond auctions and interest rate calculations"""
+        if self.enable_advanced_moet:
+            return self.moet_system.process_minute_update(current_minute, market_conditions)
+        return {'advanced_system_enabled': False}
+    
+    def initialize_moet_reserves(self, total_agent_debt: float):
+        """Initialize MOET reserves based on total agent debt"""
+        if self.enable_advanced_moet:
+            self.moet_system.initialize_reserves(total_agent_debt)
+    
+    def get_moet_borrow_rate(self) -> float:
+        """Get current MOET borrowing rate"""
+        if self.enable_advanced_moet:
+            return self.moet_system.get_current_interest_rate()
+        else:
+            # Fallback to simple rate calculation for legacy system
+            # Use BTC pool as proxy since that's what agents borrow against
+            btc_pool = self.asset_pools.get(Asset.BTC)
+            if btc_pool:
+                return btc_pool.calculate_borrow_rate()
+            return 0.05  # 5% default rate
+    
+    def get_moet_system_state(self) -> dict:
+        """Get comprehensive MOET system state"""
+        return self.moet_system.get_state()
     
     def _accrue_interest(self, asset: Asset):
         """Accrue interest for an asset pool"""

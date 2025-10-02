@@ -43,6 +43,9 @@ class HighTideConfig(TidalConfig):
         # Yield Token Creation Method
         self.use_direct_minting_for_initial = True  # True = 1:1 minting at minute 0, False = Uniswap purchases
         
+        # Advanced MOET system toggle
+        self.enable_advanced_moet_system = False  # Default to legacy system
+        
         # Override base simulation parameters
         self.simulation_steps = self.btc_decline_duration
 
@@ -120,6 +123,12 @@ class HighTideVaultEngine(TidalProtocolEngine):
             
             # Initialize agent's health factor
             self._update_agent_health_factor(agent)
+        
+        # Initialize MOET reserves after all agents are set up
+        if self.protocol.enable_advanced_moet:
+            total_agent_debt = sum(agent.state.moet_debt for agent in self.high_tide_agents)
+            self.protocol.initialize_moet_reserves(total_agent_debt)
+            print(f"🏦 Initialized MOET reserves: ${total_agent_debt * 0.5:,.0f} (50% of ${total_agent_debt:,.0f} total debt)")
             
     def run_simulation(self, steps: int = None) -> Dict:
         """Run High Tide simulation with BTC price decline"""
@@ -140,6 +149,17 @@ class HighTideVaultEngine(TidalProtocolEngine):
             # Update protocol state
             self.protocol.current_block = minute
             self.protocol.accrue_interest()
+            
+            # Process MOET system updates (bond auctions, interest rate calculations)
+            moet_update_results = self.protocol.process_moet_system_update(minute)
+            if moet_update_results.get('advanced_system_enabled') and minute % 60 == 0:  # Log hourly
+                if moet_update_results.get('bond_auction_triggered'):
+                    print(f"🔔 Bond auction triggered at minute {minute}")
+                if moet_update_results.get('bond_auction_completed'):
+                    auction = moet_update_results['completed_auction']
+                    print(f"✅ Bond auction completed: ${auction['amount_filled']:,.0f} at {auction['final_apr']:.2%} APR")
+                if moet_update_results.get('interest_rate_updated'):
+                    print(f"📈 MOET rate updated: {moet_update_results['new_interest_rate']:.2%}")
             
             # Update agent debt interest
             self._update_agent_debt_interest(minute)
@@ -167,16 +187,13 @@ class HighTideVaultEngine(TidalProtocolEngine):
         return self._generate_high_tide_results()
         
     def _update_agent_debt_interest(self, minute: int):
-        """Update debt interest for all High Tide agents"""
-        btc_pool = self.protocol.asset_pools.get(Asset.BTC)
-        if not btc_pool:
-            return
-            
-        borrow_rate = btc_pool.calculate_borrow_rate()
+        """Update debt interest for all High Tide agents using MOET system"""
+        # Use the new MOET borrow rate system
+        moet_borrow_rate = self.protocol.get_moet_borrow_rate()
         
         for agent in self.high_tide_agents:
             if agent.active:
-                agent.update_debt_interest(minute, borrow_rate)
+                agent.update_debt_interest(minute, moet_borrow_rate)
     
     def _process_high_tide_agents(self, minute: int) -> Dict[str, Dict]:
         """Process High Tide agent actions for current minute with intra-loop rebalancing"""
