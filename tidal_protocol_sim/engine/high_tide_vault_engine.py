@@ -265,9 +265,11 @@ class HighTideVaultEngine(TidalProtocolEngine):
             
             # INTRA-LOOP REBALANCING: Check pool health after each agent action
             # Only check if we have a pool rebalancer and this was a leverage increase
+            # SKIP if emergency rebalancing is disabled (e.g., during flash crash)
             if (hasattr(self, 'pool_rebalancer') and 
                 action_type == AgentAction.BORROW and 
-                params.get("leverage_increase", False)):
+                params.get("leverage_increase", False) and
+                not getattr(self.state, 'disable_emergency_rebalancing', False)):
                 
                 # Check if pool needs emergency rebalancing
                 if self._should_trigger_emergency_rebalancing():
@@ -343,13 +345,19 @@ class HighTideVaultEngine(TidalProtocolEngine):
             from tidal_protocol_sim.engine.state import Asset
             
             # Calculate current yield token prices and deviations
-            true_yt_price = calculate_true_yield_token_price(minute, 0.10, 1.0)
+            # CHECK FOR ORACLE OVERRIDE (for flash crash scenarios)
+            if hasattr(self.state, 'oracle_override_active') and self.state.oracle_override_active:
+                true_yt_price = self.state.oracle_yt_price_override
+            else:
+                true_yt_price = calculate_true_yield_token_price(minute, 0.10, 1.0)
+            
             pool_yt_price = self.yield_token_pool.uniswap_pool.get_price()
             deviation_bps = abs((pool_yt_price - true_yt_price) / true_yt_price) * 10000
             
             protocol_state = {
                 "current_minute": minute,
                 "true_yield_token_price": true_yt_price,
+                "oracle_yt_price": true_yt_price,  # Include for rebalancer consistency
                 "pool_yield_token_price": pool_yt_price,
                 "deviation_bps": deviation_bps,
                 "emergency_rebalancing": True  # Flag to indicate this is emergency

@@ -195,6 +195,13 @@ class HighTideAgent(BaseAgent):
         # TRI-HEALTH FACTOR: Rebalance when current HF falls below the REBALANCING HF (trigger threshold)
         needs_rebalancing = self.state.health_factor < self.state.rebalancing_health_factor
         
+        # ENGINE GATE: Check if engine allows rebalancing (e.g., flash crash scenarios may block early rebalancing)
+        engine_allows_rebalancing = getattr(self.engine.state, 'allow_agent_rebalancing', True) if self.engine else True
+        
+        if not engine_allows_rebalancing and needs_rebalancing:
+            # Silently block rebalancing during oracle-only windows
+            return False
+        
         # Debug logging for rebalancing decisions
         if needs_rebalancing:
             print(f"        🔄 {self.agent_id}: HF {self.state.health_factor:.3f} < Rebalancing HF {self.state.rebalancing_health_factor:.3f} - REBALANCING TRIGGERED")
