@@ -32,6 +32,11 @@ class SimulationConfig:
         self.base_volatility = 0.02  # 2% daily volatility
         self.flow_volatility = 0.05  # Higher volatility for FLOW
         self.usdc_volatility = 0.001  # Low volatility for stablecoin
+        
+        # Enhanced MOET System Configuration
+        self.enable_advanced_moet_system = False  # Enable 4-pool structure and Enhanced Redeemer
+        self.num_arbitrage_agents = 0  # Number of MOET arbitrage agents for peg maintenance
+        self.arbitrage_agent_balance = 100_000.0  # Initial balance per arbitrage agent
 
 
 class StressTestScenarios:

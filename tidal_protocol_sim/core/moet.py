@@ -39,6 +39,68 @@ class ReserveState:
     def total_reserves(self) -> float:
         return self.usdc_balance + self.usdf_balance
     
+    @property
+    def ideal_usdc_ratio(self) -> float:
+        """Ideal USDC weight (50%)"""
+        return 0.50
+    
+    @property
+    def ideal_usdf_ratio(self) -> float:
+        """Ideal USDF weight (50%)"""
+        return 0.50
+    
+    @property
+    def current_usdc_ratio(self) -> float:
+        """Current USDC weight in reserves"""
+        if self.total_reserves <= 0:
+            return 0.50  # Default to ideal if no reserves
+        return self.usdc_balance / self.total_reserves
+    
+    @property
+    def current_usdf_ratio(self) -> float:
+        """Current USDF weight in reserves"""
+        if self.total_reserves <= 0:
+            return 0.50  # Default to ideal if no reserves
+        return self.usdf_balance / self.total_reserves
+    
+    def get_weight_deviation(self) -> float:
+        """Calculate current deviation from ideal 50/50 weights"""
+        usdc_deviation = abs(self.current_usdc_ratio - self.ideal_usdc_ratio)
+        usdf_deviation = abs(self.current_usdf_ratio - self.ideal_usdf_ratio)
+        return max(usdc_deviation, usdf_deviation)  # Maximum deviation
+    
+    def calculate_post_deposit_deviation(self, usdc_deposit: float, usdf_deposit: float) -> float:
+        """Calculate weight deviation after a potential deposit"""
+        new_usdc_balance = self.usdc_balance + usdc_deposit
+        new_usdf_balance = self.usdf_balance + usdf_deposit
+        new_total = new_usdc_balance + new_usdf_balance
+        
+        if new_total <= 0:
+            return 0.0
+            
+        new_usdc_ratio = new_usdc_balance / new_total
+        new_usdf_ratio = new_usdf_balance / new_total
+        
+        usdc_deviation = abs(new_usdc_ratio - self.ideal_usdc_ratio)
+        usdf_deviation = abs(new_usdf_ratio - self.ideal_usdf_ratio)
+        return max(usdc_deviation, usdf_deviation)
+    
+    def calculate_post_withdrawal_deviation(self, usdc_withdrawal: float, usdf_withdrawal: float) -> float:
+        """Calculate weight deviation after a potential withdrawal"""
+        new_usdc_balance = max(0, self.usdc_balance - usdc_withdrawal)
+        new_usdf_balance = max(0, self.usdf_balance - usdf_withdrawal)
+        new_total = new_usdc_balance + new_usdf_balance
+        
+        if new_total <= 0:
+            return 0.0
+            
+        new_usdc_ratio = new_usdc_balance / new_total
+        new_usdf_ratio = new_usdf_balance / new_total
+        
+        usdc_deviation = abs(new_usdc_ratio - self.ideal_usdc_ratio)
+        usdf_deviation = abs(new_usdf_ratio - self.ideal_usdf_ratio)
+        return max(usdc_deviation, usdf_deviation)
+    
     def get_reserve_ratio(self, total_moet_supply: float) -> float:
         """Calculate current reserve ratio"""
         if total_moet_supply <= 0:
@@ -63,11 +125,8 @@ class BonderSystem:
         self.bond_apr_history = deque(maxlen=1000)  # Store recent APRs
         self.current_bond_cost_ema = 0.0
         
-        # Auction parameters
-        self.base_auction_duration = 60  # 1 hour default
-        self.max_auction_duration = 360  # 6 hours max
-        self.starting_premium = 0.005  # 0.5% starting premium
-        self.max_premium = 0.10  # 10% max premium
+        # Hourly auction parameters
+        self.last_auction_hour = -1  # Track which hour we last ran an auction
         
     def calculate_bond_apr(self, reserve_state: ReserveState, total_moet_supply: float) -> float:
         """Calculate instantaneous bond APR based on reserve deficit"""
@@ -84,28 +143,33 @@ class BonderSystem:
         deficit_ratio = (target_reserves - actual_reserves) / target_reserves
         return max(0.0, deficit_ratio)
     
-    def should_trigger_auction(self, reserve_state: ReserveState, total_moet_supply: float) -> bool:
-        """Determine if bond auction should be triggered"""
-        if self.pending_auction is not None:
-            return False  # Auction already in progress
-            
+    def should_run_hourly_auction(self, reserve_state: ReserveState, total_moet_supply: float, current_minute: int) -> bool:
+        """Determine if we should run an hourly bond auction (deficit-based trigger)"""
+        current_hour = current_minute // 60  # Convert minutes to hours
+        
+        # Check if it's a new hour and we haven't run this hour
+        is_new_hour = current_hour > self.last_auction_hour
+        
+        # Check if there's a deficit that needs funding
         deficit = reserve_state.get_reserve_deficit(total_moet_supply)
-        return deficit > 1000.0  # Trigger if deficit > $1000
+        has_deficit = deficit > 100.0  # Minimum $100 deficit to trigger auction
+        
+        return is_new_hour and has_deficit
     
     def start_bond_auction(self, reserve_state: ReserveState, total_moet_supply: float, 
-                          current_minute: int, benchmark_rate: float = 0.05) -> BondAuction:
-        """Start a new bond auction"""
+                          current_minute: int) -> BondAuction:
+        """Start a new bond auction with pure deficit-based pricing"""
         deficit = reserve_state.get_reserve_deficit(total_moet_supply)
-        base_apr = self.calculate_bond_apr(reserve_state, total_moet_supply)
+        bond_apr = self.calculate_bond_apr(reserve_state, total_moet_supply)
         
-        # Starting yield = Benchmark + Starting Premium + Base APR
-        starting_apr = benchmark_rate + self.starting_premium + base_apr
+        # Pure deficit-based APR (no benchmark or premium)
+        starting_apr = bond_apr
         
         auction = BondAuction(
             timestamp=current_minute,
             target_amount=deficit,
             starting_apr=starting_apr,
-            final_apr=starting_apr,  # Will be updated as auction progresses
+            final_apr=starting_apr,  # Will be updated each minute based on deficit
             amount_filled=0.0,
             bond_price=1.0 / (1.0 + starting_apr / 365),  # Overnight pricing
             auction_duration_minutes=0,
@@ -115,71 +179,74 @@ class BonderSystem:
         self.pending_auction = auction
         return auction
     
-    def process_auction(self, current_minute: int, market_conditions: Dict) -> Optional[BondAuction]:
-        """Process ongoing auction and determine if it fills"""
-        if self.pending_auction is None:
-            return None
+    def process_hourly_auction(self, current_minute: int, market_conditions: Dict, 
+                              reserve_state: ReserveState, total_moet_supply: float) -> Optional[BondAuction]:
+        """Process hourly bond auction"""
+        current_hour = current_minute // 60
+        
+        # Check if we should start a new auction
+        if self.should_run_hourly_auction(reserve_state, total_moet_supply, current_minute):
+            # Start new hourly auction
+            auction = self.start_bond_auction(reserve_state, total_moet_supply, current_minute)
+            self.last_auction_hour = current_hour
             
-        auction = self.pending_auction
-        elapsed = current_minute - auction.timestamp
-        
-        # Dynamic pricing - increase premium over time
-        time_factor = min(1.0, elapsed / self.base_auction_duration)
-        additional_premium = time_factor * self.max_premium
-        auction.final_apr = auction.starting_apr + additional_premium
-        auction.bond_price = 1.0 / (1.0 + auction.final_apr / 365)
-        auction.auction_duration_minutes = elapsed
-        
-        # Determine fill probability based on yield attractiveness
-        fill_probability = self._calculate_fill_probability(auction, market_conditions)
-        
-        # Simulate auction outcome
-        import random
-        if random.random() < fill_probability or elapsed >= self.max_auction_duration:
-            # Auction fills (or times out)
-            if elapsed >= self.max_auction_duration:
-                # Partial fill on timeout
-                auction.amount_filled = auction.target_amount * 0.7  # 70% fill
-                auction.filled_completely = False
-            else:
-                # Complete fill
-                auction.amount_filled = auction.target_amount
-                auction.filled_completely = True
+            # Calculate fill percentage based on APR attractiveness
+            fill_percentage = self._calculate_hourly_fill_percentage(auction, market_conditions)
+            
+            # Apply the fill
+            auction.amount_filled = auction.target_amount * fill_percentage
+            auction.filled_completely = (fill_percentage >= 0.99)
+            auction.auction_duration_minutes = 60  # One hour duration
+            auction.bond_price = 1.0 / (1.0 + auction.final_apr / 365)
             
             # Record the auction
             self.auction_history.append(auction)
             self.bond_apr_history.append(auction.final_apr)
             
-            # Update EMA
+            # Update EMA with the realized APR
             self._update_bond_cost_ema(auction.final_apr)
             
-            self.pending_auction = None
             return auction
             
-        return None  # Auction continues
+        return None  # No auction this hour
     
-    def _calculate_fill_probability(self, auction: BondAuction, market_conditions: Dict) -> float:
-        """Calculate probability that auction fills this minute"""
-        base_probability = 0.05  # 5% base chance per minute
+    def _calculate_hourly_fill_percentage(self, auction: BondAuction, market_conditions: Dict) -> float:
+        """Calculate what percentage of hourly bond auction gets filled based on APR"""
         
-        # Higher yield = higher probability
-        yield_factor = min(2.0, auction.final_apr / 0.05)  # Cap at 2x for 5%+ yield
+        # Base fill rates based on APR attractiveness (lower than daily since more frequent)
+        apr = auction.final_apr
         
-        # Market stress increases fill probability
+        if apr >= 0.15:      # 15%+ APR
+            base_fill = 0.60  # 60% fill - very attractive
+        elif apr >= 0.10:    # 10-15% APR  
+            base_fill = 0.45  # 45% fill - attractive
+        elif apr >= 0.05:    # 5-10% APR
+            base_fill = 0.25  # 25% fill - moderate
+        elif apr >= 0.025:   # 2.5-5% APR
+            base_fill = 0.10  # 10% fill - low interest
+        else:                # <2.5% APR
+            base_fill = 0.03  # 3% fill - minimal interest
+        
+        # Market stress can increase fill rates
         stress_factor = market_conditions.get('stress_level', 1.0)
         
-        return min(0.95, base_probability * yield_factor * stress_factor)
+        # Add some randomness (±20% variation)
+        import random
+        randomness = random.uniform(0.8, 1.2)
+        
+        final_fill = min(1.0, base_fill * stress_factor * randomness)
+        return final_fill
     
     def _update_bond_cost_ema(self, new_apr: float):
-        """Update EMA of bond costs with 7-day half-life"""
+        """Update EMA of bond costs with 7-day half-life (hourly updates)"""
         if not self.bond_apr_history:
             self.current_bond_cost_ema = new_apr
             return
             
-        # 7-day half-life = 7 * 24 * 60 = 10,080 minutes
+        # 7-day half-life = 7 * 24 = 168 hours (since we update hourly now)
         # EMA alpha = 1 - exp(-ln(2) / half_life_periods)
-        half_life_minutes = self.governance.get('ema_half_life_days', 7) * 24 * 60
-        alpha = 1 - math.exp(-math.log(2) / half_life_minutes)
+        half_life_hours = self.governance.get('ema_half_life_days', 7) * 24
+        alpha = 1 - math.exp(-math.log(2) / half_life_hours)
         
         self.current_bond_cost_ema = alpha * new_apr + (1 - alpha) * self.current_bond_cost_ema
     
@@ -188,8 +255,31 @@ class BonderSystem:
         return self.current_bond_cost_ema
 
 
+@dataclass
+class DepositResult:
+    """Result of a deposit operation"""
+    moet_minted: float
+    base_fee: float
+    imbalance_fee: float
+    total_fee: float
+    fee_percentage: float
+    is_balanced: bool
+    post_deviation: float
+
+@dataclass
+class RedemptionResult:
+    """Result of a redemption operation"""
+    usdc_received: float
+    usdf_received: float
+    base_fee: float
+    imbalance_fee: float
+    total_fee: float
+    fee_percentage: float
+    is_proportional: bool
+    post_deviation: float
+
 class RedeemerContract:
-    """Manages MOET backing reserves and redemptions"""
+    """Enhanced Redeemer managing MOET backing reserves with dynamic fee structure"""
     
     def __init__(self, initial_usdc: float = 0.0, initial_usdf: float = 0.0, 
                  target_reserves_ratio: float = 0.30):
@@ -199,31 +289,271 @@ class RedeemerContract:
             target_reserves_ratio=target_reserves_ratio
         )
         
-    def add_reserves(self, usdc_amount: float = 0.0, usdf_amount: float = 0.0):
-        """Add reserves from bond auction proceeds"""
+        # Fee structure parameters (governance controlled)
+        self.fee_params = {
+            'balanced_deposit_fee': 0.0001,    # 0.01% for balanced deposits
+            'imbalanced_deposit_fee': 0.0002,  # 0.02% base for imbalanced deposits
+            'proportional_redemption_fee': 0.0,  # 0% for proportional redemptions
+            'single_asset_redemption_fee': 0.0002,  # 0.02% base for single-asset redemptions
+            'imbalance_scale_k': 0.005,        # K = 50 bps scale factor
+            'imbalance_convexity_gamma': 2.0,  # γ = 2.0 for quadratic scaling
+            'tolerance_band': 0.02             # 2% tolerance before imbalance fees kick in
+        }
+        
+        # Fee revenue tracking
+        self.total_fees_collected = 0.0
+        self.fee_history = []
+        
+    def calculate_imbalance_fee(self, post_deviation: float, deposit_amount: float) -> float:
+        """Calculate imbalance fee: K * max(0, Δw(post) - Δw(tol))^γ"""
+        K = self.fee_params['imbalance_scale_k']
+        gamma = self.fee_params['imbalance_convexity_gamma']
+        tolerance = self.fee_params['tolerance_band']
+        
+        # Only charge imbalance fee if deviation exceeds tolerance
+        excess_deviation = max(0.0, post_deviation - tolerance)
+        
+        if excess_deviation <= 0:
+            return 0.0
+            
+        # fee(imb) = K * max(0, Δw(post) - Δw(tol))^γ
+        fee_rate = K * (excess_deviation ** gamma)
+        return deposit_amount * fee_rate
+    
+    def estimate_deposit_fee(self, usdc_amount: float, usdf_amount: float) -> Dict:
+        """Estimate fees for a potential deposit without executing it"""
+        total_deposit = usdc_amount + usdf_amount
+        
+        if total_deposit <= 0:
+            return {
+                'total_fee': 0.0,
+                'base_fee': 0.0,
+                'imbalance_fee': 0.0,
+                'fee_percentage': 0.0,
+                'is_balanced': True,
+                'post_deviation': 0.0
+            }
+        
+        # Check if deposit is balanced (maintains 50/50 ratio)
+        deposit_usdc_ratio = usdc_amount / total_deposit
+        deposit_usdf_ratio = usdf_amount / total_deposit
+        
+        # Consider balanced if within 1% of ideal ratios
+        is_balanced = (abs(deposit_usdc_ratio - 0.50) <= 0.01 and 
+                      abs(deposit_usdf_ratio - 0.50) <= 0.01)
+        
+        # Calculate post-transaction deviation
+        post_deviation = self.reserve_state.calculate_post_deposit_deviation(usdc_amount, usdf_amount)
+        
+        if is_balanced:
+            base_fee = total_deposit * self.fee_params['balanced_deposit_fee']
+            imbalance_fee = 0.0
+        else:
+            base_fee = total_deposit * self.fee_params['imbalanced_deposit_fee']
+            imbalance_fee = self.calculate_imbalance_fee(post_deviation, total_deposit)
+        
+        total_fee = base_fee + imbalance_fee
+        fee_percentage = total_fee / total_deposit if total_deposit > 0 else 0.0
+        
+        return {
+            'total_fee': total_fee,
+            'base_fee': base_fee,
+            'imbalance_fee': imbalance_fee,
+            'fee_percentage': fee_percentage,
+            'is_balanced': is_balanced,
+            'post_deviation': post_deviation
+        }
+    
+    def deposit_assets_for_moet(self, usdc_amount: float, usdf_amount: float) -> DepositResult:
+        """Deposit USDC/USDF to mint MOET with dynamic fee structure"""
+        total_deposit = usdc_amount + usdf_amount
+        
+        if total_deposit <= 0:
+            return DepositResult(0.0, 0.0, 0.0, 0.0, 0.0, True, 0.0)
+        
+        # Calculate fees
+        fee_estimate = self.estimate_deposit_fee(usdc_amount, usdf_amount)
+        
+        # Execute the deposit
         self.reserve_state.usdc_balance += usdc_amount
         self.reserve_state.usdf_balance += usdf_amount
+        
+        # MOET minted = deposit amount - fees (1:1 backing minus fees)
+        moet_minted = total_deposit - fee_estimate['total_fee']
+        
+        # Track fee revenue
+        self.total_fees_collected += fee_estimate['total_fee']
+        self.fee_history.append({
+            'type': 'deposit',
+            'amount': total_deposit,
+            'fee': fee_estimate['total_fee'],
+            'is_balanced': fee_estimate['is_balanced']
+        })
+        
+        return DepositResult(
+            moet_minted=moet_minted,
+            base_fee=fee_estimate['base_fee'],
+            imbalance_fee=fee_estimate['imbalance_fee'],
+            total_fee=fee_estimate['total_fee'],
+            fee_percentage=fee_estimate['fee_percentage'],
+            is_balanced=fee_estimate['is_balanced'],
+            post_deviation=fee_estimate['post_deviation']
+        )
     
-    def process_redemption(self, moet_amount: float) -> bool:
-        """Process MOET redemption at $1.00"""
-        if self.reserve_state.total_reserves >= moet_amount:
-            # Redeem proportionally from USDC/USDF
+    def estimate_redemption_fee(self, moet_amount: float, desired_asset: str = "proportional") -> Dict:
+        """Estimate fees for a potential redemption without executing it"""
+        if self.reserve_state.total_reserves < moet_amount:
+            return {
+                'error': 'Insufficient reserves',
+                'total_fee': 0.0,
+                'base_fee': 0.0,
+                'imbalance_fee': 0.0,
+                'fee_percentage': 0.0
+            }
+        
+        if desired_asset == "proportional":
+            # Proportional redemption has no fees
+            return {
+                'total_fee': 0.0,
+                'base_fee': 0.0,
+                'imbalance_fee': 0.0,
+                'fee_percentage': 0.0,
+                'is_proportional': True,
+                'post_deviation': self.reserve_state.get_weight_deviation()
+            }
+        
+        # Single-asset redemption
+        base_fee = moet_amount * self.fee_params['single_asset_redemption_fee']
+        
+        # Calculate post-withdrawal deviation
+        if desired_asset.upper() == "USDC":
+            post_deviation = self.reserve_state.calculate_post_withdrawal_deviation(moet_amount, 0.0)
+        elif desired_asset.upper() == "USDF":
+            post_deviation = self.reserve_state.calculate_post_withdrawal_deviation(0.0, moet_amount)
+        else:
+            return {'error': 'Invalid asset. Must be USDC, USDF, or proportional'}
+        
+        # Calculate imbalance fee
+        imbalance_fee = self.calculate_imbalance_fee(post_deviation, moet_amount)
+        
+        total_fee = base_fee + imbalance_fee
+        fee_percentage = total_fee / moet_amount if moet_amount > 0 else 0.0
+        
+        return {
+            'total_fee': total_fee,
+            'base_fee': base_fee,
+            'imbalance_fee': imbalance_fee,
+            'fee_percentage': fee_percentage,
+            'is_proportional': False,
+            'post_deviation': post_deviation
+        }
+    
+    def redeem_moet_for_assets(self, moet_amount: float, desired_asset: str = "proportional") -> RedemptionResult:
+        """Redeem MOET for underlying assets with dynamic fee structure"""
+        if self.reserve_state.total_reserves < moet_amount:
+            return RedemptionResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, False, 0.0)
+        
+        # Calculate fees
+        fee_estimate = self.estimate_redemption_fee(moet_amount, desired_asset)
+        
+        if 'error' in fee_estimate:
+            return RedemptionResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, False, 0.0)
+        
+        # Net amount after fees
+        net_redemption = moet_amount - fee_estimate['total_fee']
+        
+        if desired_asset == "proportional":
+            # Proportional redemption
             total_reserves = self.reserve_state.total_reserves
             usdc_ratio = self.reserve_state.usdc_balance / total_reserves
             usdf_ratio = self.reserve_state.usdf_balance / total_reserves
             
-            self.reserve_state.usdc_balance -= moet_amount * usdc_ratio
-            self.reserve_state.usdf_balance -= moet_amount * usdf_ratio
-            return True
-        return False
+            usdc_received = net_redemption * usdc_ratio
+            usdf_received = net_redemption * usdf_ratio
+            
+            # Update reserves
+            self.reserve_state.usdc_balance -= usdc_received
+            self.reserve_state.usdf_balance -= usdf_received
+            
+        elif desired_asset.upper() == "USDC":
+            # Single-asset USDC redemption
+            usdc_received = net_redemption
+            usdf_received = 0.0
+            
+            # Update reserves (remove USDC, keep USDF)
+            self.reserve_state.usdc_balance -= usdc_received
+            
+        elif desired_asset.upper() == "USDF":
+            # Single-asset USDF redemption
+            usdc_received = 0.0
+            usdf_received = net_redemption
+            
+            # Update reserves (keep USDC, remove USDF)
+            self.reserve_state.usdf_balance -= usdf_received
+            
+        else:
+            return RedemptionResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, False, 0.0)
+        
+        # Track fee revenue
+        self.total_fees_collected += fee_estimate['total_fee']
+        self.fee_history.append({
+            'type': 'redemption',
+            'amount': moet_amount,
+            'fee': fee_estimate['total_fee'],
+            'desired_asset': desired_asset
+        })
+        
+        return RedemptionResult(
+            usdc_received=usdc_received,
+            usdf_received=usdf_received,
+            base_fee=fee_estimate['base_fee'],
+            imbalance_fee=fee_estimate['imbalance_fee'],
+            total_fee=fee_estimate['total_fee'],
+            fee_percentage=fee_estimate['fee_percentage'],
+            is_proportional=(desired_asset == "proportional"),
+            post_deviation=fee_estimate['post_deviation']
+        )
+    
+    def add_reserves(self, usdc_amount: float = 0.0, usdf_amount: float = 0.0):
+        """Add reserves from bond auction proceeds (maintains existing interface)"""
+        self.reserve_state.usdc_balance += usdc_amount
+        self.reserve_state.usdf_balance += usdf_amount
+    
+    def process_redemption(self, moet_amount: float) -> bool:
+        """Legacy proportional redemption method (maintains existing interface)"""
+        result = self.redeem_moet_for_assets(moet_amount, "proportional")
+        return result.usdc_received > 0 or result.usdf_received > 0
+    
+    def get_current_pool_weights(self) -> Dict:
+        """Get current USDC/USDF pool composition"""
+        return {
+            'usdc_ratio': self.reserve_state.current_usdc_ratio,
+            'usdf_ratio': self.reserve_state.current_usdf_ratio,
+            'ideal_usdc_ratio': self.reserve_state.ideal_usdc_ratio,
+            'ideal_usdf_ratio': self.reserve_state.ideal_usdf_ratio,
+            'weight_deviation': self.reserve_state.get_weight_deviation()
+        }
+    
+    def get_optimal_deposit_ratio(self, total_amount: float) -> Dict:
+        """Calculate optimal deposit composition to minimize fees"""
+        return {
+            'usdc_amount': total_amount * 0.50,
+            'usdf_amount': total_amount * 0.50,
+            'estimated_fee': total_amount * self.fee_params['balanced_deposit_fee'],
+            'fee_percentage': self.fee_params['balanced_deposit_fee']
+        }
     
     def get_state(self) -> Dict:
-        """Get current redeemer state"""
+        """Get comprehensive redeemer state"""
         return {
             'usdc_balance': self.reserve_state.usdc_balance,
             'usdf_balance': self.reserve_state.usdf_balance,
             'total_reserves': self.reserve_state.total_reserves,
-            'target_reserves_ratio': self.reserve_state.target_reserves_ratio
+            'target_reserves_ratio': self.reserve_state.target_reserves_ratio,
+            'current_weights': self.get_current_pool_weights(),
+            'fee_params': self.fee_params,
+            'total_fees_collected': self.total_fees_collected,
+            'fee_history_count': len(self.fee_history)
         }
 
 
@@ -245,9 +575,8 @@ class MoetStablecoin:
             # Governance parameters
             self.governance_params = {
                 'r_floor': 0.02,  # 2% governance profit margin
-                'target_reserves_ratio': 0.30,  # 30% target reserves
-                'ema_half_life_days': 7,  # 7-day EMA half-life
-                'benchmark_rate': 0.05  # 5% benchmark rate
+                'target_reserves_ratio': 0.10,  # 10% target reserves (updated)
+                'ema_half_life_days': 0.5,  # 12-hour EMA half-life (much more responsive)
             }
             
             # Initialize sophisticated components
@@ -260,6 +589,12 @@ class MoetStablecoin:
             self.current_moet_interest_rate = self.governance_params['r_floor']  # Start with floor rate
             self.interest_rate_history = []
             
+            # Enhanced tracking for JSON results
+            self.moet_rate_history = []      # Minute-by-minute MOET interest rates
+            self.bond_apr_history_detailed = []  # Minute-by-minute bond APRs
+            self.reserve_history = []        # Target vs actual reserves over time
+            self.deficit_history = []        # Reserve deficit over time
+            
         else:
             # Legacy simple system
             self.bonder_system = None
@@ -267,15 +602,51 @@ class MoetStablecoin:
             self.current_moet_interest_rate = 0.0
     
     def initialize_reserves(self, initial_moet_debt: float):
-        """Initialize reserves at 50% of initial MOET debt (50/50 USDC/USDF)"""
+        """Initialize reserves at 8% of initial MOET debt (50/50 USDC/USDF)"""
         if self.enable_advanced_system and self.redeemer:
-            initial_reserves = initial_moet_debt * 0.50
-            usdc_amount = initial_reserves * 0.50
-            usdf_amount = initial_reserves * 0.50
-            self.redeemer.add_reserves(usdc_amount, usdf_amount)
+            initial_reserves = initial_moet_debt * 0.08  # 8% backing (creates immediate deficit)
+            usdc_amount = initial_reserves * 0.50        # 4% USDC
+            usdf_amount = initial_reserves * 0.50        # 4% USDF
+            
+            # Reset reserves to exact amounts (don't add to existing)
+            self.redeemer.reserve_state.usdc_balance = usdc_amount
+            self.redeemer.reserve_state.usdf_balance = usdf_amount
+    
+    def mint_from_deposit(self, usdc_amount: float, usdf_amount: float) -> DepositResult:
+        """Mint MOET from USDC/USDF deposit through enhanced Redeemer"""
+        if not self.enable_advanced_system or not self.redeemer:
+            # Fallback to simple 1:1 minting for legacy system
+            total_deposit = usdc_amount + usdf_amount
+            self.total_supply += total_deposit
+            return DepositResult(total_deposit, 0.0, 0.0, 0.0, 0.0, True, 0.0)
+        
+        # Use enhanced Redeemer for deposit processing
+        deposit_result = self.redeemer.deposit_assets_for_moet(usdc_amount, usdf_amount)
+        
+        # Update total supply with minted amount
+        self.total_supply += deposit_result.moet_minted
+        
+        return deposit_result
+    
+    def redeem_for_assets(self, moet_amount: float, desired_asset: str = "proportional") -> RedemptionResult:
+        """Redeem MOET for underlying assets through enhanced Redeemer"""
+        if not self.enable_advanced_system or not self.redeemer:
+            # Fallback to simple 1:1 burning for legacy system
+            actual_burn = min(moet_amount, self.total_supply)
+            self.total_supply -= actual_burn
+            return RedemptionResult(actual_burn * 0.5, actual_burn * 0.5, 0.0, 0.0, 0.0, 0.0, True, 0.0)
+        
+        # Use enhanced Redeemer for redemption processing
+        redemption_result = self.redeemer.redeem_moet_for_assets(moet_amount, desired_asset)
+        
+        # Update total supply (burn the redeemed MOET)
+        if redemption_result.usdc_received > 0 or redemption_result.usdf_received > 0:
+            self.total_supply -= moet_amount
+        
+        return redemption_result
     
     def mint(self, amount: float) -> float:
-        """1:1 minting, no fees"""
+        """Legacy 1:1 minting method (maintains existing interface)"""
         if amount <= 0:
             return 0.0
         
@@ -283,7 +654,7 @@ class MoetStablecoin:
         return amount  # Returns full amount minted
     
     def burn(self, amount: float) -> float:
-        """1:1 burning, no fees"""
+        """Legacy 1:1 burning method (maintains existing interface)"""
         if amount <= 0:
             return 0.0
         
@@ -308,29 +679,26 @@ class MoetStablecoin:
             'reserve_state': self.redeemer.get_state()
         }
         
-        # Check if bond auction should be triggered
-        if self.bonder_system.should_trigger_auction(self.redeemer.reserve_state, self.total_supply):
-            auction = self.bonder_system.start_bond_auction(
-                self.redeemer.reserve_state, 
-                self.total_supply, 
-                current_minute,
-                self.governance_params['benchmark_rate']
-            )
+        # Process hourly bond auctions (deficit-based trigger)
+        completed_auction = self.bonder_system.process_hourly_auction(
+            current_minute, market_conditions, self.redeemer.reserve_state, self.total_supply
+        )
+        
+        if completed_auction:
             results['bond_auction_triggered'] = True
             results['new_auction'] = {
-                'target_amount': auction.target_amount,
-                'starting_apr': auction.starting_apr,
-                'timestamp': auction.timestamp
+                'target_amount': completed_auction.target_amount,
+                'starting_apr': completed_auction.starting_apr,
+                'timestamp': completed_auction.timestamp
             }
-        
-        # Process ongoing auction
-        completed_auction = self.bonder_system.process_auction(current_minute, market_conditions)
         if completed_auction:
             results['bond_auction_completed'] = True
             results['completed_auction'] = {
                 'amount_filled': completed_auction.amount_filled,
+                'target_amount': completed_auction.target_amount,
                 'final_apr': completed_auction.final_apr,
                 'duration_minutes': completed_auction.auction_duration_minutes,
+                'fill_percentage': completed_auction.amount_filled / completed_auction.target_amount if completed_auction.target_amount > 0 else 0,
                 'filled_completely': completed_auction.filled_completely
             }
             
@@ -355,6 +723,40 @@ class MoetStablecoin:
         
         results['current_interest_rate'] = self.current_moet_interest_rate
         results['reserve_ratio'] = self.redeemer.reserve_state.get_reserve_ratio(self.total_supply)
+        
+        # Enhanced tracking for JSON results
+        current_bond_apr = self.bonder_system.calculate_bond_apr(self.redeemer.reserve_state, self.total_supply)
+        target_reserves = self.total_supply * self.governance_params['target_reserves_ratio']
+        actual_reserves = self.redeemer.reserve_state.total_reserves
+        deficit = self.redeemer.reserve_state.get_reserve_deficit(self.total_supply)
+        
+        # Track minute-by-minute data
+        self.moet_rate_history.append({
+            'minute': current_minute,
+            'moet_interest_rate': self.current_moet_interest_rate,
+            'r_floor': self.governance_params['r_floor'],
+            'r_bond_cost': self.bonder_system.get_current_bond_cost()
+        })
+        
+        self.bond_apr_history_detailed.append({
+            'minute': current_minute,
+            'bond_apr': current_bond_apr,
+            'deficit_ratio': current_bond_apr  # Same as bond APR in our system
+        })
+        
+        self.reserve_history.append({
+            'minute': current_minute,
+            'target_reserves': target_reserves,
+            'actual_reserves': actual_reserves,
+            'reserve_ratio': actual_reserves / self.total_supply if self.total_supply > 0 else 0,
+            'target_ratio': self.governance_params['target_reserves_ratio']
+        })
+        
+        self.deficit_history.append({
+            'minute': current_minute,
+            'deficit': deficit,
+            'deficit_ratio': deficit / target_reserves if target_reserves > 0 else 0
+        })
         
         return results
     
@@ -438,10 +840,23 @@ class MoetStablecoin:
                         for auction in self.bonder_system.auction_history[-5:]  # Last 5 auctions
                     ]
                 } if self.bonder_system else None,
+                "redeemer_system": {
+                    "total_fees_collected": self.redeemer.total_fees_collected if self.redeemer else 0.0,
+                    "fee_history_count": len(self.redeemer.fee_history) if self.redeemer else 0,
+                    "current_pool_weights": self.redeemer.get_current_pool_weights() if self.redeemer else None,
+                    "fee_parameters": self.redeemer.fee_params if self.redeemer else None
+                } if self.redeemer else None,
                 "interest_rate_components": {
                     "r_floor": self.governance_params['r_floor'],
                     "r_bond_cost": self.bonder_system.get_current_bond_cost() if self.bonder_system else 0.0,
                     "total_rate": self.current_moet_interest_rate
+                },
+                # Enhanced tracking data for JSON results
+                "tracking_data": {
+                    "moet_rate_history": self.moet_rate_history,
+                    "bond_apr_history": self.bond_apr_history_detailed,
+                    "reserve_history": self.reserve_history,
+                    "deficit_history": self.deficit_history
                 }
             })
         

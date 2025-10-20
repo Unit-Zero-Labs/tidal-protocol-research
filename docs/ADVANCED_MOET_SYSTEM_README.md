@@ -58,38 +58,37 @@ Unlike traditional DeFi protocols that use simple supply/demand curves, the Adva
 
 The `BonderSystem` class manages the core reserve maintenance mechanism through dynamic bond auctions:
 
-#### Auction Triggering Logic
+#### Continuous Auction Logic
 
 ```python
-def should_trigger_auction(self, reserve_state: ReserveState, total_moet_supply: float) -> bool:
+def should_run_auction(self, reserve_state: ReserveState, total_moet_supply: float) -> bool:
     deficit = reserve_state.get_reserve_deficit(total_moet_supply)
-    return deficit > 1000.0  # Trigger if deficit > $1000
+    return deficit > 0.0  # Run auction whenever reserves < target
 ```
 
-**Trigger Conditions:**
-- Reserve ratio falls below 30% target
-- Reserve deficit exceeds $1,000 threshold
-- No auction currently in progress
+**Continuous Auction Conditions:**
+- Auction runs whenever actual reserves < target reserves
+- No trigger thresholds - immediate response to any deficit
+- Auction stops automatically when reserves reach target (deficit = 0)
 
-#### Dynamic Pricing Curve
+#### Pure Deficit-Based Pricing
 
-Bond auctions use a sophisticated pricing model that increases yield over time to ensure fills:
+Bond auctions use a pure deficit-based pricing model that directly reflects reserve pressure:
 
 ```python
-# Starting yield calculation
-starting_apr = benchmark_rate + starting_premium + base_apr
+# Pure deficit-based APR calculation
+deficit_ratio = (target_reserves - actual_reserves) / target_reserves
+bond_apr = max(0.0, deficit_ratio)
 
-# Dynamic yield increase over auction duration
-time_factor = min(1.0, elapsed_minutes / base_auction_duration)
-additional_premium = time_factor * max_premium
-final_apr = starting_apr + additional_premium
+# No additional premiums or time-based increases
+final_apr = bond_apr
 ```
 
 **Pricing Parameters:**
-- **Starting Premium**: 0.5% base premium over benchmark
-- **Maximum Premium**: 10% maximum additional premium
-- **Auction Duration**: 1-6 hours depending on market conditions
-- **Floor Price Protection**: Prevents excessive bond discounts
+- **Target Reserves**: 10% of total MOET supply
+- **Initial Reserves**: 8% of total MOET supply (creates immediate 20% APR)
+- **Continuous Auctions**: Always active when reserves < target
+- **Real-time Updates**: APR recalculated every minute based on current deficit
 
 #### Auction Fill Probability
 
@@ -142,19 +141,20 @@ class ReserveState:
 
 ### Reserve Initialization
 
-The system initializes reserves at **50% of initial MOET debt** to create immediate reserve pressure:
+The system initializes reserves at **8% of initial MOET debt** to create immediate reserve pressure:
 
 ```python
 def initialize_reserves(self, initial_moet_debt: float):
-    initial_reserves = initial_moet_debt * 0.50  # 50% backing
-    usdc_amount = initial_reserves * 0.50        # 25% USDC
-    usdf_amount = initial_reserves * 0.50        # 25% USDF
+    initial_reserves = initial_moet_debt * 0.08  # 8% backing (creates immediate deficit)
+    usdc_amount = initial_reserves * 0.50        # 4% USDC
+    usdf_amount = initial_reserves * 0.50        # 4% USDF
 ```
 
 **Strategic Benefits:**
-- **Immediate auction activity**: Creates reserve deficit from simulation start
-- **Realistic stress testing**: Forces the system to manage reserves under pressure
-- **Economic realism**: Reflects real-world stablecoin backing ratios
+- **Immediate 20% bond APR**: Creates significant reserve deficit from simulation start
+- **Active auction system**: Forces continuous bond auction activity
+- **Economic stress testing**: Tests system under realistic reserve pressure
+- **Meaningful yield generation**: Creates substantial bond costs for MOET interest rates
 
 ### Redemption Processing
 
@@ -279,9 +279,8 @@ The system uses the following governance-controlled parameters:
 ```python
 governance_params = {
     'r_floor': 0.02,                    # 2% governance profit margin
-    'target_reserves_ratio': 0.30,      # 30% target reserve ratio
+    'target_reserves_ratio': 0.10,      # 10% target reserve ratio (updated)
     'ema_half_life_days': 7,            # 7-day EMA smoothing
-    'benchmark_rate': 0.05              # 5% benchmark rate for auctions
 }
 ```
 
@@ -290,16 +289,15 @@ governance_params = {
 Bond auction behavior is controlled by these parameters:
 
 ```python
-# Auction timing
+# Auction timing (simplified)
 base_auction_duration = 60          # 1 hour default duration
 max_auction_duration = 360          # 6 hours maximum duration
 
-# Pricing parameters
-starting_premium = 0.005            # 0.5% starting premium
-max_premium = 0.10                  # 10% maximum additional premium
+# Pure deficit-based pricing (no premiums)
+# APR = (Target Reserves - Actual Reserves) / Target Reserves
 
-# Trigger thresholds
-min_deficit_trigger = 1000.0        # $1,000 minimum deficit to trigger
+# Continuous operation (no triggers)
+# Auction runs whenever deficit > 0
 ```
 
 ### Reserve Management
@@ -307,12 +305,12 @@ min_deficit_trigger = 1000.0        # $1,000 minimum deficit to trigger
 Reserve management follows these configured ratios:
 
 ```python
-# Initial setup
-initial_reserve_ratio = 0.50        # 50% of initial debt as reserves
+# Initial setup (creates immediate deficit)
+initial_reserve_ratio = 0.08        # 8% of initial debt as reserves
 usdc_usdf_split = 0.50             # 50/50 USDC/USDF split
 
 # Target maintenance
-target_reserves_ratio = 0.30        # 30% ongoing target
+target_reserves_ratio = 0.10        # 10% ongoing target
 ```
 
 ## Simulation Integration
@@ -489,11 +487,11 @@ The new system addresses all legacy issues:
 | **Market Response** | Static curves | Dynamic response to market conditions |
 | **Reserve Backing** | None | 30% target with automatic replenishment |
 
-## System State Monitoring
+## System State Monitoring and JSON Tracking
 
 ### Comprehensive State Reporting
 
-The Advanced MOET System provides detailed state information:
+The Advanced MOET System provides detailed state information and comprehensive tracking for analysis:
 
 ```python
 # Get complete system state
@@ -540,6 +538,233 @@ The system provides detailed logging of all significant events:
    r_bond_cost: 2.15% (EMA updated)
 ```
 
+### Enhanced JSON Tracking
+
+The system now provides minute-by-minute tracking of key metrics in simulation results:
+
+```python
+# JSON results include comprehensive MOET system data
+"moet_system_state": {
+    "tracking_data": {
+        "moet_rate_history": [
+            {
+                "minute": 0,
+                "moet_interest_rate": 0.02,
+                "r_floor": 0.02,
+                "r_bond_cost": 0.0
+            },
+            // ... minute-by-minute data
+        ],
+        "bond_apr_history": [
+            {
+                "minute": 0,
+                "bond_apr": 0.20,
+                "deficit_ratio": 0.20
+            },
+            // ... minute-by-minute bond APRs
+        ],
+        "reserve_history": [
+            {
+                "minute": 0,
+                "target_reserves": 100000,
+                "actual_reserves": 80000,
+                "reserve_ratio": 0.08,
+                "target_ratio": 0.10
+            },
+            // ... minute-by-minute reserve data
+        ],
+        "deficit_history": [
+            {
+                "minute": 0,
+                "deficit": 20000,
+                "deficit_ratio": 0.20
+            },
+            // ... minute-by-minute deficit tracking
+        ]
+    }
+},
+"moet_system_summary": {
+    "initial_moet_rate": 0.02,
+    "final_moet_rate": 0.045,
+    "avg_moet_rate": 0.032,
+    "max_bond_apr": 0.20,
+    "avg_bond_apr": 0.15,
+    "initial_reserve_ratio": 0.08,
+    "final_reserve_ratio": 0.095,
+    "max_deficit": 20000,
+    "avg_deficit": 12500,
+    "total_data_points": 525600
+}
+```
+
+**Tracking Benefits:**
+- **Complete audit trail**: Every minute of MOET system operation
+- **Performance analysis**: Detailed metrics for system optimization
+- **Economic validation**: Verify deficit-based pricing works as designed
+- **Research insights**: Understand bond auction dynamics over time
+
 This comprehensive monitoring enables detailed analysis of the MOET system's performance and provides insights into the economic dynamics driving interest rate changes.
+
+## Enhanced Redeemer System with Dynamic Fee Structure
+
+### Overview
+
+The Enhanced Redeemer system introduces a sophisticated fee structure that incentivizes balanced pool interactions while generating revenue from convenience-seeking users. The system maintains a 50/50 USDC/USDF reserve pool and applies dynamic fees based on transaction impact.
+
+### Fee Structure
+
+#### Deposit Fees
+
+**Balanced Deposits (50/50 USDC/USDF)**:
+- Base fee: 0.01%
+- Imbalance fee: 0% (no deviation from ideal weights)
+- Total fee: 0.01%
+
+**Imbalanced Deposits (Single asset or off-ratio)**:
+- Base fee: 0.02%
+- Imbalance fee: `K * max(0, Δw(post) - Δw(tol))^γ`
+  - K = 50 bps (0.5%) scale factor
+  - γ = 2.0 (quadratic scaling)
+  - Δw(tol) = 2% tolerance band
+
+#### Redemption Fees
+
+**Proportional Redemptions**:
+- Fee: 0% (maintains pool balance)
+- User receives blend of USDC/USDF matching current ratios
+
+**Single-Asset Redemptions**:
+- Base fee: 0.02%
+- Imbalance fee: Same formula as deposits
+- Premium for convenience of receiving specific asset
+
+### Implementation Examples
+
+#### Example 1: Balanced Deposit
+```python
+# User deposits $10,000 (50/50 USDC/USDF)
+deposit_result = protocol.mint_moet_from_deposit(5000, 5000)
+
+# Results:
+# - MOET minted: $9,999.00
+# - Total fee: $1.00 (0.01%)
+# - Base fee: $1.00
+# - Imbalance fee: $0.00
+# - Pool remains balanced
+```
+
+#### Example 2: Imbalanced Deposit
+```python
+# User deposits $10,000 (100% USDC)
+deposit_result = protocol.mint_moet_from_deposit(10000, 0)
+
+# Results:
+# - MOET minted: $9,997.95
+# - Total fee: $2.05 (0.021%)
+# - Base fee: $2.00 (0.02%)
+# - Imbalance fee: $0.05 (penalty for creating imbalance)
+# - Pool becomes USDC-heavy
+```
+
+#### Example 3: Proportional Redemption
+```python
+# User redeems $5,000 MOET proportionally
+redemption_result = protocol.redeem_moet_for_assets(5000, "proportional")
+
+# Results:
+# - USDC received: $2,750 (55% of current pool)
+# - USDF received: $2,250 (45% of current pool)
+# - Total fee: $0.00
+# - Pool balance maintained
+```
+
+#### Example 4: Single-Asset Redemption
+```python
+# User redeems $3,000 MOET for USDC only
+redemption_result = protocol.redeem_moet_for_assets(3000, "USDC")
+
+# Results:
+# - USDC received: $2,999.40
+# - USDF received: $0.00
+# - Total fee: $0.60 (0.02% base + imbalance fee)
+# - Pool becomes more USDF-heavy
+```
+
+### Fee Calculation Formula
+
+The imbalance fee uses the formula:
+```
+fee(imb) = K * max(0, Δw(post) - Δw(tol))^γ
+
+Where:
+- K = 0.005 (50 basis points scale factor)
+- γ = 2.0 (quadratic convexity)
+- Δw(post) = Post-transaction weight deviation from 50/50
+- Δw(tol) = 0.02 (2% tolerance band)
+```
+
+### Integration with Bond Auctions
+
+The Enhanced Redeemer works seamlessly with the existing bond auction system:
+
+1. **Bond proceeds** are added as 50/50 USDC/USDF (maintains balance)
+2. **Fee revenue** accumulates in reserves, reducing bond auction frequency
+3. **Reserve targets** remain at 10% of total MOET supply
+4. **Dual replenishment**: Both user fees and bond auctions maintain reserves
+
+### API Methods
+
+#### Protocol-Level Methods
+```python
+# Mint MOET from deposits
+result = protocol.mint_moet_from_deposit(usdc_amount, usdf_amount)
+
+# Redeem MOET for assets
+result = protocol.redeem_moet_for_assets(moet_amount, desired_asset)
+
+# Estimate fees before transactions
+fee_estimate = protocol.estimate_deposit_fee(usdc_amount, usdf_amount)
+fee_estimate = protocol.estimate_redemption_fee(moet_amount, desired_asset)
+
+# Get pool information
+weights = protocol.get_redeemer_pool_weights()
+optimal = protocol.get_optimal_deposit_ratio(total_amount)
+```
+
+#### Direct Redeemer Methods
+```python
+# Access enhanced redeemer directly
+redeemer = protocol.moet_system.redeemer
+
+# Execute transactions
+deposit_result = redeemer.deposit_assets_for_moet(usdc_amount, usdf_amount)
+redemption_result = redeemer.redeem_moet_for_assets(moet_amount, desired_asset)
+
+# Get state information
+current_weights = redeemer.get_current_pool_weights()
+optimal_ratio = redeemer.get_optimal_deposit_ratio(amount)
+```
+
+### Economic Incentives
+
+The fee structure creates proper economic incentives:
+
+1. **Balanced users pay minimal fees** (0.01% deposits, 0% redemptions)
+2. **Imbalanced users pay for convenience** (higher fees + quadratic penalties)
+3. **Pool maintains health** through economic disincentives for imbalance
+4. **Protocol earns revenue** from imbalance fees and convenience premiums
+5. **Reduced bond reliance** as fee revenue helps maintain target reserves
+
+### Performance Characteristics
+
+Based on integration testing:
+
+- **Balanced deposits**: ~0.01% fee (e.g., $1 fee on $10k deposit)
+- **Imbalanced deposits**: ~0.02-0.12% fee depending on deviation
+- **Proportional redemptions**: 0% fee
+- **Single-asset redemptions**: ~0.02-0.14% fee depending on impact
+- **Pool rebalancing**: Automatic through economic incentives
+
+This enhanced system provides a sustainable, economically-driven mechanism for maintaining MOET's peg while generating protocol revenue and reducing reliance on bond auctions.
 
 ---

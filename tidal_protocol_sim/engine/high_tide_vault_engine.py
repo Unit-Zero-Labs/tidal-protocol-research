@@ -46,6 +46,10 @@ class HighTideConfig(TidalConfig):
         # Advanced MOET system toggle
         self.enable_advanced_moet_system = False  # Default to legacy system
         
+        # Enhanced MOET System Configuration (for arbitrage agents)
+        self.num_arbitrage_agents = 0  # Number of MOET arbitrage agents for peg maintenance
+        self.arbitrage_agent_balance = 100_000.0  # Initial balance per arbitrage agent
+        
         # Override base simulation parameters
         self.simulation_steps = self.btc_decline_duration
 
@@ -84,11 +88,31 @@ class HighTideVaultEngine(TidalProtocolEngine):
         )
         
         # Add High Tide agents to main agents dict
-        self.agents = {}  # Clear base agents
-        for agent in self.high_tide_agents:
-            self.agents[agent.agent_id] = agent
-            # CRITICAL FIX: Set engine reference for real swap recording
-            agent.engine = self
+        # CRITICAL FIX: Preserve arbitrage agents if advanced MOET system is enabled
+        if getattr(config, 'enable_advanced_moet_system', False):
+            # Check if arbitrage agents were created by parent class
+            if hasattr(self, 'arbitrage_agents') and self.arbitrage_agents:
+                print(f"🤖 Preserving {len(self.arbitrage_agents)} arbitrage agents in High Tide engine")
+                # Keep existing arbitrage agents and add High Tide agents
+                for agent in self.high_tide_agents:
+                    self.agents[agent.agent_id] = agent
+                    agent.engine = self
+            else:
+                print("⚠️  Advanced MOET system enabled but no arbitrage agents found. Creating them now...")
+                # Clear base agents and add High Tide agents first
+                self.agents = {}
+                for agent in self.high_tide_agents:
+                    self.agents[agent.agent_id] = agent
+                    agent.engine = self
+                # Then create arbitrage agents
+                self._setup_arbitrage_agents()
+        else:
+            # Clear base agents and use only High Tide agents (legacy behavior)
+            self.agents = {}
+            for agent in self.high_tide_agents:
+                self.agents[agent.agent_id] = agent
+                # CRITICAL FIX: Set engine reference for real swap recording
+                agent.engine = self
             
         # Initialize LP curve tracking for yield tokens using YieldTokenPool data
         yield_pool_size = config.moet_btc_pool_size * 2
@@ -105,6 +129,7 @@ class HighTideVaultEngine(TidalProtocolEngine):
         self.rebalancing_events = []
         self.yield_token_trades = []
         self.agent_health_history = []
+        self.arbitrage_events = []  # Track arbitrage events
             
         # Initialize High Tide agent positions
         self._setup_high_tide_positions()
@@ -128,7 +153,10 @@ class HighTideVaultEngine(TidalProtocolEngine):
         if self.protocol.enable_advanced_moet:
             total_agent_debt = sum(agent.state.moet_debt for agent in self.high_tide_agents)
             self.protocol.initialize_moet_reserves(total_agent_debt)
-            print(f"🏦 Initialized MOET reserves: ${total_agent_debt * 0.5:,.0f} (50% of ${total_agent_debt:,.0f} total debt)")
+            # Get actual initialized reserves from the system
+            actual_reserves = self.protocol.moet_system.redeemer.reserve_state.total_reserves
+            reserve_ratio = actual_reserves / total_agent_debt if total_agent_debt > 0 else 0
+            print(f"🏦 Initialized MOET reserves: ${actual_reserves:,.0f} ({reserve_ratio:.1%} of ${total_agent_debt:,.0f} total debt)")
             
     def run_simulation(self, steps: int = None) -> Dict:
         """Run High Tide simulation with BTC price decline"""
@@ -167,6 +195,10 @@ class HighTideVaultEngine(TidalProtocolEngine):
             # Process High Tide agent actions
             swap_data = self._process_high_tide_agents(minute)
             
+            # Process arbitrage agents (if advanced MOET system enabled)
+            if hasattr(self, 'arbitrage_agents'):
+                self._process_arbitrage_agents(minute)
+            
             # Check for High Tide liquidations
             self._check_high_tide_liquidations(minute)
             
@@ -180,6 +212,15 @@ class HighTideVaultEngine(TidalProtocolEngine):
             
             # Record metrics
             self._record_high_tide_metrics(minute)
+            
+            # Monitor MOET peg (for price tracking)
+            if hasattr(self.__class__, '_monitor_moet_peg'):
+                if minute % 1440 == 0:  # Debug log once per day
+                    print(f"🔍 DEBUG: Calling _monitor_moet_peg at minute {minute}")
+                self._monitor_moet_peg(minute)
+            else:
+                if minute % 1440 == 0:  # Debug log once per day
+                    print(f"❌ DEBUG: _monitor_moet_peg method not found at minute {minute}")
             
             if minute % 10 == 0:
                 print(f"Minute {minute}: BTC = ${new_btc_price:,.0f}, Active agents: {self._count_active_agents()}")
@@ -233,6 +274,29 @@ class HighTideVaultEngine(TidalProtocolEngine):
                     print(f"🚨 EMERGENCY REBALANCING triggered after agent {agents_processed} at minute {minute}")
                     self._execute_emergency_rebalancing(minute)
             
+        return swap_data
+    
+    def _process_arbitrage_agents(self, minute: int) -> Dict[str, Dict]:
+        """Process arbitrage agent actions with competition mechanism"""
+        if not hasattr(self, 'arbitrage_agents'):
+            return {}
+        
+        # Use the new competition-based processing from parent class
+        swap_data = self._process_arbitrage_agents_with_competition(minute)
+        
+        # Store arbitrage events for tracking (like rebalancing events)
+        for swap_key, swap_info in swap_data.items():
+            arbitrage_event = {
+                "minute": minute,
+                "agent_id": swap_info.get("agent_id", "unknown"),
+                "type": swap_info.get("type", "unknown"),
+                "volume": swap_info.get("volume", 0),
+                "profit": swap_info.get("profit", 0),
+                "fees_generated": swap_info.get("fees_generated", 0),
+                "success": True
+            }
+            self.arbitrage_events.append(arbitrage_event)
+        
         return swap_data
     
     def _should_trigger_emergency_rebalancing(self) -> bool:
@@ -317,6 +381,11 @@ class HighTideVaultEngine(TidalProtocolEngine):
             elif swap_type in ["sell_yield_tokens", "emergency_sell_all_yield"]:
                 success, swap_data = self._execute_yield_token_sale(agent, params, minute)
                 return success, swap_data
+        
+        # NEW: Handle deleveraging actions
+        elif action_type in ["delever_hf", "delever_weekly"]:
+            success = self._execute_deleveraging_action(agent, action_type, params, minute)
+            return success, None
                 
         elif action_type == AgentAction.BORROW:
             if params.get("leverage_increase", False):
@@ -339,8 +408,10 @@ class HighTideVaultEngine(TidalProtocolEngine):
         if amount <= 0:
             return False
         
-        print(f"           📈 ENGINE: Executing leverage increase borrow for {agent.agent_id}")
-        print(f"           Amount: ${amount:,.2f} MOET at minute {minute}")
+        # Reduced logging for ecosystem growth
+        if minute % 1440 == 0 or len(self.high_tide_agents) <= 150:
+            print(f"           📈 ENGINE: Executing leverage increase borrow for {agent.agent_id}")
+            print(f"           Amount: ${amount:,.2f} MOET at minute {minute}")
         
         # Borrow additional MOET
         if self.protocol.borrow(agent.agent_id, amount):
@@ -348,19 +419,23 @@ class HighTideVaultEngine(TidalProtocolEngine):
             agent.state.moet_debt += amount
             agent.state.token_balances[Asset.MOET] += amount
             
-            print(f"           ✅ Borrow successful - New debt: ${agent.state.moet_debt:,.2f}, MOET balance: ${agent.state.token_balances[Asset.MOET]:,.2f}")
+            if minute % 1440 == 0 or len(self.high_tide_agents) <= 150:  # Reduced logging
+                print(f"           ✅ Borrow successful - New debt: ${agent.state.moet_debt:,.2f}, MOET balance: ${agent.state.token_balances[Asset.MOET]:,.2f}")
             
             # Determine if we should use direct minting (minute 0 + config enabled)
             use_direct_minting = (minute == 0 and self.high_tide_config.use_direct_minting_for_initial)
             
             # Use new MOET to buy more yield tokens
-            print(f"           🚀 LEVERAGE INCREASE: Purchasing ${amount:,.2f} worth of yield tokens with borrowed MOET")
+            # Reduced logging for ecosystem growth - only log occasionally
+            if minute % 1440 == 0 or len(self.high_tide_agents) <= 150:  # Daily or if small agent count
+                print(f"           🚀 LEVERAGE INCREASE: Purchasing ${amount:,.2f} worth of yield tokens with borrowed MOET")
             yt_purchase_success = agent.execute_yield_token_purchase(amount, minute, use_direct_minting)
             
-            if yt_purchase_success:
-                print(f"           ✅ Leverage increase YT purchase successful")
-            else:
-                print(f"           ❌ Leverage increase YT purchase failed")
+            if minute % 1440 == 0 or len(self.high_tide_agents) <= 150:  # Reduced logging
+                if yt_purchase_success:
+                    print(f"           ✅ Leverage increase YT purchase successful")
+                else:
+                    print(f"           ❌ Leverage increase YT purchase failed")
             
             return yt_purchase_success
         
@@ -495,6 +570,39 @@ class HighTideVaultEngine(TidalProtocolEngine):
             
         return False, None
     
+    def _execute_deleveraging_action(self, agent: HighTideAgent, action_type: str, params: dict, minute: int) -> bool:
+        """Execute deleveraging action (HF threshold or weekly)"""
+        yt_amount = params.get("yt_amount", 0)
+        reason = params.get("reason", "unknown")
+        
+        if yt_amount <= 0:
+            return False
+        
+        print(f"🔻 Engine executing {action_type} for {agent.agent_id}: ${yt_amount:,.0f} YT ({reason})")
+        
+        # Execute deleveraging through agent
+        success = agent.execute_deleveraging(params, minute)
+        
+        if success:
+            # Record deleveraging event for engine tracking
+            deleveraging_event = {
+                "agent_id": agent.agent_id,
+                "minute": minute,
+                "action_type": action_type,
+                "yt_amount": yt_amount,
+                "reason": reason,
+                "health_factor_before": agent.state.health_factor
+            }
+            
+            # Add to engine tracking (create list if doesn't exist)
+            if not hasattr(self, 'deleveraging_events'):
+                self.deleveraging_events = []
+            self.deleveraging_events.append(deleveraging_event)
+            
+            print(f"   ✅ Deleveraging recorded in engine")
+            
+        return success
+    
     def record_agent_rebalancing_event(self, agent_id: str, minute: int, moet_raised: float, 
                                      debt_repayment: float, slippage_cost: float, health_factor_before: float):
         """CRITICAL FIX: Method for agents to record real rebalancing events in engine"""
@@ -579,7 +687,264 @@ class HighTideVaultEngine(TidalProtocolEngine):
                 "btc_price": self.state.current_prices[Asset.BTC],
                 "agents": agent_health_data
             })
+            
+            # Record pool state snapshots (for Enhanced Redeemer charts)
+            self._record_pool_state_snapshot(minute)
+    
+    def _record_pool_state_snapshot(self, minute: int):
+        """Record pool state snapshots for Enhanced Redeemer analysis"""
+        if not hasattr(self, 'pool_state_snapshots'):
+            self.pool_state_snapshots = []
         
+        snapshot = {"minute": minute}
+        
+        # Capture new pool structure if advanced MOET system is enabled
+        if hasattr(self, 'moet_usdc_calculator') and hasattr(self, 'moet_usdf_calculator'):
+            # MOET:USDC pool state
+            try:
+                moet_usdc_price = self.moet_usdc_pool.get_price()
+                snapshot["moet_usdc_price"] = moet_usdc_price
+                snapshot["moet_usdc_liquidity"] = self.moet_usdc_pool.liquidity
+            except:
+                snapshot["moet_usdc_price"] = 1.0
+                snapshot["moet_usdc_liquidity"] = 0
+            
+            # MOET:USDF pool state  
+            try:
+                moet_usdf_price = self.moet_usdf_pool.get_price()
+                snapshot["moet_usdf_price"] = moet_usdf_price
+                snapshot["moet_usdf_liquidity"] = self.moet_usdf_pool.liquidity
+            except:
+                snapshot["moet_usdf_price"] = 1.0
+                snapshot["moet_usdf_liquidity"] = 0
+            
+            # USDC:BTC pool state
+            try:
+                usdc_btc_price = self.usdc_btc_pool.get_price()
+                snapshot["usdc_btc_price"] = usdc_btc_price
+                snapshot["usdc_btc_liquidity"] = self.usdc_btc_pool.liquidity
+            except:
+                snapshot["usdc_btc_price"] = self.state.current_prices[Asset.BTC]
+                snapshot["usdc_btc_liquidity"] = 0
+            
+            # USDF:BTC pool state
+            try:
+                usdf_btc_price = self.usdf_btc_pool.get_price()
+                snapshot["usdf_btc_price"] = usdf_btc_price
+                snapshot["usdf_btc_liquidity"] = self.usdf_btc_pool.liquidity
+            except:
+                snapshot["usdf_btc_price"] = self.state.current_prices[Asset.BTC]
+                snapshot["usdf_btc_liquidity"] = 0
+        
+        # Legacy pool state (for backward compatibility)
+        if hasattr(self, 'slippage_calculator'):
+            try:
+                legacy_price = self.slippage_calculator.pool.get_price()
+                snapshot["legacy_pool_price"] = legacy_price
+                snapshot["legacy_pool_liquidity"] = self.slippage_calculator.pool.liquidity
+            except:
+                snapshot["legacy_pool_price"] = self.state.current_prices[Asset.BTC]
+                snapshot["legacy_pool_liquidity"] = 0
+        
+        self.pool_state_snapshots.append(snapshot)
+    
+    def _collect_moet_system_data(self) -> dict:
+        """Collect MOET system data for redeemer and arbitrage charts"""
+        
+        # Check if advanced MOET system is enabled
+        config_enabled = getattr(self.config, 'enable_advanced_moet_system', False)
+        ht_config_enabled = getattr(self.high_tide_config, 'enable_advanced_moet_system', False)
+        advanced_enabled = config_enabled or ht_config_enabled
+        
+        print(f"🔧 DEBUG: Advanced MOET system check:")
+        print(f"   self.config.enable_advanced_moet_system: {config_enabled}")
+        print(f"   self.high_tide_config.enable_advanced_moet_system: {ht_config_enabled}")
+        print(f"   Final advanced_enabled: {advanced_enabled}")
+        
+        # Initialize data structure
+        moet_data = {
+            "advanced_system_enabled": advanced_enabled,  # CRITICAL FIX: Add this flag
+            "redeemer_system": {},
+            "tracking_data": {
+                "reserve_history": [],
+                "arbitrage_history": [],
+                "pool_price_history": [],
+                "deficit_history": []  # Add deficit tracking for chart compatibility
+            },
+            "arbitrage_agents_summary": []
+        }
+        
+        # Collect redeemer system data if advanced MOET system is enabled
+        if hasattr(self.protocol, 'enhanced_redeemer') and self.protocol.enhanced_redeemer:
+            redeemer = self.protocol.enhanced_redeemer
+            
+            moet_data["redeemer_system"] = {
+                "total_mints": getattr(redeemer, 'total_mints', 0),
+                "total_redemptions": getattr(redeemer, 'total_redemptions', 0),
+                "total_fees_collected": getattr(redeemer, 'total_fees_collected', 0),
+                "current_usdc_balance": getattr(redeemer, 'usdc_balance', 0),
+                "current_usdf_balance": getattr(redeemer, 'usdf_balance', 0),
+                "current_fee_rate": getattr(redeemer, 'current_fee_rate', 0.001),
+                "peg_stability_score": self._calculate_peg_stability_score()
+            }
+        
+        # CRITICAL FIX: Collect bonder system data for bond auction charts
+        if advanced_enabled and hasattr(self.protocol, 'moet_system') and self.protocol.moet_system:
+            moet_system = self.protocol.moet_system
+            
+            # Get bonder system data
+            if hasattr(moet_system, 'bonder_system') and moet_system.bonder_system:
+                bonder = moet_system.bonder_system
+                
+                moet_data["bonder_system"] = {
+                    "auction_history_count": len(getattr(bonder, 'auction_history', [])),
+                    "current_bond_cost_ema": getattr(bonder, 'current_bond_cost_ema', 0),
+                    "pending_auction": getattr(bonder, 'pending_auction', None) is not None,
+                    "recent_auctions": [
+                        {
+                            'timestamp': auction.timestamp,
+                            'final_apr': auction.final_apr,
+                            'amount_filled': auction.amount_filled,
+                            'filled_completely': auction.filled_completely,
+                            'target_amount': auction.target_amount
+                        }
+                        for auction in getattr(bonder, 'auction_history', [])[-5:]  # Last 5 auctions
+                    ]
+                }
+            
+            # Get MOET system state for tracking data
+            moet_state = moet_system.get_state()
+            if 'tracking_data' in moet_state:
+                tracking = moet_state['tracking_data']
+                moet_data["tracking_data"]["bond_apr_history"] = tracking.get("bond_apr_history", [])
+                moet_data["tracking_data"]["moet_rate_history"] = tracking.get("moet_rate_history", [])
+                moet_data["tracking_data"]["reserve_history"] = tracking.get("reserve_history", [])
+                moet_data["tracking_data"]["deficit_history"] = tracking.get("deficit_history", [])
+        
+        # Collect pool state snapshots as reserve history
+        if hasattr(self, 'pool_state_snapshots'):
+            for i, snapshot in enumerate(self.pool_state_snapshots):
+                if i % 60 == 0:  # Sample every hour
+                    hour = snapshot.get("minute", 0) / 60
+                    
+                    # Estimate reserve balances from pool data
+                    usdc_balance = 100000  # Default values if no pool data
+                    usdf_balance = 100000
+                    
+                    if hasattr(self.protocol, 'enhanced_redeemer') and self.protocol.enhanced_redeemer:
+                        usdc_balance = getattr(self.protocol.enhanced_redeemer, 'usdc_balance', 100000)
+                        usdf_balance = getattr(self.protocol.enhanced_redeemer, 'usdf_balance', 100000)
+                    
+                    # Calculate reserve metrics for chart compatibility
+                    total_reserves = usdc_balance + usdf_balance
+                    target_reserves = total_reserves  # Simplified for now
+                    total_moet_supply = getattr(self.protocol.moet_system, 'total_supply', 1000000) if hasattr(self.protocol, 'moet_system') else 1000000
+                    reserve_ratio = (total_reserves / total_moet_supply) if total_moet_supply > 0 else 0
+                    deficit = max(0, target_reserves - total_reserves)  # Calculate deficit
+                    
+                    moet_data["tracking_data"]["reserve_history"].append({
+                        "minute": hour * 60,  # Convert back to minutes for compatibility
+                        "hour": hour,
+                        "usdc_balance": usdc_balance,
+                        "usdf_balance": usdf_balance,
+                        "actual_reserves": total_reserves,
+                        "target_reserves": target_reserves,
+                        "reserve_ratio": reserve_ratio,
+                        "moet_usdc_price": snapshot.get("moet_usdc_price", 1.0),
+                        "moet_usdf_price": snapshot.get("moet_usdf_price", 1.0)
+                    })
+                    
+                    # Add deficit data for chart compatibility
+                    moet_data["tracking_data"]["deficit_history"].append({
+                        "minute": hour * 60,
+                        "hour": hour,
+                        "deficit": deficit
+                    })
+        
+        # Collect arbitrage agent data
+        if hasattr(self, 'arbitrage_agents') and self.arbitrage_agents:
+            print(f"   ✅ Collecting data from {len(self.arbitrage_agents)} arbitrage agents")
+            for agent in self.arbitrage_agents:
+                # Use the new detailed summary method
+                agent_summary = agent.get_detailed_portfolio_summary()
+                print(f"   Agent {agent.agent_id}: {agent_summary.get('total_attempts', 0)} attempts, {agent_summary.get('total_arbitrage_events', 0)} executed, ${agent_summary.get('total_profit', 0):.2f} profit")
+                
+                # Store comprehensive data
+                moet_data["arbitrage_agents_summary"].append({
+                    "agent_id": agent.agent_id,
+                    "agent_type": agent_summary.get("agent_type", "moet_arbitrage_agent"),
+                    "initial_balance": agent_summary.get("initial_balance", 0),
+                    "current_balance": agent_summary.get("current_balance", 0),
+                    "net_profit": agent_summary.get("net_profit", 0),
+                    "total_profit": agent_summary.get("total_profit", 0),
+                    "total_attempts": agent_summary.get("total_attempts", 0),
+                    "total_mint_attempts": agent_summary.get("total_mint_attempts", 0),
+                    "total_redeem_attempts": agent_summary.get("total_redeem_attempts", 0),
+                    "total_volume_traded": agent_summary.get("total_volume_traded", 0),
+                    "total_fees_generated": agent_summary.get("total_fees_generated", 0),
+                    "successful_arbitrages": agent_summary.get("successful_arbitrages", 0),
+                    "failed_arbitrages": agent_summary.get("failed_arbitrages", 0),
+                    "total_arbitrage_events": agent_summary.get("total_arbitrage_events", 0),
+                    "execution_rate": agent_summary.get("execution_rate", 0),
+                    "success_rate": agent_summary.get("success_rate", 0),
+                    "average_profit": agent_summary.get("average_profit", 0),
+                    "average_trade_size": agent_summary.get("average_trade_size", 0),
+                    "attempts_breakdown": agent_summary.get("attempts_breakdown", {}),
+                    "arbitrage_events": getattr(agent.state, 'arbitrage_events', []),
+                    "arbitrage_attempts": getattr(agent.state, 'arbitrage_attempts', [])
+                })
+                
+                # Add ALL arbitrage attempts to history (both executed and not executed)
+                for attempt in getattr(agent.state, 'arbitrage_attempts', []):
+                    moet_data["tracking_data"]["arbitrage_history"].append({
+                        "minute": attempt.get("minute", 0),
+                        "hour": attempt.get("minute", 0) / 60,
+                        "agent_id": agent.agent_id,
+                        "arbitrage_type": attempt.get("type", "unknown"),
+                        "executed": attempt.get("executed", False),
+                        "expected_profit": attempt.get("expected_profit", 0),
+                        "actual_profit": attempt.get("actual_profit", 0),
+                        "trade_size": attempt.get("trade_size", 0),
+                        "pool_used": attempt.get("pool", "unknown"),
+                        "moet_price": attempt.get("moet_price", 1.0),
+                        "reason_not_executed": attempt.get("reason_not_executed", None)
+                    })
+        else:
+            print(f"   ⚠️  No arbitrage agents found for data collection")
+        
+        return moet_data
+    
+    def _calculate_peg_stability_score(self) -> float:
+        """Calculate a peg stability score based on recent price deviations"""
+        if not hasattr(self, 'pool_state_snapshots') or not self.pool_state_snapshots:
+            return 1.0  # Perfect stability if no data
+        
+        # Look at recent snapshots (last 100 or all if fewer)
+        recent_snapshots = self.pool_state_snapshots[-100:]
+        
+        total_deviation = 0.0
+        count = 0
+        
+        for snapshot in recent_snapshots:
+            usdc_price = snapshot.get("moet_usdc_price", 1.0)
+            usdf_price = snapshot.get("moet_usdf_price", 1.0)
+            
+            # Calculate deviation from $1.00 peg
+            usdc_deviation = abs(usdc_price - 1.0)
+            usdf_deviation = abs(usdf_price - 1.0)
+            
+            total_deviation += (usdc_deviation + usdf_deviation) / 2
+            count += 1
+        
+        if count == 0:
+            return 1.0
+        
+        avg_deviation = total_deviation / count
+        # Convert to stability score (1.0 = perfect, 0.0 = very unstable)
+        stability_score = max(0.0, 1.0 - (avg_deviation * 100))  # Scale by 100x
+        
+        return stability_score
+    
     def _generate_high_tide_results(self) -> dict:
         """Generate comprehensive High Tide simulation results"""
         base_results = super()._generate_results()
@@ -587,11 +952,12 @@ class HighTideVaultEngine(TidalProtocolEngine):
         # Calculate High Tide specific metrics
         final_minute = self.high_tide_config.btc_decline_duration - 1
         
-        # Agent outcomes
+        # Agent outcomes - include both High Tide agents AND arbitrage agents
         agent_outcomes = []
         total_cost_of_rebalancing = 0.0
         survival_by_risk_profile = {"conservative": 0, "moderate": 0, "aggressive": 0}
         
+        # Process High Tide agents
         for agent in self.high_tide_agents:
             agent._update_health_factor(self.state.current_prices)
             
@@ -612,6 +978,7 @@ class HighTideVaultEngine(TidalProtocolEngine):
             
             outcome = {
                 "agent_id": agent.agent_id,
+                "agent_type": "high_tide_agent",  # Specify agent type
                 "risk_profile": agent.risk_profile,
                 "target_health_factor": agent.state.target_health_factor,
                 "initial_health_factor": agent.state.initial_health_factor,
@@ -631,6 +998,10 @@ class HighTideVaultEngine(TidalProtocolEngine):
                 "total_interest_accrued": portfolio["total_interest_accrued"],
                 "btc_amount": portfolio["btc_amount"],
                 "yield_token_portfolio": portfolio["yield_token_portfolio"],
+                # Add deleveraging data
+                "deleveraging_events": portfolio.get("deleveraging_events", []),
+                "deleveraging_events_count": portfolio.get("deleveraging_events_count", 0),
+                "total_deleveraging_sales": portfolio.get("total_deleveraging_sales", 0),
                 # Add flag to indicate this uses real engine data
                 "data_source": "engine_real_swaps"
             }
@@ -640,12 +1011,41 @@ class HighTideVaultEngine(TidalProtocolEngine):
             
             if outcome["survived"]:
                 survival_by_risk_profile[agent.risk_profile] += 1
+        
+        # Process arbitrage agents (if they exist)
+        if hasattr(self, 'arbitrage_agents') and self.arbitrage_agents:
+            for agent in self.arbitrage_agents:
+                # Get arbitrage agent summary
+                agent_summary = agent.get_summary()
                 
+                outcome = {
+                    "agent_id": agent.agent_id,
+                    "agent_type": "moet_arbitrage_agent",  # Specify agent type
+                    "total_profit": agent_summary.get("total_profit", 0),
+                    "successful_arbitrages": agent_summary.get("successful_arbitrages", 0),
+                    "failed_arbitrages": agent_summary.get("failed_arbitrages", 0),
+                    "success_rate": agent_summary.get("success_rate", 0),
+                    "average_profit": agent_summary.get("average_profit", 0),
+                    "total_arbitrage_events": agent_summary.get("total_arbitrage_events", 0),
+                    "arbitrage_events": getattr(agent.state, 'arbitrage_events', []),
+                    "initial_balance": agent.state.initial_balance,
+                    "current_balance": agent.state.token_balances.get(Asset.USDC, 0),  # Using USDC as proxy
+                    "survived": True,  # Arbitrage agents don't have health factors, so they always "survive"
+                    "net_position_value": agent.state.token_balances.get(Asset.USDC, 0),  # Current balance as net value
+                    "data_source": "arbitrage_agent"
+                }
+                
+                agent_outcomes.append(outcome)
+                
+        # Collect MOET system data for redeemer charts
+        moet_system_data = self._collect_moet_system_data()
+        
         # High Tide specific results
         high_tide_results = {
             "scenario_type": "High_Tide_BTC_Decline",
             "btc_decline_statistics": self.btc_price_manager.get_decline_statistics(),
             "agent_outcomes": agent_outcomes,
+            "moet_system_state": moet_system_data,  # Add MOET system data for charts
             "survival_statistics": {
                 "total_agents": len(self.high_tide_agents),
                 "survivors": sum(1 for outcome in agent_outcomes if outcome["survived"]),
@@ -665,7 +1065,8 @@ class HighTideVaultEngine(TidalProtocolEngine):
             "agent_health_history": self.agent_health_history,
             "btc_price_history": self.btc_price_history,
             "rebalancing_events": self.rebalancing_events,
-            "yield_token_trades": self.yield_token_trades
+            "yield_token_trades": self.yield_token_trades,
+            "arbitrage_events": self.arbitrage_events
         }
         
         # Add LP curve tracking data
@@ -674,6 +1075,15 @@ class HighTideVaultEngine(TidalProtocolEngine):
             "pool_name": "MOET:Yield_Token",
             "concentration_range": self.config.yield_token_concentration
         }
+        
+        # Add peg monitoring data (for Redeemer charts)
+        if hasattr(self, 'peg_monitoring'):
+            high_tide_results["peg_monitoring"] = self.peg_monitoring
+            high_tide_results["peg_monitoring_summary"] = self.get_peg_monitoring_summary()
+        
+        # Add pool state snapshots (for Enhanced Redeemer charts)
+        if hasattr(self, 'pool_state_snapshots'):
+            high_tide_results["pool_state_snapshots"] = self.pool_state_snapshots
         
         # Merge with base results
         base_results.update(high_tide_results)

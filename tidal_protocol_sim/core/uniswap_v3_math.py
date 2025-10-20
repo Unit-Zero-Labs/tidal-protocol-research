@@ -579,16 +579,24 @@ class UniswapV3Pool:
         self.tick_bitmap = TickBitmap() if self.tick_bitmap is None else self.tick_bitmap
         
         # Set fee tier, tick spacing, and concentration based on pool type (following Uniswap V3 conventions)
-        if "MOET:BTC" in self.pool_name:
-            # MOET:BTC pairs use 0.3% fee tier (more volatile, less correlated assets)
+        if any(pair in self.pool_name for pair in ["MOET:BTC", "USDC:BTC", "USDF:BTC"]):
+            # BTC pairs use 0.3% fee tier (more volatile, less correlated assets)
             if self.fee_tier is None:
                 self.fee_tier = 0.003  # 0.3% fee tier
             if self.tick_spacing is None:
                 self.tick_spacing = TICK_SPACING_0_3_PERCENT  # 60
             if self.concentration is None:
                 self.concentration = 0.80  # 80% concentration for volatile pairs
+        elif any(pair in self.pool_name for pair in ["MOET:USDC", "MOET:USDF"]):
+            # MOET stablecoin pairs use 0.01% fee tier (1 bp for tight arbitrage)
+            if self.fee_tier is None:
+                self.fee_tier = 0.0001  # 0.01% fee tier (1 bp)
+            if self.tick_spacing is None:
+                self.tick_spacing = 1  # 1 tick spacing for 0.01% fee tier
+            if self.concentration is None:
+                self.concentration = 0.95  # 95% concentration for stable pairs
         else:
-            # MOET:YieldToken pairs use 0.05% fee tier (stable, highly correlated assets)
+            # Other stablecoin pairs (MOET:YieldToken) use 0.05% fee tier
             if self.fee_tier is None:
                 self.fee_tier = 0.0005  # 0.05% fee tier  
             if self.tick_spacing is None:
@@ -597,12 +605,18 @@ class UniswapV3Pool:
                 self.concentration = 0.95  # 95% concentration for stable pairs
         
         # Determine pool type and calculate dynamic pricing Uniswap V3 math
-        if "MOET:BTC" in self.pool_name:
-            self.concentration_type = "moet_btc"
+        if "BTC" in self.pool_name:
+            # BTC pairs: MOET:BTC, USDC:BTC, USDF:BTC
+            self.concentration_type = "btc_pair"
             
-            # Calculate the actual market price: MOET/BTC ratio
-            # MOET = $1, BTC = self.btc_price, so price = MOET_value / BTC_value = 1 / btc_price
-            market_price = 1.0 / self.btc_price  # This gives us BTC per MOET (token1/token0)
+            if "MOET:BTC" in self.pool_name:
+                # Calculate the actual market price: MOET/BTC ratio
+                # MOET = $1, BTC = self.btc_price, so price = MOET_value / BTC_value = 1 / btc_price
+                market_price = 1.0 / self.btc_price  # This gives us BTC per MOET (token1/token0)
+            elif "USDC:BTC" in self.pool_name or "USDF:BTC" in self.pool_name:
+                # Calculate the actual market price: USDC/BTC or USDF/BTC ratio
+                # USDC/USDF = $1, BTC = self.btc_price, so price = stablecoin_value / BTC_value = 1 / btc_price
+                market_price = 1.0 / self.btc_price  # This gives us BTC per stablecoin (token1/token0)
             
             # Convert market price to sqrt_price_x96  Uniswap V3 math
             # sqrt_price_x96 = sqrt(price) * 2^96
@@ -626,8 +640,9 @@ class UniswapV3Pool:
             self.peg_price = sqrt_price_final * sqrt_price_final
             
         else:
-            self.concentration_type = "yield_token"
-            # For yield tokens, both MOET and YieldToken are worth $1, so price = 1.0
+            # Stablecoin pairs: MOET:YieldToken, MOET:USDC, MOET:USDF
+            self.concentration_type = "stablecoin_pair"
+            # For stablecoin pairs, both tokens are worth $1, so price = 1.0
             # Tick 0 corresponds to price = 1.0001^0 = 1.0 (perfect 1:1 peg)
             self.tick_current = 0
             self.sqrt_price_x96 = tick_to_sqrt_price_x96(0)  # Use our function for consistency
@@ -655,13 +670,13 @@ class UniswapV3Pool:
     
     def _initialize_concentrated_positions(self):
         """Initialize concentrated liquidity positions using proper Uniswap V3 math"""
-        if self.concentration_type == "moet_btc":
-            self._initialize_moet_btc_positions()
+        if self.concentration_type == "btc_pair":
+            self._initialize_btc_pair_positions()
         else:
-            self._initialize_yield_token_positions()
+            self._initialize_stablecoin_pair_positions()
     
-    def _initialize_moet_btc_positions(self):
-        """Initialize MOET:BTC concentrated liquidity positions using exact tick math"""
+    def _initialize_btc_pair_positions(self):
+        """Initialize BTC pair concentrated liquidity positions using exact tick math"""
         total_liquidity_amount = int(self.total_liquidity * 1e6)
         concentrated_liquidity = int(total_liquidity_amount * self.concentration)
         
@@ -712,8 +727,8 @@ class UniswapV3Pool:
             if vwide_tick_lower < vwide_tick_upper:
                 self._add_position(vwide_tick_lower, vwide_tick_upper, remaining_liquidity - 2 * position_liquidity)
     
-    def _initialize_yield_token_positions(self):
-        """Initialize MOET:Yield Token concentrated liquidity positions using exact tick math"""
+    def _initialize_stablecoin_pair_positions(self):
+        """Initialize stablecoin pair concentrated liquidity positions using exact tick math"""
         total_liquidity_amount = int(self.total_liquidity * 1e6)
         concentrated_liquidity = int(total_liquidity_amount * self.concentration)
         
@@ -1687,7 +1702,7 @@ class UniswapV3SlippageCalculator:
     def calculate_swap_slippage(
         self, 
         amount_in: float, 
-        token_in: str,  # "MOET", "BTC", or "Yield_Token"
+        token_in: str,  # "MOET", "BTC", "Yield_Token", "USDC", or "USDF"
         concentrated_range: float = 0.2  # Legacy parameter for backward compatibility
     ) -> Dict[str, float]:
         """
@@ -1695,7 +1710,7 @@ class UniswapV3SlippageCalculator:
         
         Args:
             amount_in: Amount of input token to swap (in USD)
-            token_in: Which token is being swapped in ("MOET", "BTC", or "Yield_Token")
+            token_in: Which token is being swapped in ("MOET", "BTC", "Yield_Token", "USDC", "USDF")
             concentrated_range: Legacy parameter for backward compatibility
             
         Returns:
@@ -1705,14 +1720,28 @@ class UniswapV3SlippageCalculator:
         if token_in == "MOET":
             if "Yield_Token" in self.pool.pool_name:
                 return self._calculate_moet_to_yield_token_swap(amount_in)
+            elif "USDC" in self.pool.pool_name:
+                return self._calculate_moet_to_usdc_swap(amount_in)
+            elif "USDF" in self.pool.pool_name:
+                return self._calculate_moet_to_usdf_swap(amount_in)
             else:
                 return self._calculate_moet_to_btc_swap(amount_in)
         elif token_in == "BTC":
-            return self._calculate_btc_to_moet_swap(amount_in)
+            return self._calculate_btc_to_stablecoin_swap(amount_in)
         elif token_in == "Yield_Token":
             return self._calculate_yield_token_to_moet_swap(amount_in)
+        elif token_in == "USDC":
+            if "BTC" in self.pool.pool_name:
+                return self._calculate_usdc_to_btc_swap(amount_in)
+            else:
+                return self._calculate_usdc_to_moet_swap(amount_in)
+        elif token_in == "USDF":
+            if "BTC" in self.pool.pool_name:
+                return self._calculate_usdf_to_btc_swap(amount_in)
+            else:
+                return self._calculate_usdf_to_moet_swap(amount_in)
         else:
-            raise ValueError("token_in must be 'MOET', 'BTC', or 'Yield_Token'")
+            raise ValueError("token_in must be 'MOET', 'BTC', 'Yield_Token', 'USDC', or 'USDF'")
     
     def _calculate_moet_to_btc_swap(self, moet_amount: float) -> Dict[str, float]:
         """Calculate MOET -> BTC swap using proper Uniswap V3 math"""
@@ -1965,6 +1994,277 @@ class UniswapV3SlippageCalculator:
             pass  # Keep the finally block but don't restore state
         
         return result
+    
+    def _calculate_moet_to_usdc_swap(self, moet_amount: float) -> Dict[str, float]:
+        """Calculate MOET -> USDC swap using proper Uniswap V3 math (stablecoin pair)"""
+        return self._calculate_stablecoin_swap(moet_amount, "MOET", "USDC")
+    
+    def _calculate_moet_to_usdf_swap(self, moet_amount: float) -> Dict[str, float]:
+        """Calculate MOET -> USDF swap using proper Uniswap V3 math (stablecoin pair)"""
+        return self._calculate_stablecoin_swap(moet_amount, "MOET", "USDF")
+    
+    def _calculate_usdc_to_moet_swap(self, usdc_amount: float) -> Dict[str, float]:
+        """Calculate USDC -> MOET swap using proper Uniswap V3 math (stablecoin pair)"""
+        return self._calculate_stablecoin_swap(usdc_amount, "USDC", "MOET")
+    
+    def _calculate_usdf_to_moet_swap(self, usdf_amount: float) -> Dict[str, float]:
+        """Calculate USDF -> MOET swap using proper Uniswap V3 math (stablecoin pair)"""
+        return self._calculate_stablecoin_swap(usdf_amount, "USDF", "MOET")
+    
+    def _calculate_usdc_to_btc_swap(self, usdc_amount: float) -> Dict[str, float]:
+        """Calculate USDC -> BTC swap using proper Uniswap V3 math"""
+        return self._calculate_stablecoin_to_btc_swap(usdc_amount, "USDC")
+    
+    def _calculate_usdf_to_btc_swap(self, usdf_amount: float) -> Dict[str, float]:
+        """Calculate USDF -> BTC swap using proper Uniswap V3 math"""
+        return self._calculate_stablecoin_to_btc_swap(usdf_amount, "USDF")
+    
+    def _calculate_btc_to_stablecoin_swap(self, btc_amount: float) -> Dict[str, float]:
+        """Calculate BTC -> stablecoin swap (USDC or USDF) using proper Uniswap V3 math"""
+        # Determine which stablecoin based on pool name
+        if "USDC" in self.pool.pool_name:
+            stablecoin = "USDC"
+        elif "USDF" in self.pool.pool_name:
+            stablecoin = "USDF"
+        else:
+            stablecoin = "USDC"  # Default fallback
+        
+        return self._calculate_btc_to_stablecoin_swap_impl(btc_amount, stablecoin)
+    
+    def _calculate_stablecoin_swap(self, amount_in: float, token_in: str, token_out: str) -> Dict[str, float]:
+        """Generic stablecoin swap calculation (MOET <-> USDC/USDF)"""
+        # For stablecoin pairs, we expect minimal slippage due to tight concentration
+        # Use similar logic to yield token swaps but with stablecoin naming
+        
+        # Store original pool state
+        original_sqrt_price_x96 = self.pool.sqrt_price_x96
+        original_tick_current = self.pool.tick_current
+        original_liquidity = self.pool.liquidity
+        
+        # Current price (should be ~1.0 for stablecoin pairs)
+        current_price = self.pool.get_price()
+        
+        # Convert USD amount to token amount (scaled for precision)
+        amount_in_scaled = int(amount_in * 1e6)  # Scale up for precision
+        
+        try:
+            # Execute the swap: determine direction based on token_in
+            if token_in == "MOET":
+                zero_for_one = True  # MOET (token0) -> USDC/USDF (token1)
+            else:
+                zero_for_one = False  # USDC/USDF (token1) -> MOET (token0)
+            
+            sqrt_price_limit_x96 = MIN_SQRT_RATIO + 1 if zero_for_one else MAX_SQRT_RATIO - 1
+            
+            amount_in_actual, amount_out_actual = self.pool.swap(
+                zero_for_one=zero_for_one,
+                amount_specified=amount_in_scaled,
+                sqrt_price_limit_x96=sqrt_price_limit_x96
+            )
+            
+            # Convert back to USD amounts
+            amount_in_usd = amount_in_actual / 1e6
+            amount_out_usd = amount_out_actual / 1e6
+            
+            # Calculate expected output without slippage (should be ~1:1)
+            expected_out = amount_in  # 1:1 for stablecoin pairs
+            
+            # Calculate slippage
+            slippage_amount = max(0, expected_out - amount_out_usd)
+            slippage_percentage = (slippage_amount / expected_out) * 100 if expected_out > 0 else 0
+            
+            # Calculate new price and price impact
+            new_price = self.pool.get_price()
+            price_impact = abs((current_price - new_price) / current_price) * 100 if current_price > 0 else 0
+            
+            # Calculate trading fees (0.05% for stablecoin pairs)
+            trading_fees = amount_in_usd * self.pool.fee_tier
+            
+            result = {
+                "amount_out": amount_out_usd,
+                "slippage_amount": slippage_amount,
+                "slippage_percentage": slippage_percentage,
+                "trading_fees": trading_fees,
+                "price_impact_percentage": price_impact,
+                "new_price": new_price,
+                "token_in": token_in,
+                "token_out": token_out,
+                "price_impact": price_impact
+            }
+            
+        except Exception as e:
+            print(f"Stablecoin swap error: {e}")
+            result = {
+                "amount_out": 0.0,
+                "slippage_amount": amount_in,
+                "slippage_percentage": 100.0,
+                "trading_fees": 0.0,
+                "price_impact_percentage": 0.0,
+                "new_price": current_price,
+                "token_in": token_in,
+                "token_out": token_out,
+                "price_impact": 0.0
+            }
+            
+        finally:
+            # Keep pool state changes (don't restore)
+            pass
+        
+        return result
+    
+    def _calculate_stablecoin_to_btc_swap(self, stablecoin_amount: float, stablecoin: str) -> Dict[str, float]:
+        """Calculate stablecoin -> BTC swap using proper Uniswap V3 math"""
+        # Similar to MOET -> BTC but with stablecoin as input
+        
+        # Store original pool state
+        original_sqrt_price_x96 = self.pool.sqrt_price_x96
+        original_tick_current = self.pool.tick_current
+        original_liquidity = self.pool.liquidity
+        
+        # Current price (BTC per stablecoin)
+        current_price = self.pool.get_price()
+        
+        # Convert USD amount to token amount (scaled for precision)
+        amount_in_scaled = int(stablecoin_amount * 1e6)  # Scale up for precision
+        
+        try:
+            # Execute the swap: stablecoin (token0) -> BTC (token1), so zero_for_one = True
+            zero_for_one = True
+            sqrt_price_limit_x96 = MIN_SQRT_RATIO + 1  # No specific limit
+            
+            amount_in_actual, amount_out_actual = self.pool.swap(
+                zero_for_one=zero_for_one,
+                amount_specified=amount_in_scaled,
+                sqrt_price_limit_x96=sqrt_price_limit_x96
+            )
+            
+            # Convert back to USD amounts
+            amount_in_usd = amount_in_actual / 1e6
+            amount_out_btc_tokens = amount_out_actual / 1e6
+            
+            # Calculate expected output without slippage
+            stablecoin_tokens_in = stablecoin_amount  # 1 stablecoin = $1
+            expected_btc_out = stablecoin_tokens_in * current_price
+            
+            # Calculate slippage
+            slippage_amount = max(0, expected_btc_out - amount_out_btc_tokens)
+            slippage_percentage = (slippage_amount / expected_btc_out) * 100 if expected_btc_out > 0 else 0
+            
+            # Calculate new price and price impact
+            new_price = self.pool.get_price()
+            price_impact = abs((current_price - new_price) / current_price) * 100 if current_price > 0 else 0
+            
+            # Calculate trading fees
+            trading_fees = amount_in_usd * self.pool.fee_tier
+            
+            result = {
+                "amount_out": amount_out_btc_tokens,
+                "slippage_amount": slippage_amount,
+                "slippage_percentage": slippage_percentage,
+                "trading_fees": trading_fees,
+                "price_impact_percentage": price_impact,
+                "new_price": new_price,
+                "token_in": stablecoin,
+                "token_out": "BTC",
+                "price_impact": price_impact
+            }
+            
+        except Exception as e:
+            print(f"Stablecoin to BTC swap error: {e}")
+            result = {
+                "amount_out": 0.0,
+                "slippage_amount": stablecoin_amount,
+                "slippage_percentage": 100.0,
+                "trading_fees": 0.0,
+                "price_impact_percentage": 0.0,
+                "new_price": current_price,
+                "token_in": stablecoin,
+                "token_out": "BTC",
+                "price_impact": 0.0
+            }
+            
+        finally:
+            # Keep pool state changes (don't restore)
+            pass
+        
+        return result
+    
+    def _calculate_btc_to_stablecoin_swap_impl(self, btc_amount: float, stablecoin: str) -> Dict[str, float]:
+        """Calculate BTC -> stablecoin swap using proper Uniswap V3 math"""
+        # Similar to BTC -> MOET but with stablecoin as output
+        
+        # Store original pool state
+        original_sqrt_price_x96 = self.pool.sqrt_price_x96
+        original_tick_current = self.pool.tick_current
+        original_liquidity = self.pool.liquidity
+        
+        # Current price (BTC per stablecoin)
+        current_price = self.pool.get_price()
+        
+        # Convert BTC amount to scaled amount (BTC has different scaling)
+        btc_price_usd = 1.0 / current_price if current_price > 0 else 100_000.0
+        amount_in_usd = btc_amount * btc_price_usd
+        amount_in_scaled = int(amount_in_usd * 1e6)  # Scale up for precision
+        
+        try:
+            # Execute the swap: BTC (token1) -> stablecoin (token0), so zero_for_one = False
+            zero_for_one = False
+            sqrt_price_limit_x96 = MAX_SQRT_RATIO - 1  # No specific limit
+            
+            amount_in_actual, amount_out_actual = self.pool.swap(
+                zero_for_one=zero_for_one,
+                amount_specified=amount_in_scaled,
+                sqrt_price_limit_x96=sqrt_price_limit_x96
+            )
+            
+            # Convert back to USD amounts
+            amount_out_stablecoin = amount_out_actual / 1e6
+            
+            # Calculate expected output without slippage
+            expected_stablecoin_out = amount_in_usd  # Should get ~$1 stablecoin per $1 BTC value
+            
+            # Calculate slippage
+            slippage_amount = max(0, expected_stablecoin_out - amount_out_stablecoin)
+            slippage_percentage = (slippage_amount / expected_stablecoin_out) * 100 if expected_stablecoin_out > 0 else 0
+            
+            # Calculate new price and price impact
+            new_price = self.pool.get_price()
+            price_impact = abs((current_price - new_price) / current_price) * 100 if current_price > 0 else 0
+            
+            # Calculate trading fees
+            trading_fees = amount_in_usd * self.pool.fee_tier
+            
+            result = {
+                "amount_out": amount_out_stablecoin,
+                "slippage_amount": slippage_amount,
+                "slippage_percentage": slippage_percentage,
+                "trading_fees": trading_fees,
+                "price_impact_percentage": price_impact,
+                "new_price": new_price,
+                "token_in": "BTC",
+                "token_out": stablecoin,
+                "price_impact": price_impact
+            }
+            
+        except Exception as e:
+            print(f"BTC to stablecoin swap error: {e}")
+            result = {
+                "amount_out": 0.0,
+                "slippage_amount": amount_in_usd,
+                "slippage_percentage": 100.0,
+                "trading_fees": 0.0,
+                "price_impact_percentage": 0.0,
+                "new_price": current_price,
+                "token_in": "BTC",
+                "token_out": stablecoin,
+                "price_impact": 0.0
+            }
+            
+        finally:
+            # Keep pool state changes (don't restore)
+            pass
+        
+        return result
 
     def update_pool_state(self, swap_result: Dict[str, float]):
         """Update pool state after a swap - simplified without bin consumption tracking"""
@@ -2027,6 +2327,98 @@ def create_yield_token_pool(pool_size_usd: float, concentration: float = 0.95, t
         concentration=concentration,
         token0_ratio=token0_ratio
         # fee_tier and tick_spacing will be set automatically based on pool type
+    )
+
+
+def create_usdc_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.80) -> UniswapV3Pool:
+    """
+    Create a USDC:BTC Uniswap v3 pool with concentrated liquidity
+    
+    Args:
+        pool_size_usd: Total pool size in USD
+        btc_price: Current BTC price in USD (default: $100,000)
+        concentration: Liquidity concentration level (0.80 = 80% at peg)
+        
+    Returns:
+        UniswapV3Pool instance with concentrated liquidity positions
+    """
+    
+    return UniswapV3Pool(
+        pool_name="USDC:BTC",
+        total_liquidity=pool_size_usd,
+        btc_price=btc_price,
+        concentration=concentration
+        # fee_tier and tick_spacing will be set automatically based on pool type
+    )
+
+
+def create_usdf_btc_pool(pool_size_usd: float, btc_price: float = 100_000.0, concentration: float = 0.80) -> UniswapV3Pool:
+    """
+    Create a USDF:BTC Uniswap v3 pool with concentrated liquidity
+    
+    Args:
+        pool_size_usd: Total pool size in USD
+        btc_price: Current BTC price in USD (default: $100,000)
+        concentration: Liquidity concentration level (0.80 = 80% at peg)
+        
+    Returns:
+        UniswapV3Pool instance with concentrated liquidity positions
+    """
+    
+    return UniswapV3Pool(
+        pool_name="USDF:BTC",
+        total_liquidity=pool_size_usd,
+        btc_price=btc_price,
+        concentration=concentration
+        # fee_tier and tick_spacing will be set automatically based on pool type
+    )
+
+
+def create_moet_usdc_pool(pool_size_usd: float, concentration: float = 0.95, token0_ratio: float = 0.5) -> UniswapV3Pool:
+    """
+    Create a MOET:USDC Uniswap v3 pool with concentrated liquidity
+    Same conditions as MOET:YT pool for tight peg maintenance
+    
+    Args:
+        pool_size_usd: Total pool size in USD
+        concentration: Liquidity concentration level (0.95 = 95% at peg)
+        token0_ratio: Ratio of token0 (MOET) in the pool (0.5 = 50/50)
+        
+    Returns:
+        UniswapV3Pool instance with concentrated liquidity positions
+    """
+    
+    return UniswapV3Pool(
+        pool_name="MOET:USDC",
+        total_liquidity=pool_size_usd,
+        btc_price=100_000.0,  # Default value, not used for stablecoin pairs
+        concentration=concentration,
+        token0_ratio=token0_ratio
+        # fee_tier and tick_spacing will be set automatically (same as MOET:YT)
+    )
+
+
+def create_moet_usdf_pool(pool_size_usd: float, concentration: float = 0.95, token0_ratio: float = 0.5) -> UniswapV3Pool:
+    """
+    Create a MOET:USDF Uniswap v3 pool with concentrated liquidity
+    Same conditions as MOET:YT pool for tight peg maintenance
+    
+    Args:
+        pool_size_usd: Total pool size in USD
+        concentration: Liquidity concentration level (0.95 = 95% at peg)
+        token0_ratio: Ratio of token0 (MOET) in the pool (0.5 = 50/50)
+        
+    Returns:
+        UniswapV3Pool instance with concentrated liquidity positions
+    """
+    
+    return UniswapV3Pool(
+        pool_name="MOET:USDF",
+        total_liquidity=pool_size_usd,
+        btc_price=100_000.0,  # Default value, not used for stablecoin pairs
+        concentration=concentration,
+        token0_ratio=token0_ratio
+        # fee_tier and tick_spacing will be set automatically (same as MOET:YT)
     )
 
 

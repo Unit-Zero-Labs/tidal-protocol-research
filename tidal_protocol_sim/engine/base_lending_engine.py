@@ -107,6 +107,12 @@ class BaseLendingEngine(ABC):
             elif action_type == AgentAction.SWAP:
                 return self._execute_swap(agent, params)
             
+            # NEW: Handle arbitrage actions
+            elif action_type == "arbitrage_mint":
+                return self._execute_arbitrage_mint(agent, params)
+            elif action_type == "arbitrage_redeem":
+                return self._execute_arbitrage_redeem(agent, params)
+            
         except Exception as e:
             print(f"Error executing action {action_type} for {agent.agent_id}: {e}")
             return False

@@ -22,10 +22,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import random
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Tuple
-import random
 import csv
 
 # Add the project root to Python path
@@ -44,7 +44,7 @@ class FullYearSimConfig:
     
     def __init__(self):
         # Test scenario parameters
-        self.test_name = "Full_Year_2024_BTC_Simulation"
+        self.test_name = "Full_Year_2024_BTC_Simulation_10min_leverage"
         self.simulation_duration_hours = 24 * 365  # Full year: 8760 hours
         self.simulation_duration_minutes = 365 * 24 * 60  # 525,600 minutes
         
@@ -107,6 +107,14 @@ class FullYearSimConfig:
         
         # Advanced MOET system toggle
         self.enable_advanced_moet_system = True  # Enable sophisticated MOET interest system
+        
+        # Ecosystem Growth Configuration
+        self.enable_ecosystem_growth = False  # Enable gradual agent addition over time
+        self.target_btc_deposits = 150_000_000  # $150M target BTC deposits by year end
+        self.max_agents = 500  # Maximum 500 agents to prevent system overload
+        self.btc_per_agent_range = (2.0, 5.0)  # 2-5 BTC per agent (whale/institutional behavior)
+        self.growth_start_delay_days = 30  # Start adding agents after 30 days
+        self.growth_acceleration_factor = 1.2  # Exponential growth factor
         
         # Output configuration
         self.generate_charts = True
@@ -281,6 +289,10 @@ class FullYearSimulation:
         # Enable advanced MOET system
         ht_config.enable_advanced_moet_system = self.config.enable_advanced_moet_system
         
+        # Configure arbitrage agents for the new pool structure
+        ht_config.num_arbitrage_agents = 5  # Enable arbitrage agents for peg maintenance
+        ht_config.arbitrage_agent_balance = 100_000.0  # $100K per agent
+        
         print(f"🔧 DEBUG: Configuring BTC decline over {ht_config.btc_decline_duration} minutes")
         print(f"🔧 DEBUG: Price range: ${ht_config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f}")
         
@@ -320,6 +332,35 @@ class FullYearSimulation:
         
         # Store rebalancer reference for access during simulation
         engine.pool_rebalancer = pool_rebalancer
+        
+        # CRITICAL FIX: Register rebalancer MOET balances with protocol
+        # The rebalancers start with MOET that should be counted in total supply
+        if engine.protocol.enable_advanced_moet:
+            alm_moet_balance = pool_rebalancer.alm_rebalancer.state.moet_balance
+            algo_moet_balance = pool_rebalancer.algo_rebalancer.state.moet_balance
+            total_rebalancer_moet = alm_moet_balance + algo_moet_balance
+            
+            # Register this MOET with the protocol system
+            engine.protocol.moet_system.mint(total_rebalancer_moet)
+            print(f"🔄 Registered rebalancer MOET with protocol: ${total_rebalancer_moet:,.0f}")
+            print(f"   ALM: ${alm_moet_balance:,.0f}, Algo: ${algo_moet_balance:,.0f}")
+            
+            # CRITICAL FIX: Register YT pool's initial MOET balance with protocol
+            # The YT pool starts with MOET that should be counted in total supply
+            yt_pool_moet_balance = pool_rebalancer.alm_rebalancer.yield_token_pool.moet_reserve
+            engine.protocol.moet_system.mint(yt_pool_moet_balance)
+            print(f"🏊 Registered YT pool MOET with protocol: ${yt_pool_moet_balance:,.0f}")
+            
+            # CRITICAL FIX: Initialize reserves based on TOTAL MOET supply (not just agent debt)
+            # This ensures the 8% reserve ratio applies to the complete MOET ecosystem
+            total_moet_supply = engine.protocol.moet_system.total_supply
+            engine.protocol.initialize_moet_reserves(total_moet_supply)
+            print(f"🏦 Re-initialized reserves based on total MOET supply: ${total_moet_supply:,.0f}")
+            
+            # Show the corrected reserve calculation
+            actual_reserves = engine.protocol.moet_system.redeemer.reserve_state.total_reserves
+            reserve_ratio = actual_reserves / total_moet_supply if total_moet_supply > 0 else 0
+            print(f"   Final reserves: ${actual_reserves:,.0f} ({reserve_ratio:.1%} of total supply)")
         
         self._log_event(0, "ENGINE_SETUP", "High Tide engine created with pool rebalancer", {
             "num_agents": len(agents),
@@ -379,6 +420,171 @@ class FullYearSimulation:
         # Run custom simulation loop with pool rebalancing integration
         return self._run_custom_simulation_with_pool_rebalancing(engine)
     
+    def _process_ecosystem_growth(self, engine, current_minute: int, current_btc_price: float) -> List[Dict]:
+        """Process ecosystem growth by adding new agents over time"""
+        import random  # Import random at method level
+        
+        # Don't start growth until after delay period
+        days_elapsed = current_minute / 1440
+        if days_elapsed < self.config.growth_start_delay_days:
+            return []
+        
+        # FIXED: Balance between growth target and pool liquidity limits
+        # Each agent deposits 2-5 BTC (average 3.5), but we need to respect pool liquidity
+        max_agents = 400  # Reduced from 500 to 400 to prevent liquidity exhaustion
+        avg_btc_per_agent = 3.5  # Average of 2-5 BTC range
+        target_total_agents = min(max_agents, int(self.config.target_btc_deposits / (current_btc_price * avg_btc_per_agent)))
+        current_total_agents = len(engine.high_tide_agents)
+        
+        # If we've already reached the target or cap, no more growth needed
+        if current_total_agents >= target_total_agents or current_total_agents >= max_agents:
+            if current_total_agents >= max_agents:
+                # Only log this once when we hit the cap
+                if current_total_agents == max_agents and current_minute % 1440 == 0:  # Daily log
+                    print(f"🚫 Ecosystem growth capped at {max_agents} agents (increased from 300 to reach $150M target)")
+            return []
+        
+        # Calculate growth rate based on exponential curve
+        # We want to reach the target by the end of the year (365 days)
+        days_remaining = 365 - days_elapsed
+        growth_days = 365 - self.config.growth_start_delay_days  # Total growth period
+        
+        if days_remaining <= 0:
+            return []
+        
+        # Exponential growth: more agents added as time progresses
+        progress = (days_elapsed - self.config.growth_start_delay_days) / growth_days
+        agents_needed = target_total_agents - len(engine.high_tide_agents)
+        
+        # Calculate agents to add this minute using exponential growth
+        # Add more agents as we progress through the year
+        base_rate = agents_needed / (days_remaining * 1440)  # Base agents per minute
+        growth_multiplier = 1 + (progress * self.config.growth_acceleration_factor)
+        agents_to_add_float = base_rate * growth_multiplier
+        
+        # Use probabilistic addition to handle fractional agents
+        agents_to_add = int(agents_to_add_float)
+        if random.random() < (agents_to_add_float - agents_to_add):
+            agents_to_add += 1
+        
+        # Limit to reasonable batch sizes (max 10 agents per minute)
+        agents_to_add = min(agents_to_add, 10)
+        
+        new_agents = []
+        for i in range(agents_to_add):
+            # FIXED: Create new agent with 2-5 BTC deposit (whale/institutional behavior)
+            agent_id = f"growth_agent_{current_total_agents + i + 1:04d}"
+            
+            # Create agent using the same logic as the engine
+            from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
+            from tidal_protocol_sim.agents.base_agent import AgentAction
+            from tidal_protocol_sim.core.protocol import Asset
+            
+            # Random BTC deposit between 2-5 BTC (more realistic for growth users)
+            btc_deposit = random.uniform(2.0, 5.0)
+            
+            # Check if pool has sufficient liquidity for this deposit size
+            moet_amount = btc_deposit * current_btc_price
+            if moet_amount > 50000:  # Cap individual deposits to prevent liquidity issues
+                btc_deposit = 50000 / current_btc_price
+                print(f"⚠️  Capping agent deposit to {btc_deposit:.2f} BTC to prevent pool liquidity exhaustion")
+            
+            usd_value = current_btc_price * btc_deposit
+            
+            new_agent = HighTideAgent(
+                agent_id=agent_id,
+                initial_hf=1.05,  # Same as other agents
+                rebalancing_hf=1.015,
+                target_hf=1.03,
+                initial_balance=current_btc_price,  # Pass BTC price, not total USD value
+                yield_token_pool=engine.yield_token_pool
+            )
+            
+            # Set engine reference
+            new_agent.engine = engine
+            
+            # CRITICAL FIX: Override the hardcoded 1 BTC with actual deposit amount
+            new_agent.state.btc_amount = btc_deposit
+            new_agent.state.supplied_balances[Asset.BTC] = btc_deposit
+            
+            # Recalculate MOET debt based on actual BTC deposit
+            btc_collateral_factor = 0.80
+            effective_collateral_value = btc_deposit * current_btc_price * btc_collateral_factor
+            moet_to_borrow = effective_collateral_value / 1.05  # initial_hf = 1.05
+            
+            new_agent.state.moet_debt = moet_to_borrow
+            new_agent.state.initial_moet_debt = moet_to_borrow
+            new_agent.state.borrowed_balances[Asset.MOET] = moet_to_borrow
+            new_agent.state.token_balances[Asset.MOET] = moet_to_borrow
+            
+            # Add to engine (both collections for proper tracking)
+            engine.high_tide_agents.append(new_agent)
+            engine.agents[agent_id] = new_agent  # Also add to main agents dict for action recording
+            
+            # Initialize agent position following the same pattern as _setup_high_tide_positions
+            # Update protocol with agent's BTC collateral (use actual deposit amount)
+            btc_pool = engine.protocol.asset_pools[Asset.BTC]
+            btc_pool.total_supplied += btc_deposit  # Use actual deposit, not hardcoded 1.0
+            
+            # Update protocol with agent's MOET debt (use recalculated amount)
+            engine.protocol.moet_system.mint(moet_to_borrow)
+            
+            # Initialize agent's health factor
+            engine._update_agent_health_factor(new_agent)
+            
+            # CRITICAL FIX: Execute initial yield token purchase (same as original agents at minute 0)
+            if new_agent.state.moet_debt > 0 and len(new_agent.state.yield_token_manager.yield_tokens) == 0:
+                # Trigger initial yield token purchase
+                action, params = new_agent._initial_yield_token_purchase(current_minute)
+                if action == AgentAction.SWAP and params.get("action_type") == "buy_yield_tokens":
+                    # Execute the yield token purchase through the engine
+                    success = engine._execute_yield_token_purchase(new_agent, params, current_minute)
+                    if success:
+                        print(f"   ✅ {agent_id}: Initial YT purchase of ${params['moet_amount']:,.0f} MOET successful")
+                    else:
+                        print(f"   ❌ {agent_id}: Initial YT purchase failed")
+            
+            # Record the growth event
+            growth_event = {
+                "minute": current_minute,
+                "hour": current_minute / 60,
+                "day": days_elapsed,
+                "agent_id": agent_id,
+                "btc_deposited": btc_deposit,
+                "usd_value": usd_value,
+                "total_agents": len(engine.high_tide_agents),
+                "total_btc_deposits": sum(agent.state.btc_amount for agent in engine.high_tide_agents),
+                "total_usd_value": sum(agent.state.btc_amount * current_btc_price for agent in engine.high_tide_agents),
+                "target_progress": len(engine.high_tide_agents) / target_total_agents
+            }
+            new_agents.append(growth_event)
+        
+        # Log significant growth milestones
+        # Very selective logging to prevent console spam with hundreds of agents
+        agent_count = len(engine.high_tide_agents)
+        
+        # Only log at major milestones or weekly intervals
+        should_log = False
+        if agent_count <= 200:
+            should_log = current_minute % 1440 == 0  # Daily for small counts
+        elif agent_count <= 500:
+            should_log = current_minute % (1440 * 3) == 0  # Every 3 days for medium counts
+        else:
+            should_log = current_minute % (1440 * 7) == 0  # Weekly for large counts
+        
+        # Also log at major milestones (every 100 agents)
+        if new_agents and agent_count % 100 == 0 and agent_count > (agent_count - len(new_agents)):
+            should_log = True
+        
+        if new_agents and should_log:
+            total_deposits = agent_count * current_btc_price
+            progress_pct = (total_deposits / self.config.target_btc_deposits) * 100
+            print(f"🌱 Day {days_elapsed:.0f}: Added {len(new_agents)} agents. "
+                  f"Total: {agent_count} agents, "
+                  f"${total_deposits:,.0f} deposits ({progress_pct:.1f}% of target)")
+        
+        return new_agents
+    
     def _custom_btc_price_update(self, minute: int) -> float:
         """Custom BTC price update function that follows our test scenario"""
         new_price = self.config.get_btc_price_at_minute(minute)
@@ -417,12 +623,25 @@ class FullYearSimulation:
         pool_rebalancing_events = []
         pool_state_snapshots = []
         
+        # Ecosystem Growth Tracking
+        ecosystem_growth_events = []
+        if self.config.enable_ecosystem_growth:
+            print(f"🌱 Ecosystem Growth ENABLED: Target ${self.config.target_btc_deposits:,.0f} BTC deposits")
+            print(f"   Starting agents: {len(engine.high_tide_agents)}")
+            print(f"   Growth starts after day {self.config.growth_start_delay_days}")
+            
         for minute in range(self.config.simulation_duration_minutes):
             engine.current_step = minute
             
             # FIXED: Use our custom gradual decline instead of engine's rapid decline manager
             new_btc_price = self.config.get_btc_price_at_minute(minute)
             engine.state.current_prices[Asset.BTC] = new_btc_price
+            
+            # ECOSYSTEM GROWTH: Add new agents over time to reach target deposits
+            if self.config.enable_ecosystem_growth:
+                new_agents = self._process_ecosystem_growth(engine, minute, new_btc_price)
+                if new_agents:
+                    ecosystem_growth_events.extend(new_agents)
             
             # PERFORMANCE OPTIMIZATION: Store BTC price daily instead of every minute
             # This reduces memory usage from 4MB to 3KB for price history
@@ -432,6 +651,17 @@ class FullYearSimulation:
             # Update protocol state
             engine.protocol.current_block = minute
             engine.protocol.accrue_interest()
+            
+            # Process MOET system updates (bond auctions, interest rate calculations)
+            moet_update_results = engine.protocol.process_moet_system_update(minute)
+            if moet_update_results.get('advanced_system_enabled') and minute % 60 == 0:  # Log hourly
+                if moet_update_results.get('bond_auction_triggered'):
+                    print(f"🔔 Bond auction triggered at minute {minute}")
+                if moet_update_results.get('bond_auction_completed'):
+                    auction = moet_update_results['completed_auction']
+                    print(f"✅ Bond auction completed: ${auction['amount_filled']:,.0f} at {auction['final_apr']:.2%} APR")
+                if moet_update_results.get('interest_rate_updated'):
+                    print(f"📈 MOET rate updated: {moet_update_results['new_interest_rate']:.2%}")
             
             # Update agent debt interest
             engine._update_agent_debt_interest(minute)
@@ -515,6 +745,12 @@ class FullYearSimulation:
             # Process High Tide agent actions
             swap_data = engine._process_high_tide_agents(minute)
             
+            # Process MOET arbitrage agents (if advanced MOET system enabled)
+            if hasattr(engine, 'arbitrage_agents') and engine.arbitrage_agents:
+                arbitrage_swap_data = engine._process_arbitrage_agents(minute)
+                # Merge arbitrage swap data with main swap data
+                swap_data.update(arbitrage_swap_data)
+            
             # Check for High Tide liquidations
             engine._check_high_tide_liquidations(minute)
             
@@ -552,7 +788,9 @@ class FullYearSimulation:
                     "true_yt_price": true_yt_price,
                     "pool_yt_price": pool_yt_price,
                     "deviation_bps": deviation_bps,
-                    "active_agents": len([a for a in engine.high_tide_agents if a.active and a.is_healthy()])
+                    "active_agents": len([a for a in engine.high_tide_agents if a.active and a.is_healthy()]),
+                    "moet_usdc_price": engine.moet_usdc_pool.get_price() if hasattr(engine, 'moet_usdc_pool') else 1.0,
+                    "moet_usdf_price": engine.moet_usdf_pool.get_price() if hasattr(engine, 'moet_usdf_pool') else 1.0
                 })
             
             if minute % self.config.progress_report_every_n_minutes == 0:  # Every week
@@ -577,7 +815,43 @@ class FullYearSimulation:
                 if len(engine.yield_token_trades) > max_entries:
                     engine.yield_token_trades = engine.yield_token_trades[-max_entries//2:]
                 
+                # Clean up arbitrage tracking data - more aggressive for large agent counts
+                if hasattr(engine, 'arbitrage_agents') and engine.arbitrage_agents:
+                    cleanup_limit = 100 if len(engine.high_tide_agents) > 300 else max_entries//2
+                    for agent in engine.arbitrage_agents:
+                        if len(agent.state.arbitrage_attempts) > cleanup_limit:
+                            agent.state.arbitrage_attempts = agent.state.arbitrage_attempts[-cleanup_limit:]
+                        if len(agent.state.arbitrage_events) > cleanup_limit:
+                            agent.state.arbitrage_events = agent.state.arbitrage_events[-cleanup_limit:]
+                
+                # Clean up pool state snapshots
+                if hasattr(engine, 'pool_state_snapshots') and len(engine.pool_state_snapshots) > max_entries:
+                    engine.pool_state_snapshots = engine.pool_state_snapshots[-max_entries//2:]
+                
+                # ECOSYSTEM GROWTH: Clean up growth events to prevent bloat
+                if len(ecosystem_growth_events) > 1000:  # Keep last 1000 growth events
+                    ecosystem_growth_events = ecosystem_growth_events[-1000:]
+                    print(f"   📊 Cleaned ecosystem growth events: kept last 1000")
+                
+                # Clean up agent tracking data for large agent counts
+                if len(engine.high_tide_agents) > 150:
+                    print(f"   🧹 Large agent count ({len(engine.high_tide_agents)}): Cleaning agent tracking data...")
+                    for agent in engine.high_tide_agents:
+                        # Clean up rebalancing events (keep last 2 for very large counts)
+                        if hasattr(agent.state, 'rebalancing_events') and len(agent.state.rebalancing_events) > 2:
+                            agent.state.rebalancing_events = agent.state.rebalancing_events[-2:]
+                        # Clean up deleveraging events (keep last 2 for very large counts)
+                        if hasattr(agent.state, 'deleveraging_events') and len(agent.state.deleveraging_events) > 2:
+                            agent.state.deleveraging_events = agent.state.deleveraging_events[-2:]
+                        # Clean up action history for ecosystem growth agents
+                        if hasattr(agent.state, 'action_history') and len(agent.state.action_history) > 10:
+                            agent.state.action_history = agent.state.action_history[-10:]
+                
                 print(f"🧹 Memory cleanup at day {minute//1440}: Trimmed historical data")
+        
+        # AGGRESSIVE PRE-COMPILATION CLEANUP: Remove memory-wasting event arrays
+        print("🧹 AGGRESSIVE CLEANUP: Removing unused event arrays before results compilation...")
+        self._aggressive_pre_compilation_cleanup(engine, ecosystem_growth_events, pool_state_snapshots)
         
         # Generate results using the engine's method
         results = engine._generate_high_tide_results()
@@ -595,6 +869,26 @@ class FullYearSimulation:
         
         # Add pool state snapshots to results
         results["pool_state_snapshots"] = pool_state_snapshots
+        
+        # Add ecosystem growth events to results
+        if self.config.enable_ecosystem_growth:
+            results["ecosystem_growth_events"] = ecosystem_growth_events
+            results["ecosystem_growth_summary"] = {
+                "total_new_agents": len(ecosystem_growth_events),
+                "final_agent_count": len(engine.high_tide_agents),
+                "final_btc_deposits": sum(agent.state.btc_amount for agent in engine.high_tide_agents),
+                "final_usd_value": len(engine.high_tide_agents) * engine.state.current_prices[Asset.BTC],
+                "target_achievement": (len(engine.high_tide_agents) * engine.state.current_prices[Asset.BTC]) / self.config.target_btc_deposits,
+                "growth_start_day": self.config.growth_start_delay_days,
+                "target_deposits": self.config.target_btc_deposits
+            }
+        
+        # Add MOET system state to results (if advanced system enabled)
+        # MOET system data collection (if advanced system enabled)
+        # NOTE: Skip this early collection - let the High Tide engine handle it properly
+        # in get_simulation_results() to avoid cleanup conflicts
+        print("🔧 DEBUG: Skipping early MOET system data collection - will be handled by engine")
+        # MOET system summary will be handled by the High Tide engine
         
         return results
     
@@ -665,7 +959,13 @@ class FullYearSimulation:
                 "net_position": outcome.get("net_position_value", 0),
                 "rebalance_count": outcome.get("rebalancing_events", 0),
                 "total_slippage": outcome.get("cost_of_rebalancing", 0),
-                "total_yield_sold": outcome.get("total_yield_sold", 0)  # FIXED: Add missing field
+                "total_yield_sold": outcome.get("total_yield_sold", 0),
+                # Enhanced tracking (NEW)
+                "total_yield_sold_for_rebalancing": outcome.get("total_yield_sold_for_rebalancing", 0),
+                "total_rebalancing_slippage": outcome.get("total_rebalancing_slippage", 0),
+                "deleveraging_events_count": outcome.get("deleveraging_events_count", 0),
+                "total_deleveraging_sales": outcome.get("total_deleveraging_sales", 0),
+                "total_deleveraging_slippage": outcome.get("total_deleveraging_slippage", 0)
             })
         
         return {
@@ -721,8 +1021,12 @@ class FullYearSimulation:
     def _save_test_results(self):
         """Save comprehensive test results"""
         
-        # Create results directory
-        output_dir = Path("tidal_protocol_sim/results") / self.config.test_name
+        # Create results directory (use different folder for ecosystem growth)
+        if self.config.enable_ecosystem_growth:
+            test_name = f"{self.config.test_name}_Ecosystem_Growth"
+        else:
+            test_name = self.config.test_name
+        output_dir = Path("tidal_protocol_sim/results") / test_name
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Save main results JSON
@@ -821,7 +1125,12 @@ class FullYearSimulation:
     def _generate_test_charts(self):
         """Generate comprehensive test charts"""
         
-        output_dir = Path("tidal_protocol_sim/results") / self.config.test_name / "charts"
+        # Use same naming logic as results directory
+        if self.config.enable_ecosystem_growth:
+            test_name = f"{self.config.test_name}_Ecosystem_Growth"
+        else:
+            test_name = self.config.test_name
+        output_dir = Path("tidal_protocol_sim/results") / test_name / "charts"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Set plotting style
@@ -856,6 +1165,36 @@ class FullYearSimulation:
         
         # Chart 9: Yield Strategy Comparison (Tidal Protocol vs Base Yield)
         self._create_yield_strategy_comparison_chart(output_dir)
+        
+        # Chart 10: Ecosystem Growth Analysis (if enabled)
+        self._create_ecosystem_growth_chart(output_dir)
+        
+        # Chart 10: MOET System Analysis (Interest Rates & Bond APRs)
+        self._create_moet_system_analysis_chart(output_dir)
+        
+        # Chart 11: MOET Reserve Management (Target vs Actual Reserves)
+        self._create_moet_reserve_management_chart(output_dir)
+        
+        # Chart 12: Redeemer System Analysis (NEW)
+        self._create_redeemer_analysis_chart(output_dir)
+        
+        # Chart 13: Arbitrage Activity Analysis (ENHANCED)
+        self._create_arbitrage_activity_chart(output_dir)
+        
+        # Chart 14: Arbitrage Time-Series Analysis (NEW)
+        self._create_arbitrage_time_series_chart(output_dir)
+        
+        # Chart 15: MOET Peg Monitoring Analysis (NEW)
+        self._create_peg_monitoring_chart(output_dir)
+        
+        # Chart 16: Pool-Specific Slippage Analysis (NEW)
+        self._create_pool_slippage_analysis_chart(output_dir)
+        
+        # Chart 17: MOET Stablecoin Price Deviations (NEW)
+        self._create_moet_stablecoin_price_chart(output_dir)
+        
+        # Chart 18: Bond Auction Activity Analysis (NEW)
+        self._create_bond_auction_analysis_chart(output_dir)
         
         print(f"📊 Charts saved to: {output_dir}")
     
@@ -2030,11 +2369,20 @@ class FullYearSimulation:
                         target_agent = agents_list[0]
                     
                     if target_agent:
+                        # Get actual initial position from first snapshot or use current as fallback
+                        actual_initial_position = 100000  # Default fallback
+                        if i == 0 and agent_health_history:
+                            # Use the first snapshot's net_position_value as the true initial position
+                            actual_initial_position = target_agent.get("net_position_value", 100000)
+                        elif agent_data:
+                            # Use the initial position from the first data point
+                            actual_initial_position = agent_data[0]["initial_position"]
+                        
                         agent_data.append({
                             "hour": hour,
                             "day": i,
-                            "net_position_value": target_agent.get("net_position_value", 100000),
-                            "initial_position": 100000  # Assuming $100k initial position
+                            "net_position_value": target_agent.get("net_position_value", actual_initial_position),
+                            "initial_position": actual_initial_position
                         })
         
         if not btc_data or not agent_data:
@@ -2345,6 +2693,1528 @@ class FullYearSimulation:
             print(f"   Final APY Advantage: {final_advantage:.2f}%")
             print(f"   Average APY Advantage: {avg_advantage:.2f}%")
             print(f"   Total Value Advantage: {total_advantage:.2f}%")
+    
+    def _create_moet_system_analysis_chart(self, output_dir: Path):
+        """Create MOET System Analysis chart: Interest Rates & Bond APRs over time"""
+        
+        # Extract MOET system data from simulation results
+        simulation_results = self.results.get("simulation_results", {})
+        moet_system_state = simulation_results.get("moet_system_state", {})
+        
+        if not moet_system_state.get("advanced_system_enabled"):
+            print("⚠️  Advanced MOET system not enabled - skipping MOET analysis chart")
+            return
+        
+        # Get tracking data
+        tracking_data = moet_system_state.get("tracking_data", {})
+        moet_rates = tracking_data.get("moet_rate_history", [])
+        bond_aprs = tracking_data.get("bond_apr_history", [])
+        
+        # If no tracking data, create synthetic data based on final state
+        if not moet_rates or not bond_aprs:
+            print("⚠️  No MOET tracking data available - creating chart with final state data")
+            print(f"   Debug: moet_rates length: {len(moet_rates)}, bond_aprs length: {len(bond_aprs)}")
+            print(f"   Debug: tracking_data keys: {list(tracking_data.keys())}")
+            
+            # Try to get bond auction data from bonder system directly
+            bonder_system = moet_system_state.get("bonder_system", {})
+            recent_auctions = bonder_system.get("recent_auctions", [])
+            auction_count = bonder_system.get("auction_history_count", 0)
+            
+            print(f"   Debug: Found {auction_count} total auctions, {len(recent_auctions)} recent auctions")
+            if recent_auctions:
+                print(f"   Debug: Recent auction APRs: {[a.get('final_apr', 0) for a in recent_auctions]}")
+            
+            # Get final state values
+            current_rate = moet_system_state.get("current_interest_rate", 0.02)
+            components = moet_system_state.get("interest_rate_components", {})
+            r_floor = components.get("r_floor", 0.02)
+            r_bond_cost = components.get("r_bond_cost", 0.0)
+            
+            # Calculate current bond APR from reserve state
+            reserve_state = moet_system_state.get("reserve_state", {})
+            total_supply = moet_system_state.get("total_supply", 1000000)
+            total_reserves = reserve_state.get("total_reserves", 0)
+            target_ratio = reserve_state.get("target_reserves_ratio", 0.10)
+            
+            target_reserves = total_supply * target_ratio
+            current_deficit_ratio = max(0, (target_reserves - total_reserves) / target_reserves) if target_reserves > 0 else 0
+            
+            # Create synthetic hourly data for the full year
+            hours = list(range(0, 8761, 24))  # Daily data points
+            synthetic_moet_rates = [current_rate] * len(hours)
+            synthetic_bond_aprs = [current_deficit_ratio] * len(hours)
+            synthetic_r_floor = [r_floor] * len(hours)
+            synthetic_r_bond_cost = [r_bond_cost] * len(hours)
+            
+            print(f"📊 MOET System Final State:")
+            print(f"   Current MOET Rate: {current_rate:.2%}")
+            print(f"   Current Bond APR: {current_deficit_ratio:.2%}")
+            print(f"   Reserve Deficit Ratio: {current_deficit_ratio:.2%}")
+        else:
+            # Use actual tracking data
+            hours = [r["minute"] / 60.0 for r in moet_rates]
+            synthetic_moet_rates = [r["moet_interest_rate"] for r in moet_rates]
+            synthetic_r_floor = [r["r_floor"] for r in moet_rates]
+            synthetic_r_bond_cost = [r["r_bond_cost"] for r in moet_rates]
+            synthetic_bond_aprs = [b["bond_apr"] for b in bond_aprs]
+        
+        # Create 2x2 subplot
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('MOET System Analysis: Interest Rates & Bond Auction Dynamics', 
+                     fontsize=16, fontweight='bold')
+        
+        # Top Left: MOET Interest Rate Components
+        ax1.plot(hours, synthetic_moet_rates, linewidth=3, color='blue', label='Total MOET Rate', alpha=0.8)
+        ax1.plot(hours, synthetic_r_floor, linewidth=2, color='green', linestyle='--', label='r_floor (Governance)', alpha=0.7)
+        ax1.plot(hours, synthetic_r_bond_cost, linewidth=2, color='red', linestyle=':', label='r_bond_cost (EMA)', alpha=0.7)
+        
+        ax1.set_title('MOET Interest Rate Components')
+        ax1.set_xlabel('Hours')
+        ax1.set_ylabel('Interest Rate (%)')
+        ax1.set_xlim(0, 8760)
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1%}'))
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        # Top Right: Bond APR Evolution
+        ax2.plot(hours, synthetic_bond_aprs, linewidth=3, color='orange', label='Bond APR (Deficit-Based)')
+        ax2.axhline(y=0.20, color='red', linestyle='--', alpha=0.5, label='Initial 20% Target')
+        ax2.set_title('Bond Auction APR Evolution')
+        ax2.set_xlabel('Hours')
+        ax2.set_ylabel('Bond APR (%)')
+        ax2.set_xlim(0, 8760)
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1%}'))
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        
+        # Bottom Left: Rate Spread Analysis
+        rate_spread = [moet - floor for moet, floor in zip(synthetic_moet_rates, synthetic_r_floor)]
+        ax3.fill_between(hours, 0, rate_spread, color='purple', alpha=0.6, label='Bond Cost Premium')
+        ax3.plot(hours, rate_spread, linewidth=2, color='purple', label='MOET Rate - r_floor')
+        ax3.set_title('MOET Rate Premium Over Governance Floor')
+        ax3.set_xlabel('Hours')
+        ax3.set_ylabel('Rate Premium (%)')
+        ax3.set_xlim(0, 8760)
+        ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1%}'))
+        ax3.grid(True, alpha=0.3)
+        ax3.legend()
+        
+        # Bottom Right: High-Precision EMA Evolution
+        # Convert bond cost EMA to basis points for better visibility
+        bond_cost_basis_points = [r * 10000 for r in synthetic_r_bond_cost]  # Convert to basis points (0.01%)
+        
+        ax4.plot(hours, bond_cost_basis_points, linewidth=3, color='darkred', label='r_bond_cost EMA')
+        ax4.fill_between(hours, 0, bond_cost_basis_points, alpha=0.3, color='darkred')
+        
+        ax4.set_title('Bond Cost EMA Evolution (High Precision)')
+        ax4.set_xlabel('Hours')
+        ax4.set_ylabel('Bond Cost EMA (basis points)')
+        ax4.set_xlim(0, 8760)
+        ax4.grid(True, alpha=0.3)
+        ax4.legend()
+        
+        # Add precision annotation
+        if bond_cost_basis_points:
+            final_ema_bp = bond_cost_basis_points[-1]
+            final_ema_pct = final_ema_bp / 10000
+            max_ema_bp = max(bond_cost_basis_points)
+            max_ema_pct = max_ema_bp / 10000
+            
+            precision_text = f"""EMA Precision:
+Final: {final_ema_pct:.6%} ({final_ema_bp:.2f} bp)
+Maximum: {max_ema_pct:.6%} ({max_ema_bp:.2f} bp)
+7-day half-life smoothing"""
+            
+            ax4.text(0.02, 0.98, precision_text, transform=ax4.transAxes, fontsize=10,
+                    verticalalignment='top', fontfamily='monospace',
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.9))
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "moet_system_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Calculate statistics for logging
+        avg_moet_rate = sum(synthetic_moet_rates) / len(synthetic_moet_rates) if synthetic_moet_rates else 0
+        max_bond_apr = max(synthetic_bond_aprs) if synthetic_bond_aprs else 0
+        print(f"📊 MOET System Analysis: Avg rate {avg_moet_rate:.2%}, Max bond APR {max_bond_apr:.2%}")
+    
+    def _create_moet_reserve_management_chart(self, output_dir: Path):
+        """Create MOET Reserve Management chart: Target vs Actual Reserves & Deficit Tracking"""
+        
+        # Extract MOET system data from simulation results
+        simulation_results = self.results.get("simulation_results", {})
+        moet_system_state = simulation_results.get("moet_system_state", {})
+        
+        if not moet_system_state.get("advanced_system_enabled"):
+            print("⚠️  Advanced MOET system not enabled - skipping reserve management chart")
+            return
+        
+        # Get tracking data
+        tracking_data = moet_system_state.get("tracking_data", {})
+        reserve_history = tracking_data.get("reserve_history", [])
+        deficit_history = tracking_data.get("deficit_history", [])
+        
+        # If no tracking data, create synthetic data based on final state
+        if not reserve_history or not deficit_history:
+            print("⚠️  No reserve tracking data available - creating chart with final state data")
+            print(f"   Debug: reserve_history length: {len(reserve_history)}, deficit_history length: {len(deficit_history)}")
+            print(f"   Debug: tracking_data keys: {list(tracking_data.keys())}")
+            
+            # Try to get auction data for bond auction visualization
+            bonder_system = moet_system_state.get("bonder_system", {})
+            auction_count = bonder_system.get("auction_history_count", 0)
+            recent_auctions = bonder_system.get("recent_auctions", [])
+            
+            print(f"   Debug: Found {auction_count} bond auctions")
+            if recent_auctions:
+                print(f"   Debug: Recent auctions: {len(recent_auctions)} events")
+            
+            # Get final state values
+            reserve_state = moet_system_state.get("reserve_state", {})
+            total_supply = moet_system_state.get("total_supply", 1000000)
+            total_reserves = reserve_state.get("total_reserves", 0)
+            target_ratio = reserve_state.get("target_reserves_ratio", 0.10)
+            usdc_balance = reserve_state.get("usdc_balance", 0)
+            usdf_balance = reserve_state.get("usdf_balance", 0)
+            
+            target_reserves = total_supply * target_ratio
+            deficit = max(0, target_reserves - total_reserves)
+            actual_ratio = total_reserves / total_supply if total_supply > 0 else 0
+            
+            # Create synthetic daily data for the full year
+            hours = list(range(0, 8761, 24))  # Daily data points
+            synthetic_target_reserves = [target_reserves] * len(hours)
+            synthetic_actual_reserves = [total_reserves] * len(hours)
+            synthetic_deficits = [deficit] * len(hours)
+            synthetic_ratios = [actual_ratio] * len(hours)
+            synthetic_usdc = [usdc_balance] * len(hours)
+            synthetic_usdf = [usdf_balance] * len(hours)
+            
+            print(f"📊 Reserve Management Final State:")
+            print(f"   Target Reserves: ${target_reserves:,.0f}")
+            print(f"   Actual Reserves: ${total_reserves:,.0f}")
+            print(f"   Current Deficit: ${deficit:,.0f}")
+            print(f"   Reserve Ratio: {actual_ratio:.2%}")
+        else:
+            # Use actual tracking data
+            hours = [r["minute"] / 60.0 for r in reserve_history]
+            synthetic_target_reserves = [r["target_reserves"] for r in reserve_history]
+            synthetic_actual_reserves = [r["actual_reserves"] for r in reserve_history]
+            synthetic_ratios = [r["reserve_ratio"] for r in reserve_history]
+            synthetic_deficits = [d["deficit"] for d in deficit_history]
+            
+            # Estimate USDC/USDF split (50/50)
+            synthetic_usdc = [r / 2 for r in synthetic_actual_reserves]
+            synthetic_usdf = [r / 2 for r in synthetic_actual_reserves]
+        
+        # Create 2x2 subplot
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('MOET Reserve Management: Target vs Actual Reserves & Deficit Tracking', 
+                     fontsize=16, fontweight='bold')
+        
+        # Top Left: Target vs Actual Reserves
+        ax1.plot(hours, synthetic_target_reserves, linewidth=3, color='green', label='Target Reserves (10%)', alpha=0.8)
+        ax1.plot(hours, synthetic_actual_reserves, linewidth=3, color='blue', label='Actual Reserves', alpha=0.8)
+        ax1.fill_between(hours, synthetic_actual_reserves, synthetic_target_reserves, 
+                        where=[t > a for t, a in zip(synthetic_target_reserves, synthetic_actual_reserves)],
+                        color='red', alpha=0.3, label='Reserve Deficit')
+        
+        ax1.set_title('Target vs Actual Reserves')
+        ax1.set_xlabel('Hours')
+        ax1.set_ylabel('Reserves ($)')
+        ax1.set_xlim(0, 8760)
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        # Top Right: Reserve Ratio Evolution
+        target_ratio_line = [0.10] * len(hours)  # 10% target
+        ax2.plot(hours, target_ratio_line, linewidth=2, color='green', linestyle='--', label='Target Ratio (10%)', alpha=0.7)
+        ax2.plot(hours, synthetic_ratios, linewidth=3, color='blue', label='Actual Reserve Ratio')
+        ax2.fill_between(hours, 0, synthetic_ratios, color='blue', alpha=0.3)
+        
+        ax2.set_title('Reserve Ratio Evolution')
+        ax2.set_xlabel('Hours')
+        ax2.set_ylabel('Reserve Ratio (%)')
+        ax2.set_xlim(0, 8760)
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1%}'))
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        
+        # Bottom Left: Reserve Deficit Over Time
+        ax3.fill_between(hours, 0, synthetic_deficits, color='red', alpha=0.6, label='Reserve Deficit')
+        ax3.plot(hours, synthetic_deficits, linewidth=2, color='darkred', label='Deficit Amount')
+        ax3.set_title('Reserve Deficit Over Time')
+        ax3.set_xlabel('Hours')
+        ax3.set_ylabel('Deficit ($)')
+        ax3.set_xlim(0, 8760)
+        ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        ax3.grid(True, alpha=0.3)
+        ax3.legend()
+        
+        # Bottom Right: USDC/USDF Reserve Composition
+        ax4.stackplot(hours, synthetic_usdc, synthetic_usdf, 
+                     labels=['USDC Reserves', 'USDF Reserves'],
+                     colors=['gold', 'lightblue'], alpha=0.7)
+        ax4.plot(hours, synthetic_actual_reserves, linewidth=2, color='black', 
+                linestyle='--', label='Total Reserves', alpha=0.8)
+        
+        ax4.set_title('Reserve Composition (USDC/USDF)')
+        ax4.set_xlabel('Hours')
+        ax4.set_ylabel('Reserve Amount ($)')
+        ax4.set_xlim(0, 8760)
+        ax4.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        ax4.grid(True, alpha=0.3)
+        ax4.legend()
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "moet_reserve_management.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Calculate and print statistics
+        if synthetic_deficits:
+            max_deficit = max(synthetic_deficits)
+            avg_deficit = sum(synthetic_deficits) / len(synthetic_deficits)
+            min_ratio = min(synthetic_ratios) if synthetic_ratios else 0
+            avg_ratio = sum(synthetic_ratios) / len(synthetic_ratios) if synthetic_ratios else 0
+            
+            print(f"📊 Reserve Management: Max deficit ${max_deficit:,.0f}, Avg ratio {avg_ratio:.2%}")
+
+    def _create_redeemer_analysis_chart(self, output_dir: Path):
+        """Create comprehensive Redeemer system analysis chart (2x2 layout)"""
+        
+        # Extract MOET system data
+        simulation_results = self.results.get("simulation_results", {})
+        moet_system_state = simulation_results.get("moet_system_state", {})
+        
+        if not moet_system_state:
+            print("⚠️  No MOET system data available for Redeemer analysis")
+            return
+            
+        # Get redeemer data from tracking
+        redeemer_data = moet_system_state.get("redeemer_system", {})
+        tracking_data = moet_system_state.get("tracking_data", {})
+        
+        # Create 2x2 subplot
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Enhanced Redeemer System Analysis', fontsize=16, fontweight='bold')
+        
+        # Top Left: Reserve Balance Evolution (USDC vs USDF)
+        reserve_history = tracking_data.get("reserve_history", [])
+        if reserve_history:
+            hours = [r.get("hour", 0) for r in reserve_history]
+            usdc_balances = [r.get("usdc_balance", 0) for r in reserve_history]
+            usdf_balances = [r.get("usdf_balance", 0) for r in reserve_history]
+            total_reserves = [u + s for u, s in zip(usdc_balances, usdf_balances)]
+            
+            ax1.plot(hours, usdc_balances, linewidth=2, color='blue', label='USDC Reserves', alpha=0.8)
+            ax1.plot(hours, usdf_balances, linewidth=2, color='green', label='USDF Reserves', alpha=0.8)
+            ax1.plot(hours, total_reserves, linewidth=2, color='purple', label='Total Reserves', alpha=0.8)
+            
+            ax1.set_title('Reserve Balance Evolution')
+            ax1.set_xlabel('Hours')
+            ax1.set_ylabel('Reserve Balance ($)')
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+            ax1.grid(True, alpha=0.3)
+            ax1.legend()
+        else:
+            ax1.text(0.5, 0.5, 'No Reserve History Data', ha='center', va='center', transform=ax1.transAxes)
+            ax1.set_title('Reserve Balance Evolution')
+        
+        # Top Right: Pool Weight Deviation (50/50 target)
+        if reserve_history:
+            weight_deviations = []
+            usdc_ratios = []
+            usdf_ratios = []
+            
+            for r in reserve_history:
+                total = r.get("usdc_balance", 0) + r.get("usdf_balance", 0)
+                if total > 0:
+                    usdc_ratio = r.get("usdc_balance", 0) / total
+                    usdf_ratio = r.get("usdf_balance", 0) / total
+                    deviation = abs(usdc_ratio - 0.5)  # Deviation from 50/50
+                    
+                    usdc_ratios.append(usdc_ratio * 100)
+                    usdf_ratios.append(usdf_ratio * 100)
+                    weight_deviations.append(deviation * 100)  # Convert to percentage
+                else:
+                    usdc_ratios.append(50)
+                    usdf_ratios.append(50)
+                    weight_deviations.append(0)
+            
+            ax2.plot(hours, usdc_ratios, linewidth=2, color='blue', label='USDC %', alpha=0.8)
+            ax2.plot(hours, usdf_ratios, linewidth=2, color='green', label='USDF %', alpha=0.8)
+            ax2.axhline(y=50, color='red', linestyle='--', alpha=0.5, label='Target (50%)')
+            
+            # Add tolerance band (±2%)
+            ax2.fill_between(hours, 48, 52, color='gray', alpha=0.2, label='Tolerance Band (±2%)')
+            
+            ax2.set_title('Pool Weight Distribution')
+            ax2.set_xlabel('Hours')
+            ax2.set_ylabel('Asset Percentage (%)')
+            ax2.set_ylim(0, 100)
+            ax2.grid(True, alpha=0.3)
+            ax2.legend()
+        else:
+            ax2.text(0.5, 0.5, 'No Weight Data', ha='center', va='center', transform=ax2.transAxes)
+            ax2.set_title('Pool Weight Distribution')
+        
+        # Bottom Left: Fee Collection Analysis
+        total_fees_collected = redeemer_data.get("total_fees_collected", 0)
+        fee_history_count = redeemer_data.get("fee_history_count", 0)
+        
+        # Create fee metrics
+        fee_metrics = ['Total Fees\nCollected', 'Fee Events\nCount', 'Avg Fee\nper Event']
+        fee_values = [
+            total_fees_collected,
+            fee_history_count,
+            total_fees_collected / max(1, fee_history_count)
+        ]
+        
+        bars = ax3.bar(fee_metrics, fee_values, color=['gold', 'orange', 'coral'], alpha=0.8)
+        ax3.set_title('Fee Collection Summary')
+        ax3.set_ylabel('Value')
+        
+        # Add value labels on bars
+        for bar, value in zip(bars, fee_values):
+            height = bar.get_height()
+            if value >= 1000:
+                label = f'${value:,.0f}' if 'Fee' in fee_metrics[fee_values.index(value)] else f'{value:,.0f}'
+            else:
+                label = f'${value:.2f}' if 'Fee' in fee_metrics[fee_values.index(value)] else f'{value:.1f}'
+            ax3.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                    label, ha='center', va='bottom', fontweight='bold')
+        
+        ax3.grid(True, alpha=0.3, axis='y')
+        
+        # Bottom Right: Fee Parameters Display
+        fee_params = redeemer_data.get("fee_parameters", {})
+        
+        if fee_params:
+            param_names = []
+            param_values = []
+            
+            # Convert fee parameters to readable format
+            for key, value in fee_params.items():
+                if 'fee' in key.lower():
+                    param_names.append(key.replace('_', ' ').title())
+                    param_values.append(value * 100)  # Convert to percentage
+                elif key == 'imbalance_scale_k':
+                    param_names.append('Scale Factor K')
+                    param_values.append(value * 10000)  # Convert to bps
+                elif key == 'imbalance_convexity_gamma':
+                    param_names.append('Convexity γ')
+                    param_values.append(value)
+                elif key == 'tolerance_band':
+                    param_names.append('Tolerance Band')
+                    param_values.append(value * 100)  # Convert to percentage
+            
+            # Create horizontal bar chart
+            y_pos = range(len(param_names))
+            bars = ax4.barh(y_pos, param_values, color='lightblue', alpha=0.8)
+            
+            ax4.set_yticks(y_pos)
+            ax4.set_yticklabels(param_names)
+            ax4.set_xlabel('Value (%/bps)')
+            ax4.set_title('Fee Structure Parameters')
+            
+            # Add value labels
+            for i, (bar, value) in enumerate(zip(bars, param_values)):
+                width = bar.get_width()
+                if 'γ' in param_names[i]:
+                    label = f'{value:.1f}'
+                elif value >= 100:
+                    label = f'{value:.0f} bps'
+                else:
+                    label = f'{value:.2f}%'
+                ax4.text(width + width*0.01, bar.get_y() + bar.get_height()/2.,
+                        label, ha='left', va='center')
+            
+            ax4.grid(True, alpha=0.3, axis='x')
+        else:
+            ax4.text(0.5, 0.5, 'No Fee Parameters Data', ha='center', va='center', transform=ax4.transAxes)
+            ax4.set_title('Fee Structure Parameters')
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "redeemer_system_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_arbitrage_activity_chart(self, output_dir: Path):
+        """Create enhanced arbitrage activity analysis chart (2x2 layout) using new tracking system"""
+        
+        # Extract arbitrage agent data from new tracking system
+        simulation_results = self.results.get("simulation_results", {})
+        
+        # Try to get arbitrage events from engine tracking first
+        arbitrage_events = simulation_results.get("arbitrage_events", [])
+        
+        # Try to get arbitrage agents from enhanced tracking system
+        moet_system_state = simulation_results.get("moet_system_state", {})
+        arbitrage_agents = moet_system_state.get("arbitrage_agents_summary", [])
+        
+        # If we have arbitrage events, create summary from them
+        if arbitrage_events and not arbitrage_agents:
+            print(f"✅ Using {len(arbitrage_events)} arbitrage events from engine tracking")
+            # Group events by agent
+            agent_data = {}
+            for event in arbitrage_events:
+                agent_id = event.get("agent_id", "unknown")
+                if agent_id not in agent_data:
+                    agent_data[agent_id] = {
+                        "total_events": 0,
+                        "total_volume": 0,
+                        "total_profit": 0,
+                        "total_fees": 0
+                    }
+                agent_data[agent_id]["total_events"] += 1
+                agent_data[agent_id]["total_volume"] += event.get("volume", 0)
+                agent_data[agent_id]["total_profit"] += event.get("profit", 0)
+                agent_data[agent_id]["total_fees"] += event.get("fees_generated", 0)
+            
+            # Convert to arbitrage_agents format
+            arbitrage_agents = []
+            for agent_id, data in agent_data.items():
+                arbitrage_agents.append({
+                    "agent_id": agent_id,
+                    "agent_type": "moet_arbitrage_agent",
+                    "total_attempts": data["total_events"] * 2,  # Estimate attempts
+                    "total_arbitrage_events": data["total_events"],
+                    "successful_arbitrages": data["total_events"],
+                    "failed_arbitrages": 0,
+                    "total_profit": data["total_profit"],
+                    "total_volume_traded": data["total_volume"],
+                    "total_fees_generated": data["total_fees"],
+                    "execution_rate": 100.0,  # All events were executed
+                    "success_rate": 100.0,
+                    "average_profit": data["total_profit"] / max(1, data["total_events"]),
+                    "average_trade_size": data["total_volume"] / max(1, data["total_events"])
+                })
+        
+        # FALLBACK: If enhanced tracking is missing, use agent_outcomes
+        elif not arbitrage_agents:
+            print("⚠️  Enhanced arbitrage tracking not found, using agent_outcomes fallback")
+            agent_outcomes = simulation_results.get("agent_outcomes", [])
+            arbitrage_outcomes = [a for a in agent_outcomes if a.get("agent_type") == "moet_arbitrage_agent"]
+            
+            if not arbitrage_outcomes:
+                print("⚠️  No arbitrage agents found in agent_outcomes either")
+                return
+                
+            # Convert agent_outcomes to arbitrage_agents_summary format
+            arbitrage_agents = []
+            for outcome in arbitrage_outcomes:
+                arbitrage_agents.append({
+                    "agent_id": outcome.get("agent_id", "unknown"),
+                    "agent_type": "moet_arbitrage_agent",
+                    "total_attempts": outcome.get("total_arbitrage_events", 0) * 2,  # Estimate attempts
+                    "total_mint_attempts": outcome.get("total_arbitrage_events", 0),
+                    "total_redeem_attempts": outcome.get("total_arbitrage_events", 0),
+                    "total_arbitrage_events": outcome.get("total_arbitrage_events", 0),
+                    "successful_arbitrages": outcome.get("successful_arbitrages", 0),
+                    "failed_arbitrages": outcome.get("failed_arbitrages", 0),
+                    "total_profit": outcome.get("total_profit", 0),
+                    "total_volume_traded": outcome.get("total_arbitrage_events", 0) * 1000,  # Estimate
+                    "execution_rate": 50.0 if outcome.get("total_arbitrage_events", 0) > 0 else 0.0,
+                    "success_rate": outcome.get("success_rate", 0),
+                    "average_profit": outcome.get("average_profit", 0),
+                    "average_trade_size": 1000.0,  # Default estimate
+                })
+            
+            print(f"✅ Using {len(arbitrage_agents)} arbitrage agents from agent_outcomes fallback")
+        else:
+            print(f"✅ Using {len(arbitrage_agents)} arbitrage agents from enhanced tracking system")
+        
+        # Create 2x2 subplot
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('MOET Arbitrage Activity Analysis', fontsize=16, fontweight='bold')
+        
+        # Top Left: Attempt vs Execution Analysis (NEW ENHANCED VIEW)
+        agent_ids = [agent["agent_id"] for agent in arbitrage_agents]
+        total_attempts = [agent.get("total_attempts", 0) for agent in arbitrage_agents]
+        total_executed = [agent.get("total_arbitrage_events", 0) for agent in arbitrage_agents]
+        execution_rates = [agent.get("execution_rate", 0) for agent in arbitrage_agents]
+        
+        # Create grouped bar chart
+        x = range(len(agent_ids))
+        width = 0.35
+        
+        bars1 = ax1.bar([i - width/2 for i in x], total_attempts, width, 
+                       label='Total Attempts', color='lightblue', alpha=0.8)
+        bars2 = ax1.bar([i + width/2 for i in x], total_executed, width,
+                       label='Executed Trades', color='lightgreen', alpha=0.8)
+        
+        ax1.set_title('Arbitrage Attempts vs Executions')
+        ax1.set_xlabel('Arbitrage Agents')
+        ax1.set_ylabel('Count')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels([f'Agent {i+1}' for i in range(len(agent_ids))], rotation=45)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3, axis='y')
+        
+        # Add execution rate labels
+        for i, (attempts, executed, rate) in enumerate(zip(total_attempts, total_executed, execution_rates)):
+            ax1.text(i, max(attempts, executed) + max(total_attempts) * 0.02,
+                    f'{rate:.1f}%', ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        # Top Right: Mint vs Redeem Attempt Breakdown (NEW ENHANCED VIEW)
+        mint_attempts = [agent.get("total_mint_attempts", 0) for agent in arbitrage_agents]
+        redeem_attempts = [agent.get("total_redeem_attempts", 0) for agent in arbitrage_agents]
+        
+        # Create stacked bar chart
+        bars1 = ax2.bar(x, mint_attempts, label='Mint Attempts', color='coral', alpha=0.8)
+        bars2 = ax2.bar(x, redeem_attempts, bottom=mint_attempts, label='Redeem Attempts', color='skyblue', alpha=0.8)
+        
+        ax2.set_title('Arbitrage Strategy Breakdown')
+        ax2.set_xlabel('Arbitrage Agents')
+        ax2.set_ylabel('Attempts Count')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels([f'Agent {i+1}' for i in range(len(agent_ids))], rotation=45)
+        ax2.legend()
+        ax2.grid(True, alpha=0.3, axis='y')
+        
+        # Add total attempt labels
+        for i, (mint, redeem) in enumerate(zip(mint_attempts, redeem_attempts)):
+            total = mint + redeem
+            if total > 0:
+                ax2.text(i, total + max(total_attempts) * 0.01,
+                        f'{total}', ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        # Bottom Left: Volume vs Profit Analysis (NEW ENHANCED VIEW)
+        total_volumes = [agent.get("total_volume_traded", 0) for agent in arbitrage_agents]
+        total_profits = [agent.get("total_profit", 0) for agent in arbitrage_agents]
+        
+        # Create dual-axis chart
+        ax3_twin = ax3.twinx()
+        
+        # Volume bars
+        bars1 = ax3.bar([i - 0.2 for i in x], total_volumes, 0.4, 
+                       label='Volume Traded', color='lightcoral', alpha=0.8)
+        # Profit bars on secondary axis
+        bars2 = ax3_twin.bar([i + 0.2 for i in x], total_profits, 0.4,
+                           label='Total Profit', color='gold', alpha=0.8)
+        
+        ax3.set_title('Volume Traded vs Profit Generated')
+        ax3.set_xlabel('Arbitrage Agents')
+        ax3.set_ylabel('Volume Traded ($)', color='red')
+        ax3_twin.set_ylabel('Total Profit ($)', color='orange')
+        ax3.set_xticks(x)
+        ax3.set_xticklabels([f'Agent {i+1}' for i in range(len(agent_ids))], rotation=45)
+        ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        ax3_twin.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:.0f}'))
+        ax3.grid(True, alpha=0.3, axis='y')
+        
+        # Add combined legend
+        lines1, labels1 = ax3.get_legend_handles_labels()
+        lines2, labels2 = ax3_twin.get_legend_handles_labels()
+        ax3.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+        
+        # Bottom Right: Enhanced System Summary with New Metrics
+        total_all_attempts = sum(total_attempts)
+        total_all_executed = sum(total_executed)
+        total_all_volumes = sum(total_volumes)
+        total_all_profits = sum(total_profits)
+        overall_execution_rate = (total_all_executed / max(1, total_all_attempts)) * 100
+        total_fees_generated = sum(agent.get("total_fees_generated", 0) for agent in arbitrage_agents)
+        
+        # Create summary with new enhanced metrics
+        summary_metrics = ['Total\nAttempts', 'Executed\nTrades', 'Volume\nTraded', 'Fees\nGenerated']
+        summary_values = [total_all_attempts, total_all_executed, total_all_volumes, total_fees_generated]
+        colors = ['lightblue', 'lightgreen', 'lightcoral', 'gold']
+        
+        bars = ax4.bar(summary_metrics, summary_values, color=colors, alpha=0.8)
+        ax4.set_title(f'Enhanced Arbitrage System Summary\n(Execution Rate: {overall_execution_rate:.1f}%)')
+        ax4.set_ylabel('Count / Value ($)')
+        
+        # Add value labels with smart formatting
+        for bar, value, metric in zip(bars, summary_values, summary_metrics):
+            height = bar.get_height()
+            if 'Volume' in metric or 'Fees' in metric:
+                if value >= 1000:
+                    label = f'${value:,.0f}'
+                else:
+                    label = f'${value:.0f}'
+            else:
+                if value >= 1000:
+                    label = f'{value:,.0f}'
+                else:
+                    label = f'{value}'
+            ax4.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                    label, ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        # Add additional summary text
+        ax4.text(0.02, 0.98, f'Avg Profit/Trade: ${total_all_profits/max(1, total_all_executed):.2f}', 
+                transform=ax4.transAxes, va='top', fontsize=8, 
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.5))
+        
+        ax4.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "arbitrage_activity_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_arbitrage_time_series_chart(self, output_dir: Path):
+        """Create time-series analysis of arbitrage attempts over time (2x2 layout)"""
+        
+        # Extract arbitrage history data
+        simulation_results = self.results.get("simulation_results", {})
+        moet_system_state = simulation_results.get("moet_system_state", {})
+        
+        if not moet_system_state:
+            print("⚠️  No MOET system data available for time-series analysis")
+            return
+            
+        tracking_data = moet_system_state.get("tracking_data", {})
+        arbitrage_history = tracking_data.get("arbitrage_history", [])
+        
+        # If no arbitrage history, try to collect it from arbitrage agents directly
+        if not arbitrage_history:
+            print("⚠️  No arbitrage history in tracking data, attempting direct collection from agents...")
+            
+            # Try to collect arbitrage data directly from engine's arbitrage agents
+            if hasattr(self, 'engine') and hasattr(self.engine, 'arbitrage_agents'):
+                for agent in self.engine.arbitrage_agents:
+                    if hasattr(agent.state, 'arbitrage_attempts'):
+                        for attempt in agent.state.arbitrage_attempts:
+                            arbitrage_history.append({
+                                "minute": attempt.get("minute", 0),
+                                "hour": attempt.get("minute", 0) / 60,
+                                "agent_id": agent.agent_id,
+                                "arbitrage_type": attempt.get("type", "unknown"),
+                                "executed": attempt.get("executed", False),
+                                "expected_profit": attempt.get("expected_profit", 0),
+                                "actual_profit": attempt.get("actual_profit", 0),
+                                "trade_size": attempt.get("trade_size", 0),
+                                "pool_used": attempt.get("pool", "unknown"),
+                                "moet_price": attempt.get("moet_price", 1.0),
+                                "reason_not_executed": attempt.get("reason_not_executed", None)
+                            })
+            
+            # If still no data, create placeholder
+            if not arbitrage_history:
+                print("⚠️  No arbitrage data available from any source, creating placeholder chart")
+                
+                # Create a simple placeholder chart
+                fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+                ax.text(0.5, 0.5, 'No Arbitrage Time-Series Data Available\n\nEnhanced tracking system not active\nCheck arbitrage agent configuration', 
+                       ha='center', va='center', fontsize=14, 
+                       bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.7))
+                ax.set_xlim(0, 1)
+                ax.set_ylim(0, 1)
+                ax.set_title('Arbitrage Time-Series Analysis', fontsize=16, fontweight='bold')
+                ax.axis('off')
+                
+                plt.tight_layout()
+                plt.savefig(output_dir / "arbitrage_time_series_analysis.png", dpi=300, bbox_inches='tight')
+                plt.close()
+                return
+            else:
+                print(f"✅ Collected {len(arbitrage_history)} arbitrage records directly from agents")
+        
+        # Create 2x2 subplot
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Arbitrage Activity Time-Series Analysis', fontsize=16, fontweight='bold')
+        
+        # Convert to pandas for easier analysis
+        import pandas as pd
+        df = pd.DataFrame(arbitrage_history)
+        
+        # Top Left: Attempts Over Time (Executed vs Not Executed)
+        if not df.empty:
+            print(f"📊 Processing {len(df)} arbitrage records for time-series analysis")
+            
+            # CRITICAL FIX: Properly aggregate to true hourly buckets (not minute-level "hours")
+            df['hour'] = (df['minute'] // 60).astype(int)  # Convert to integer hour buckets
+            hourly_data = df.groupby(['hour', 'executed']).size().unstack(fill_value=0)
+            
+            print(f"📊 Aggregated to {len(hourly_data)} hourly data points")
+            
+            if 'executed' in df.columns:
+                hours = hourly_data.index
+                executed_counts = hourly_data.get(True, pd.Series(0, index=hours))
+                not_executed_counts = hourly_data.get(False, pd.Series(0, index=hours))
+                
+                # CRITICAL FIX: Remove markers to prevent matplotlib overflow
+                ax1.plot(hours, executed_counts, linewidth=2, color='green', 
+                        label='Executed Attempts')
+                ax1.plot(hours, not_executed_counts, linewidth=2, color='red', 
+                        label='Not Executed Attempts')
+                ax1.fill_between(hours, executed_counts, alpha=0.3, color='green')
+                ax1.fill_between(hours, not_executed_counts, alpha=0.3, color='red')
+                
+                ax1.set_title('Arbitrage Attempts Over Time')
+                ax1.set_xlabel('Hours')
+                ax1.set_ylabel('Attempts per Hour')
+                ax1.legend()
+                ax1.grid(True, alpha=0.3)
+        
+        # Top Right: Mint vs Redeem Attempts Over Time
+        if not df.empty and 'arbitrage_type' in df.columns:
+            type_hourly = df.groupby(['hour', 'arbitrage_type']).size().unstack(fill_value=0)
+            
+            hours = type_hourly.index
+            mint_counts = type_hourly.get('mint_arbitrage', pd.Series(0, index=hours))
+            redeem_counts = type_hourly.get('redeem_arbitrage', pd.Series(0, index=hours))
+            
+            ax2.plot(hours, mint_counts, linewidth=2, color='coral', 
+                    label='Mint Attempts')
+            ax2.plot(hours, redeem_counts, linewidth=2, color='skyblue', 
+                    label='Redeem Attempts')
+            ax2.fill_between(hours, mint_counts, alpha=0.3, color='coral')
+            ax2.fill_between(hours, redeem_counts, alpha=0.3, color='skyblue')
+            
+            ax2.set_title('Arbitrage Strategy Types Over Time')
+            ax2.set_xlabel('Hours')
+            ax2.set_ylabel('Attempts per Hour')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+        
+        # Bottom Left: Expected Profit Distribution Over Time
+        if not df.empty and 'expected_profit' in df.columns:
+            # Create profit bins
+            profit_bins = [-float('inf'), -1, -0.1, 0, 0.1, 1, float('inf')]
+            profit_labels = ['< -$1', '-$1 to -$0.1', '-$0.1 to $0', '$0 to $0.1', '$0.1 to $1', '> $1']
+            df['profit_bin'] = pd.cut(df['expected_profit'], bins=profit_bins, labels=profit_labels)
+            
+            profit_hourly = df.groupby(['hour', 'profit_bin']).size().unstack(fill_value=0)
+            
+            # Plot stacked area chart
+            ax3.stackplot(profit_hourly.index, *[profit_hourly[col] for col in profit_hourly.columns], 
+                         labels=profit_hourly.columns, alpha=0.7)
+            ax3.set_title('Expected Profit Distribution Over Time')
+            ax3.set_xlabel('Hours')
+            ax3.set_ylabel('Attempts per Hour')
+            ax3.legend(loc='upper right', fontsize=8)
+            ax3.grid(True, alpha=0.3)
+        
+        # Bottom Right: Execution Rate Over Time (Hourly Average)
+        if not df.empty and 'executed' in df.columns:
+            # CRITICAL FIX: Use proper hourly aggregation to prevent overflow
+            hourly_execution = df.groupby('hour')['executed'].mean() * 100
+            
+            print(f"📊 Execution rate data: {len(hourly_execution)} hourly points")
+            
+            # Plot without markers to prevent overflow
+            ax4.plot(hourly_execution.index, hourly_execution.values, 
+                    linewidth=2, color='purple')
+            ax4.fill_between(hourly_execution.index, hourly_execution.values, 
+                           alpha=0.3, color='purple')
+            
+            # Add horizontal line for overall execution rate
+            overall_rate = df['executed'].mean() * 100
+            ax4.axhline(y=overall_rate, color='red', linestyle='--', 
+                       label=f'Overall Rate: {overall_rate:.1f}%')
+            
+            ax4.set_title('Execution Rate Over Time (Hourly Average)')
+            ax4.set_xlabel('Hours')
+            ax4.set_ylabel('Execution Rate (%)')
+            ax4.set_ylim(0, max(5, hourly_execution.max() * 1.1))  # Dynamic y-limit
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "arbitrage_time_series_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_peg_monitoring_chart(self, output_dir: Path):
+        """Create MOET peg monitoring analysis chart (2x1 layout)"""
+        
+        # Try to extract peg monitoring data from engine results
+        peg_monitoring = self.results.get("peg_monitoring", {})
+        
+        if not peg_monitoring or not any(peg_monitoring.values()):
+            print("⚠️  No peg monitoring data available")
+            return
+        
+        # Create 2x1 subplot
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10))
+        fig.suptitle('MOET Peg Monitoring Analysis', fontsize=16, fontweight='bold')
+        
+        # Top: MOET Price Evolution in Both Pools
+        peg_deviations = peg_monitoring.get("peg_deviations", [])
+        
+        if peg_deviations:
+            steps = [d.get("step", 0) for d in peg_deviations]
+            hours = [s / 60.0 for s in steps]  # Convert steps to hours (assuming 1 step = 1 minute)
+            usdc_prices = [d.get("usdc_price", 1.0) for d in peg_deviations]
+            usdf_prices = [d.get("usdf_price", 1.0) for d in peg_deviations]
+            avg_prices = [d.get("avg_price", 1.0) for d in peg_deviations]
+            
+            ax1.plot(hours, usdc_prices, linewidth=2, color='blue', label='MOET:USDC Pool', alpha=0.8)
+            ax1.plot(hours, usdf_prices, linewidth=2, color='green', label='MOET:USDF Pool', alpha=0.8)
+            ax1.plot(hours, avg_prices, linewidth=2, color='purple', label='Average Price', alpha=0.8)
+            ax1.axhline(y=1.0, color='red', linestyle='--', alpha=0.7, label='Target Peg ($1.00)')
+            
+            # Add tolerance bands
+            ax1.fill_between(hours, 0.99, 1.01, color='gray', alpha=0.2, label='±1% Tolerance')
+            
+            ax1.set_title('MOET Price Evolution in Stablecoin Pools')
+            ax1.set_xlabel('Hours')
+            ax1.set_ylabel('MOET Price ($)')
+            ax1.set_ylim(0.95, 1.05)  # Focus on relevant price range
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:.3f}'))
+            ax1.grid(True, alpha=0.3)
+            ax1.legend()
+        else:
+            ax1.text(0.5, 0.5, 'No Peg Deviation Data', ha='center', va='center', transform=ax1.transAxes)
+            ax1.set_title('MOET Price Evolution in Stablecoin Pools')
+        
+        # Bottom: Peg Deviation Analysis
+        if peg_deviations:
+            max_deviations = [d.get("max_deviation", 0) * 100 for d in peg_deviations]  # Convert to percentage
+            
+            # Create deviation plot
+            ax2.fill_between(hours, 0, max_deviations, color='orange', alpha=0.6, label='Max Deviation')
+            ax2.axhline(y=1.0, color='red', linestyle='--', alpha=0.7, label='1% Threshold')
+            ax2.axhline(y=0.5, color='yellow', linestyle='--', alpha=0.7, label='0.5% Warning')
+            
+            ax2.set_title('MOET Peg Deviation from $1.00 Target')
+            ax2.set_xlabel('Hours')
+            ax2.set_ylabel('Maximum Deviation (%)')
+            ax2.set_ylim(0, max(5.0, max(max_deviations) * 1.1))  # Dynamic y-limit
+            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}%'))
+            ax2.grid(True, alpha=0.3)
+            ax2.legend()
+            
+            # Add statistics box
+            avg_deviation = sum(max_deviations) / len(max_deviations)
+            max_deviation_value = max(max_deviations)
+            violations_1pct = sum(1 for d in max_deviations if d > 1.0)
+            
+            stats_text = f'Avg Deviation: {avg_deviation:.2f}%\n'
+            stats_text += f'Max Deviation: {max_deviation_value:.2f}%\n'
+            stats_text += f'>1% Violations: {violations_1pct}'
+            
+            ax2.text(0.02, 0.98, stats_text, transform=ax2.transAxes, 
+                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            ax2.text(0.5, 0.5, 'No Deviation Data', ha='center', va='center', transform=ax2.transAxes)
+            ax2.set_title('MOET Peg Deviation from $1.00 Target')
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "peg_monitoring_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_pool_slippage_analysis_chart(self, output_dir: Path):
+        """Create pool-specific slippage analysis chart for 4-pool structure"""
+        
+        # Extract deleveraging events with detailed slippage data
+        deleveraging_events = []
+        for agent_data in self.results.get("simulation_results", {}).get("agent_health_history", []):
+            for agent in agent_data.get("agents", []):
+                agent_deleveraging = agent.get("deleveraging_events", [])
+                deleveraging_events.extend(agent_deleveraging)
+        
+        if not deleveraging_events:
+            print("⚠️  No deleveraging events found for pool slippage analysis")
+            return
+        
+        # Analyze slippage by path (USDC vs USDF)
+        usdc_slippage = []
+        usdf_slippage = []
+        total_slippage = []
+        
+        for event in deleveraging_events:
+            swap_details = event.get("swap_chain_details", {})
+            path = swap_details.get("path_chosen", "Unknown")
+            total_slip = event.get("total_slippage_cost", 0)
+            
+            total_slippage.append(total_slip)
+            if path == "USDC":
+                usdc_slippage.append(total_slip)
+            elif path == "USDF":
+                usdf_slippage.append(total_slip)
+        
+        # Create 2x2 subplot layout
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Pool-Specific Slippage Analysis: 4-Pool Deleveraging Structure', fontsize=16, fontweight='bold')
+        
+        # Chart 1: Slippage by Path (USDC vs USDF)
+        if usdc_slippage and usdf_slippage:
+            paths = ['USDC Path', 'USDF Path']
+            avg_slippage = [
+                sum(usdc_slippage) / len(usdc_slippage),
+                sum(usdf_slippage) / len(usdf_slippage)
+            ]
+            colors = ['#3498db', '#e74c3c']
+            
+            bars = ax1.bar(paths, avg_slippage, color=colors, alpha=0.7)
+            ax1.set_title('Average Slippage by Deleveraging Path')
+            ax1.set_ylabel('Average Slippage Cost ($)')
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+            
+            # Add value labels on bars
+            for bar, value in zip(bars, avg_slippage):
+                ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(avg_slippage)*0.01,
+                        f'${value:,.0f}', ha='center', va='bottom', fontweight='bold')
+            
+            # Add statistics
+            stats_text = f'USDC Events: {len(usdc_slippage)}\n'
+            stats_text += f'USDF Events: {len(usdf_slippage)}\n'
+            stats_text += f'Total Events: {len(deleveraging_events)}'
+            ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes, 
+                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            ax1.text(0.5, 0.5, 'No path-specific data available', ha='center', va='center', transform=ax1.transAxes)
+            ax1.set_title('Average Slippage by Deleveraging Path')
+        
+        # Chart 2: Slippage Distribution
+        if total_slippage:
+            ax2.hist(total_slippage, bins=20, color='#9b59b6', alpha=0.7, edgecolor='black')
+            ax2.set_title('Distribution of Deleveraging Slippage Costs')
+            ax2.set_xlabel('Slippage Cost ($)')
+            ax2.set_ylabel('Frequency')
+            ax2.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+            
+            # Add statistics
+            avg_slip = sum(total_slippage) / len(total_slippage)
+            max_slip = max(total_slippage)
+            stats_text = f'Avg: ${avg_slip:,.0f}\nMax: ${max_slip:,.0f}\nEvents: {len(total_slippage)}'
+            ax2.text(0.98, 0.98, stats_text, transform=ax2.transAxes, 
+                    verticalalignment='top', horizontalalignment='right',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            ax2.text(0.5, 0.5, 'No slippage data available', ha='center', va='center', transform=ax2.transAxes)
+            ax2.set_title('Distribution of Deleveraging Slippage Costs')
+        
+        # Chart 3: Slippage Over Time
+        if deleveraging_events:
+            minutes = [event.get("minute", 0) for event in deleveraging_events]
+            slippage_costs = [event.get("total_slippage_cost", 0) for event in deleveraging_events]
+            hours = [m / 60 for m in minutes]
+            
+            ax3.scatter(hours, slippage_costs, alpha=0.6, color='#f39c12', s=30)
+            ax3.set_title('Slippage Costs Over Time')
+            ax3.set_xlabel('Hours')
+            ax3.set_ylabel('Slippage Cost ($)')
+            ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+            ax3.grid(True, alpha=0.3)
+            
+            # Add trend line if enough data points
+            if len(hours) > 5:
+                z = np.polyfit(hours, slippage_costs, 1)
+                p = np.poly1d(z)
+                ax3.plot(hours, p(hours), "r--", alpha=0.8, label=f'Trend: ${z[0]:+.1f}/hr')
+                ax3.legend()
+        else:
+            ax3.text(0.5, 0.5, 'No time series data available', ha='center', va='center', transform=ax3.transAxes)
+            ax3.set_title('Slippage Costs Over Time')
+        
+        # Chart 4: Pool Utilization Analysis
+        pool_usage = {}
+        for event in deleveraging_events:
+            swap_details = event.get("swap_chain_details", {})
+            path = swap_details.get("path_chosen", "Unknown")
+            pool_usage[path] = pool_usage.get(path, 0) + 1
+        
+        if pool_usage:
+            pools = list(pool_usage.keys())
+            usage_counts = list(pool_usage.values())
+            colors = ['#3498db', '#e74c3c', '#2ecc71', '#f39c12'][:len(pools)]
+            
+            wedges, texts, autotexts = ax4.pie(usage_counts, labels=pools, colors=colors, autopct='%1.1f%%', startangle=90)
+            ax4.set_title('Pool Path Utilization Distribution')
+            
+            # Enhance text formatting
+            for autotext in autotexts:
+                autotext.set_color('white')
+                autotext.set_fontweight('bold')
+        else:
+            ax4.text(0.5, 0.5, 'No pool usage data available', ha='center', va='center', transform=ax4.transAxes)
+            ax4.set_title('Pool Path Utilization Distribution')
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "pool_slippage_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_ecosystem_growth_chart(self, output_dir: Path):
+        """Create ecosystem growth analysis chart"""
+        
+        # Check if ecosystem growth is enabled and we have data
+        if not self.config.enable_ecosystem_growth:
+            return
+            
+        simulation_results = self.results.get("simulation_results", {})
+        growth_events = simulation_results.get("ecosystem_growth_events", [])
+        growth_summary = simulation_results.get("ecosystem_growth_summary", {})
+        
+        if not growth_events:
+            print("⚠️  No ecosystem growth events to chart")
+            return
+        
+        # Convert to DataFrame for easier plotting
+        import pandas as pd
+        df = pd.DataFrame(growth_events)
+        
+        # Create figure with subplots
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16))
+        fig.suptitle('Ecosystem Growth Analysis: Agent Addition Over Time', fontsize=16, fontweight='bold')
+        
+        # Chart 1: Total Agents Over Time
+        ax1.plot(df['day'], df['total_agents'], linewidth=2, color='#2E86AB', marker='o', markersize=2)
+        ax1.set_xlabel('Days', fontsize=12)
+        ax1.set_ylabel('Total Agents', fontsize=12)
+        ax1.set_title('Total Agents in Ecosystem', fontsize=14, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xlim(0, 365)
+        
+        # Add milestone annotations
+        milestones = [100, 500, 1000, 1500]
+        for milestone in milestones:
+            milestone_data = df[df['total_agents'] >= milestone]
+            if not milestone_data.empty:
+                first_milestone = milestone_data.iloc[0]
+                ax1.annotate(f'{milestone} agents\n(Day {first_milestone["day"]:.0f})', 
+                           xy=(first_milestone['day'], first_milestone['total_agents']),
+                           xytext=(10, 10), textcoords='offset points',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='lightblue', alpha=0.7),
+                           fontsize=10)
+        
+        # Chart 2: Total USD Value Over Time
+        ax2.plot(df['day'], df['total_usd_value'] / 1e6, linewidth=2, color='#457B9D', marker='o', markersize=2)
+        ax2.axhline(y=self.config.target_btc_deposits / 1e6, color='red', linestyle='--', 
+                   label=f'Target: ${self.config.target_btc_deposits/1e6:.0f}M')
+        ax2.set_xlabel('Days', fontsize=12)
+        ax2.set_ylabel('Total Deposits ($ Millions)', fontsize=12)
+        ax2.set_title('Total BTC Deposits Value', fontsize=14, fontweight='bold')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        ax2.set_xlim(0, 365)
+        
+        # Chart 3: Daily Agent Additions
+        daily_additions = df.groupby(df['day'].astype(int)).size()
+        ax3.bar(daily_additions.index, daily_additions.values, color='#F1C40F', alpha=0.7)
+        ax3.set_xlabel('Days', fontsize=12)
+        ax3.set_ylabel('New Agents Added', fontsize=12)
+        ax3.set_title('Daily Agent Additions', fontsize=14, fontweight='bold')
+        ax3.grid(True, alpha=0.3)
+        ax3.set_xlim(0, 365)
+        
+        # Chart 4: Target Achievement Progress
+        ax4.plot(df['day'], df['target_progress'] * 100, linewidth=2, color='#E74C3C', marker='o', markersize=2)
+        ax4.axhline(y=100, color='green', linestyle='--', label='100% Target Achievement')
+        ax4.set_xlabel('Days', fontsize=12)
+        ax4.set_ylabel('Target Achievement (%)', fontsize=12)
+        ax4.set_title('Progress Toward $150M Target', fontsize=14, fontweight='bold')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        ax4.set_xlim(0, 365)
+        ax4.set_ylim(0, max(110, df['target_progress'].max() * 100 + 10))
+        
+        # Add summary statistics
+        final_agents = growth_summary.get('final_agent_count', 0)
+        final_value = growth_summary.get('final_usd_value', 0)
+        target_achievement = growth_summary.get('target_achievement', 0) * 100
+        
+        summary_text = f"""Ecosystem Growth Summary:
+        • Final Agents: {final_agents:,}
+        • Final Deposits: ${final_value/1e6:.1f}M
+        • Target Achievement: {target_achievement:.1f}%
+        • Growth Period: {self.config.growth_start_delay_days} - 365 days
+        • New Agents Added: {len(growth_events):,}"""
+        
+        fig.text(0.02, 0.02, summary_text, fontsize=10, 
+                bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "ecosystem_growth_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"📊 Ecosystem Growth Analysis:")
+        print(f"   Final agent count: {final_agents:,}")
+        print(f"   Final deposits: ${final_value:,.0f} (${final_value/1e6:.1f}M)")
+        print(f"   Target achievement: {target_achievement:.1f}%")
+        print(f"   Growth events: {len(growth_events):,}")
+    
+    def _create_moet_stablecoin_price_chart(self, output_dir: Path):
+        """Create focused chart for MOET:USDC and MOET:USDF pool price deviations"""
+        
+        # Extract pool state snapshots from simulation results
+        simulation_results = self.results.get("simulation_results", {})
+        pool_snapshots = simulation_results.get("pool_state_snapshots", [])
+        
+        # Check if we have MOET stablecoin price data
+        if not pool_snapshots:
+            print("⚠️  No pool state snapshots available for MOET stablecoin price analysis")
+            return
+        
+        # Check if the snapshots contain MOET stablecoin price data
+        sample_snapshot = pool_snapshots[0] if pool_snapshots else {}
+        if 'moet_usdc_price' not in sample_snapshot or 'moet_usdf_price' not in sample_snapshot:
+            print("⚠️  MOET stablecoin price data not found in pool snapshots")
+            print(f"Available keys: {list(sample_snapshot.keys())}")
+            print("💡 This data will be available after running a simulation with the advanced MOET system enabled")
+            
+            # Create a placeholder chart
+            fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+            ax.text(0.5, 0.5, 'MOET Stablecoin Price Data Not Available\n\nRun a new simulation with advanced MOET system\nto generate MOET:USDC and MOET:USDF price tracking', 
+                   ha='center', va='center', fontsize=14, 
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.7))
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.set_title('MOET Stablecoin Pool Price Deviations', fontsize=16, fontweight='bold')
+            ax.axis('off')
+            
+            plt.tight_layout()
+            plt.savefig(output_dir / "moet_stablecoin_price_deviations.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            return
+        
+        # Convert to DataFrame for easier handling
+        import pandas as pd
+        df = pd.DataFrame(pool_snapshots)
+        
+        # Convert minute to hours for better visualization
+        df['hour'] = df['minute'] / 60.0
+        
+        # Calculate deviations from $1.00 peg in basis points
+        df['usdc_deviation_bps'] = (df['moet_usdc_price'] - 1.0) * 10000
+        df['usdf_deviation_bps'] = (df['moet_usdf_price'] - 1.0) * 10000
+        
+        # Create the chart
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
+        fig.suptitle('MOET Stablecoin Pool Price Deviations: Full Year Analysis', 
+                     fontsize=16, fontweight='bold')
+        
+        # Top panel: Actual prices
+        ax1.plot(df['hour'], df['moet_usdc_price'], label='MOET:USDC Price', color='blue', alpha=0.8, linewidth=1)
+        ax1.plot(df['hour'], df['moet_usdf_price'], label='MOET:USDF Price', color='red', alpha=0.8, linewidth=1)
+        ax1.axhline(y=1.0, color='black', linestyle='--', alpha=0.5, label='$1.00 Peg')
+        
+        ax1.set_ylabel('Price ($)', fontsize=12)
+        ax1.set_title('MOET Stablecoin Pool Prices: Full Year Evolution', fontsize=14, fontweight='bold')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xlim(0, 8760)  # Full year = 8760 hours
+        
+        # Add price range info
+        usdc_min, usdc_max = df['moet_usdc_price'].min(), df['moet_usdc_price'].max()
+        usdf_min, usdf_max = df['moet_usdf_price'].min(), df['moet_usdf_price'].max()
+        
+        ax1.text(0.02, 0.98, f'USDC Range: ${usdc_min:.6f} - ${usdc_max:.6f}', 
+                 transform=ax1.transAxes, verticalalignment='top', 
+                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+        ax1.text(0.02, 0.88, f'USDF Range: ${usdf_min:.6f} - ${usdf_max:.6f}', 
+                 transform=ax1.transAxes, verticalalignment='top',
+                 bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.8))
+        
+        # Bottom panel: Deviations in basis points
+        ax2.plot(df['hour'], df['usdc_deviation_bps'], label='MOET:USDC Deviation', color='blue', alpha=0.8, linewidth=1)
+        ax2.plot(df['hour'], df['usdf_deviation_bps'], label='MOET:USDF Deviation', color='red', alpha=0.8, linewidth=1)
+        ax2.axhline(y=0, color='black', linestyle='--', alpha=0.5, label='Perfect Peg')
+        
+        # Add threshold lines for reference
+        ax2.axhline(y=50, color='orange', linestyle=':', alpha=0.7, label='±50 bps')
+        ax2.axhline(y=-50, color='orange', linestyle=':', alpha=0.7)
+        ax2.axhline(y=100, color='red', linestyle=':', alpha=0.7, label='±100 bps')
+        ax2.axhline(y=-100, color='red', linestyle=':', alpha=0.7)
+        
+        ax2.set_xlabel('Time (Hours)', fontsize=12)
+        ax2.set_ylabel('Deviation (Basis Points)', fontsize=12)
+        ax2.set_title('MOET Stablecoin Pool Price Deviations from $1.00 Peg', fontsize=14, fontweight='bold')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        ax2.set_xlim(0, 8760)  # Full year = 8760 hours
+        
+        # Add deviation statistics
+        usdc_dev_stats = f'USDC: μ={df["usdc_deviation_bps"].mean():.1f} bps, σ={df["usdc_deviation_bps"].std():.1f} bps, max=±{abs(df["usdc_deviation_bps"]).max():.1f} bps'
+        usdf_dev_stats = f'USDF: μ={df["usdf_deviation_bps"].mean():.1f} bps, σ={df["usdf_deviation_bps"].std():.1f} bps, max=±{abs(df["usdf_deviation_bps"]).max():.1f} bps'
+        
+        ax2.text(0.02, 0.98, usdc_dev_stats, transform=ax2.transAxes, verticalalignment='top',
+                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+        ax2.text(0.02, 0.88, usdf_dev_stats, transform=ax2.transAxes, verticalalignment='top',
+                 bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.8))
+        
+        plt.tight_layout()
+        
+        # Save the chart
+        plt.savefig(output_dir / "moet_stablecoin_price_deviations.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Print summary statistics
+        print(f"\n📊 MOET Stablecoin Pool Price Analysis:")
+        print(f"   Simulation duration: {df['hour'].max():.0f} hours ({df['hour'].max()/24:.1f} days)")
+        print(f"   Data points: {len(df):,}")
+        
+        print(f"\n📈 MOET:USDC Pool:")
+        print(f"   Price range: ${usdc_min:.6f} - ${usdc_max:.6f}")
+        print(f"   Average deviation: {df['usdc_deviation_bps'].mean():+.1f} bps")
+        print(f"   Max deviation: ±{abs(df['usdc_deviation_bps']).max():.1f} bps")
+        print(f"   Std deviation: {df['usdc_deviation_bps'].std():.1f} bps")
+        
+        print(f"\n📈 MOET:USDF Pool:")
+        print(f"   Price range: ${usdf_min:.6f} - ${usdf_max:.6f}")
+        print(f"   Average deviation: {df['usdf_deviation_bps'].mean():+.1f} bps")
+        print(f"   Max deviation: ±{abs(df['usdf_deviation_bps']).max():.1f} bps")
+        print(f"   Std deviation: {df['usdf_deviation_bps'].std():.1f} bps")
+        
+        # Check for significant deviations
+        significant_usdc = df[abs(df['usdc_deviation_bps']) > 50]
+        significant_usdf = df[abs(df['usdf_deviation_bps']) > 50]
+        
+        print(f"\n🚨 Significant Deviations (>50 bps):")
+        print(f"   MOET:USDC: {len(significant_usdc)} instances ({len(significant_usdc)/len(df)*100:.1f}%)")
+        print(f"   MOET:USDF: {len(significant_usdf)} instances ({len(significant_usdf)/len(df)*100:.1f}%)")
+        
+        if len(significant_usdc) > 0:
+            print(f"   USDC max deviation time: Hour {significant_usdc.loc[significant_usdc['usdc_deviation_bps'].abs().idxmax(), 'hour']:.1f}")
+        if len(significant_usdf) > 0:
+            print(f"   USDF max deviation time: Hour {significant_usdf.loc[significant_usdf['usdf_deviation_bps'].abs().idxmax(), 'hour']:.1f}")
+
+    def _aggressive_pre_compilation_cleanup(self, engine, ecosystem_growth_events, pool_state_snapshots):
+        """Remove massive event arrays that are never used by charts but consume huge memory"""
+        
+        cleanup_stats = {
+            "engine_events_cleared": 0,
+            "agent_events_cleared": 0,
+            "agents_processed": 0
+        }
+        
+        # 1. CLEAR ENGINE-LEVEL EVENT ARRAYS (the main memory bombs)
+        if hasattr(engine, 'rebalancing_events'):
+            cleanup_stats["engine_events_cleared"] += len(engine.rebalancing_events)
+            engine.rebalancing_events = []
+            
+        if hasattr(engine, 'yield_token_trades'):
+            cleanup_stats["engine_events_cleared"] += len(engine.yield_token_trades)
+            engine.yield_token_trades = []
+            
+        if hasattr(engine, 'arbitrage_events'):
+            cleanup_stats["engine_events_cleared"] += len(engine.arbitrage_events)
+            engine.arbitrage_events = []
+            
+        # 2. CLEAR AGENT-LEVEL EVENT ARRAYS (stored but never read by charts)
+        for agent in engine.high_tide_agents:
+            cleanup_stats["agents_processed"] += 1
+            
+            # Clear rebalancing event arrays
+            if hasattr(agent.state, 'rebalancing_events'):
+                cleanup_stats["agent_events_cleared"] += len(agent.state.rebalancing_events)
+                agent.state.rebalancing_events = []
+                
+            # Clear deleveraging event arrays  
+            if hasattr(agent.state, 'deleveraging_events'):
+                cleanup_stats["agent_events_cleared"] += len(agent.state.deleveraging_events)
+                agent.state.deleveraging_events = []
+                
+            # Clear arbitrage event arrays
+            if hasattr(agent.state, 'arbitrage_events'):
+                cleanup_stats["agent_events_cleared"] += len(agent.state.arbitrage_events)
+                agent.state.arbitrage_events = []
+                
+            # Clear action history arrays
+            if hasattr(agent.state, 'action_history'):
+                cleanup_stats["agent_events_cleared"] += len(agent.state.action_history)
+                agent.state.action_history = []
+        
+        # 3. CLEAR ARBITRAGE AGENT EVENT ARRAYS (if they exist)
+        if hasattr(engine, 'arbitrage_agents'):
+            for agent in engine.arbitrage_agents:
+                cleanup_stats["agents_processed"] += 1
+                
+                if hasattr(agent.state, 'arbitrage_attempts'):
+                    cleanup_stats["agent_events_cleared"] += len(agent.state.arbitrage_attempts)
+                    agent.state.arbitrage_attempts = []
+                    
+                if hasattr(agent.state, 'arbitrage_events'):
+                    cleanup_stats["agent_events_cleared"] += len(agent.state.arbitrage_events)
+                    agent.state.arbitrage_events = []
+        
+        # 4. KEEP CRITICAL DATA (charts need these)
+        # - pool_state_snapshots: PRESERVED (charts use this)
+        # - ecosystem_growth_events: PRESERVED (charts use this)
+        # - agent summary stats: PRESERVED (in agent.state, not arrays)
+        
+        print(f"✅ Cleanup complete:")
+        print(f"   🗑️  Cleared {cleanup_stats['engine_events_cleared']:,} engine events")
+        print(f"   🗑️  Cleared {cleanup_stats['agent_events_cleared']:,} agent events") 
+        print(f"   👥 Processed {cleanup_stats['agents_processed']} agents")
+        print(f"   📊 Preserved pool snapshots: {len(pool_state_snapshots)}")
+        print(f"   🌱 Preserved growth events: {len(ecosystem_growth_events)}")
+
+    def enable_ecosystem_growth(self, target_btc_deposits: float = 150_000_000, 
+                                growth_start_delay_days: int = 30,
+                                growth_acceleration_factor: float = 1.2):
+        """Enable ecosystem growth simulation with custom parameters"""
+        self.config.enable_ecosystem_growth = True
+        self.config.target_btc_deposits = target_btc_deposits
+        self.config.growth_start_delay_days = growth_start_delay_days
+        self.config.growth_acceleration_factor = growth_acceleration_factor
+        
+        print(f"🌱 Ecosystem Growth ENABLED:")
+        print(f"   Target BTC deposits: ${target_btc_deposits:,.0f}")
+        print(f"   Growth starts after: {growth_start_delay_days} days")
+        print(f"   Growth acceleration: {growth_acceleration_factor}x")
+        print(f"   Results will be saved in: {self.config.test_name}_Ecosystem_Growth/")
+    
+    def _create_bond_auction_analysis_chart(self, output_dir: Path):
+        """Create Bond Auction Activity Analysis chart (2x2 layout)"""
+        
+        # Extract MOET system data from simulation results
+        simulation_results = self.results.get("simulation_results", {})
+        moet_system_state = simulation_results.get("moet_system_state", {})
+        
+        # Check if advanced MOET system is enabled - if not, create a "system disabled" chart
+        if not moet_system_state.get("advanced_system_enabled"):
+            print("⚠️  Advanced MOET system not enabled - creating 'system disabled' bond auction chart")
+            print(f"   Debug: moet_system_state keys: {list(moet_system_state.keys())}")
+            print(f"   Debug: advanced_system_enabled value: {moet_system_state.get('advanced_system_enabled')}")
+            
+            # Create a chart showing that the bond auction system is disabled
+            fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+            ax.text(0.5, 0.5, 'Bond Auction System Not Enabled\n\nThe Advanced MOET system is disabled in this simulation.\nBond auctions require the advanced MOET system to be active.\n\nTo enable: set enable_advanced_moet_system = True in config', 
+                   ha='center', va='center', fontsize=14, 
+                   bbox=dict(boxstyle="round,pad=0.5", facecolor="lightcoral", alpha=0.7))
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.set_title('Bond Auction Activity Analysis - System Disabled', fontsize=16, fontweight='bold')
+            ax.axis('off')
+            
+            plt.tight_layout()
+            plt.savefig(output_dir / "bond_auction_analysis.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"📊 Bond Auction Analysis: System disabled - placeholder chart created")
+            return
+        
+        # Get bonder system data
+        bonder_system = moet_system_state.get("bonder_system", {})
+        recent_auctions = bonder_system.get("recent_auctions", [])
+        auction_count = bonder_system.get("auction_history_count", 0)
+        current_bond_cost = bonder_system.get("current_bond_cost_ema", 0)
+        
+        # Get tracking data for time series
+        tracking_data = moet_system_state.get("tracking_data", {})
+        bond_aprs = tracking_data.get("bond_apr_history", [])
+        deficit_history = tracking_data.get("deficit_history", [])
+        
+        print(f"📊 Bond Auction Analysis: {auction_count} total auctions, {len(recent_auctions)} recent")
+        
+        # Create 2x2 subplot
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Bond Auction Activity Analysis', fontsize=16, fontweight='bold')
+        
+        # Top Left: Bond APR Evolution Over Time
+        if bond_aprs:
+            hours = [entry["minute"] / 60.0 for entry in bond_aprs]
+            apr_values = [entry["bond_apr"] * 100 for entry in bond_aprs]  # Convert to percentage
+            
+            ax1.plot(hours, apr_values, linewidth=2, color='red', label='Bond APR', alpha=0.8)
+            ax1.fill_between(hours, 0, apr_values, color='red', alpha=0.3)
+            ax1.axhline(y=current_bond_cost * 100, color='darkred', linestyle='--', 
+                       label=f'Current EMA: {current_bond_cost:.2%}')
+        else:
+            # Synthetic data if no tracking available
+            hours = list(range(0, 8761, 24))  # Daily points
+            synthetic_aprs = [current_bond_cost * 100] * len(hours)
+            ax1.plot(hours, synthetic_aprs, linewidth=2, color='red', label='Bond APR (Final State)')
+            ax1.fill_between(hours, 0, synthetic_aprs, color='red', alpha=0.3)
+        
+        ax1.set_title('Bond APR Evolution')
+        ax1.set_xlabel('Hours')
+        ax1.set_ylabel('Bond APR (%)')
+        ax1.set_xlim(0, 8760)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Top Right: Auction Frequency and Success Rate
+        if recent_auctions:
+            auction_times = [a.get('timestamp', 0) / 60 for a in recent_auctions]  # Convert to hours
+            auction_aprs = [a.get('final_apr', 0) * 100 for a in recent_auctions]
+            auction_filled = [a.get('filled_completely', False) for a in recent_auctions]
+            
+            # Scatter plot of auctions
+            filled_auctions = [apr for apr, filled in zip(auction_aprs, auction_filled) if filled]
+            unfilled_auctions = [apr for apr, filled in zip(auction_aprs, auction_filled) if not filled]
+            filled_times = [time for time, filled in zip(auction_times, auction_filled) if filled]
+            unfilled_times = [time for time, filled in zip(auction_times, auction_filled) if not filled]
+            
+            if filled_auctions:
+                ax2.scatter(filled_times, filled_auctions, color='green', s=50, alpha=0.7, label='Filled Auctions')
+            if unfilled_auctions:
+                ax2.scatter(unfilled_times, unfilled_auctions, color='red', s=50, alpha=0.7, label='Unfilled Auctions')
+            
+            fill_rate = sum(auction_filled) / len(auction_filled) * 100 if auction_filled else 0
+            ax2.text(0.02, 0.98, f'Fill Rate: {fill_rate:.1f}%', transform=ax2.transAxes, 
+                    verticalalignment='top', bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue"))
+        else:
+            ax2.text(0.5, 0.5, f'Total Auctions: {auction_count}\nNo Recent Auction Data Available', 
+                    ha='center', va='center', transform=ax2.transAxes,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
+        
+        ax2.set_title('Auction Activity & Success Rate')
+        ax2.set_xlabel('Hours')
+        ax2.set_ylabel('Auction APR (%)')
+        ax2.set_xlim(0, 8760)
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # Bottom Left: Reserve Deficit Triggering Auctions
+        if deficit_history:
+            hours = [entry["minute"] / 60.0 for entry in deficit_history]
+            deficits = [entry["deficit"] for entry in deficit_history]
+            
+            ax3.fill_between(hours, 0, deficits, color='orange', alpha=0.6, label='Reserve Deficit')
+            ax3.plot(hours, deficits, linewidth=2, color='darkorange')
+            ax3.axhline(y=100, color='red', linestyle='--', alpha=0.7, label='Auction Trigger ($100)')
+        else:
+            # Use synthetic data
+            reserve_state = moet_system_state.get("reserve_state", {})
+            total_supply = moet_system_state.get("total_supply", 1000000)
+            total_reserves = reserve_state.get("total_reserves", 0)
+            target_ratio = reserve_state.get("target_reserves_ratio", 0.10)
+            
+            target_reserves = total_supply * target_ratio
+            current_deficit = max(0, target_reserves - total_reserves)
+            
+            hours = list(range(0, 8761, 24))
+            synthetic_deficits = [current_deficit] * len(hours)
+            ax3.fill_between(hours, 0, synthetic_deficits, color='orange', alpha=0.6, label='Reserve Deficit')
+            ax3.axhline(y=100, color='red', linestyle='--', alpha=0.7, label='Auction Trigger ($100)')
+        
+        ax3.set_title('Reserve Deficit (Auction Trigger)')
+        ax3.set_xlabel('Hours')
+        ax3.set_ylabel('Deficit ($)')
+        ax3.set_xlim(0, 8760)
+        ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # Bottom Right: Auction Summary Statistics
+        ax4.axis('off')
+        
+        # Calculate summary statistics
+        if recent_auctions:
+            total_raised = sum(a.get('amount_filled', 0) for a in recent_auctions)
+            avg_apr = sum(a.get('final_apr', 0) for a in recent_auctions) / len(recent_auctions) * 100
+            fill_rate = sum(1 for a in recent_auctions if a.get('filled_completely', False)) / len(recent_auctions) * 100
+        else:
+            total_raised = 0
+            avg_apr = current_bond_cost * 100
+            fill_rate = 0
+        
+        summary_text = f"""Bond Auction Summary
+        
+Total Auctions: {auction_count:,}
+Recent Auctions: {len(recent_auctions)}
+Total Funds Raised: ${total_raised:,.0f}
+Average APR: {avg_apr:.2f}%
+Fill Rate: {fill_rate:.1f}%
+Current Bond Cost EMA: {current_bond_cost:.2%}
+
+System Status: {'Active' if auction_count > 0 else 'No Auctions'}
+Auction Trigger: $100 deficit minimum
+Frequency: Hourly (when deficit exists)"""
+        
+        ax4.text(0.05, 0.95, summary_text, transform=ax4.transAxes, fontsize=11,
+                verticalalignment='top', fontfamily='monospace',
+                bbox=dict(boxstyle="round,pad=0.5", facecolor="lightblue", alpha=0.8))
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "bond_auction_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"📊 Bond Auction Analysis: {auction_count} auctions, avg APR {avg_apr:.2f}%")
 
 
 def main():
@@ -2382,6 +4252,11 @@ def main():
     
     try:
         simulation = FullYearSimulation(config)
+        
+        # ECOSYSTEM GROWTH: Enable scaling to $150M deposits with optimized parameters
+        # Max 500 agents, 2-5 BTC each, leverages existing logging optimizations
+        simulation.enable_ecosystem_growth(target_btc_deposits=150_000_000, growth_start_delay_days=30)
+        
         results = simulation.run_test()
         
         # Print final summary

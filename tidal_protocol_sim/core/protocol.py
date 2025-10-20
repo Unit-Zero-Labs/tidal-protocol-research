@@ -216,6 +216,120 @@ class TidalProtocol:
         """Get comprehensive MOET system state"""
         return self.moet_system.get_state()
     
+    def mint_moet_from_deposit(self, usdc_amount: float, usdf_amount: float) -> dict:
+        """Mint MOET from USDC/USDF deposit through enhanced Redeemer"""
+        if self.enable_advanced_moet:
+            from .moet import DepositResult
+            result = self.moet_system.mint_from_deposit(usdc_amount, usdf_amount)
+            return {
+                'success': True,
+                'moet_minted': result.moet_minted,
+                'total_fee': result.total_fee,
+                'base_fee': result.base_fee,
+                'imbalance_fee': result.imbalance_fee,
+                'fee_percentage': result.fee_percentage,
+                'is_balanced': result.is_balanced,
+                'post_deviation': result.post_deviation
+            }
+        else:
+            # Legacy 1:1 minting
+            total_deposit = usdc_amount + usdf_amount
+            self.moet_system.mint(total_deposit)
+            return {
+                'success': True,
+                'moet_minted': total_deposit,
+                'total_fee': 0.0,
+                'base_fee': 0.0,
+                'imbalance_fee': 0.0,
+                'fee_percentage': 0.0,
+                'is_balanced': True,
+                'post_deviation': 0.0
+            }
+    
+    def redeem_moet_for_assets(self, moet_amount: float, desired_asset: str = "proportional") -> dict:
+        """Redeem MOET for underlying assets through enhanced Redeemer"""
+        if self.enable_advanced_moet:
+            from .moet import RedemptionResult
+            result = self.moet_system.redeem_for_assets(moet_amount, desired_asset)
+            return {
+                'success': result.usdc_received > 0 or result.usdf_received > 0,
+                'usdc_received': result.usdc_received,
+                'usdf_received': result.usdf_received,
+                'total_fee': result.total_fee,
+                'base_fee': result.base_fee,
+                'imbalance_fee': result.imbalance_fee,
+                'fee_percentage': result.fee_percentage,
+                'is_proportional': result.is_proportional,
+                'post_deviation': result.post_deviation
+            }
+        else:
+            # Legacy proportional redemption
+            result = self.moet_system.burn(moet_amount)
+            return {
+                'success': result > 0,
+                'usdc_received': result * 0.5,
+                'usdf_received': result * 0.5,
+                'total_fee': 0.0,
+                'base_fee': 0.0,
+                'imbalance_fee': 0.0,
+                'fee_percentage': 0.0,
+                'is_proportional': True,
+                'post_deviation': 0.0
+            }
+    
+    def estimate_deposit_fee(self, usdc_amount: float, usdf_amount: float) -> dict:
+        """Estimate fees for a potential MOET deposit"""
+        if self.enable_advanced_moet and hasattr(self.moet_system, 'redeemer') and self.moet_system.redeemer:
+            return self.moet_system.redeemer.estimate_deposit_fee(usdc_amount, usdf_amount)
+        else:
+            return {
+                'total_fee': 0.0,
+                'base_fee': 0.0,
+                'imbalance_fee': 0.0,
+                'fee_percentage': 0.0,
+                'is_balanced': True,
+                'post_deviation': 0.0
+            }
+    
+    def estimate_redemption_fee(self, moet_amount: float, desired_asset: str = "proportional") -> dict:
+        """Estimate fees for a potential MOET redemption"""
+        if self.enable_advanced_moet and hasattr(self.moet_system, 'redeemer') and self.moet_system.redeemer:
+            return self.moet_system.redeemer.estimate_redemption_fee(moet_amount, desired_asset)
+        else:
+            return {
+                'total_fee': 0.0,
+                'base_fee': 0.0,
+                'imbalance_fee': 0.0,
+                'fee_percentage': 0.0,
+                'is_proportional': True,
+                'post_deviation': 0.0
+            }
+    
+    def get_redeemer_pool_weights(self) -> dict:
+        """Get current USDC/USDF pool composition from Redeemer"""
+        if self.enable_advanced_moet and hasattr(self.moet_system, 'redeemer') and self.moet_system.redeemer:
+            return self.moet_system.redeemer.get_current_pool_weights()
+        else:
+            return {
+                'usdc_ratio': 0.50,
+                'usdf_ratio': 0.50,
+                'ideal_usdc_ratio': 0.50,
+                'ideal_usdf_ratio': 0.50,
+                'weight_deviation': 0.0
+            }
+    
+    def get_optimal_deposit_ratio(self, total_amount: float) -> dict:
+        """Get optimal deposit composition to minimize fees"""
+        if self.enable_advanced_moet and hasattr(self.moet_system, 'redeemer') and self.moet_system.redeemer:
+            return self.moet_system.redeemer.get_optimal_deposit_ratio(total_amount)
+        else:
+            return {
+                'usdc_amount': total_amount * 0.50,
+                'usdf_amount': total_amount * 0.50,
+                'estimated_fee': 0.0,
+                'fee_percentage': 0.0
+            }
+    
     def _accrue_interest(self, asset: Asset):
         """Accrue interest for an asset pool"""
         if asset not in self.asset_pools:
