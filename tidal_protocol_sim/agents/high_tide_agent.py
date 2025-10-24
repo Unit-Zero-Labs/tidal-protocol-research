@@ -199,7 +199,8 @@ class HighTideAgent(BaseAgent):
         engine_allows_rebalancing = getattr(self.engine.state, 'allow_agent_rebalancing', True) if self.engine else True
         
         if not engine_allows_rebalancing and needs_rebalancing:
-            # Silently block rebalancing during oracle-only windows
+            # Log when rebalancing is blocked by engine gate
+            print(f"        🚫 {self.agent_id}: Rebalancing BLOCKED by engine gate (HF {self.state.health_factor:.3f})")
             return False
         
         # Debug logging for rebalancing decisions

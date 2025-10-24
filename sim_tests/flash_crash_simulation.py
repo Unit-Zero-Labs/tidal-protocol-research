@@ -893,7 +893,8 @@ class FlashCrashSimulation:
                 self._process_arbitrage_agents(minute, engine)
             
             # Record detailed crash metrics
-            if minute % self.config.collect_pool_state_every_n_minutes == 0:
+            # CRITICAL: Record EVERY minute during crash to capture pool price changes from agent trading
+            if self._is_crash_active(minute) or minute % self.config.collect_pool_state_every_n_minutes == 0:
                 self._record_crash_metrics(minute, engine, btc_price, true_yt_price, manipulated_yt_price)
             
             # Progress reporting
@@ -1045,12 +1046,12 @@ class FlashCrashSimulation:
         avg_health_factor = np.mean([agent.state.health_factor for agent in active_agents]) if active_agents else 0
         liquidatable_count = sum(1 for agent in active_agents if agent.state.health_factor < 1.0)
         
-        # Pool state metrics
+        # Pool state metrics - CRITICAL: Use uniswap_pool.get_price() to get REAL-TIME price
         pool_yt_price = 1.0  # Default
         if engine.yield_token_pool:
             try:
-                pool_state = engine.yield_token_pool.get_pool_state()
-                pool_yt_price = pool_state.get("yield_token_price", 1.0)
+                # Use uniswap_pool.get_price() directly to capture actual trading activity
+                pool_yt_price = engine.yield_token_pool.uniswap_pool.get_price()
             except:
                 pass
         
@@ -1490,17 +1491,22 @@ class FlashCrashSimulation:
                  label='Pool YT Price', alpha=0.9, zorder=3)
         
         # Show FULL oracle manipulation line (not just where it differs)
+        # CRITICAL: Convert oracle price from $/YT to YT/$ to match pool price units
         if "manipulated_yt_price" in df.columns:
-            # Plot the entire manipulated price line to show wicks clearly
-            ax1.plot(df["minute"], df["manipulated_yt_price"], 
-                    linewidth=2, color='red', label='Oracle Price (Manipulated)', 
+            # Convert oracle price to YT/MOET units (1/oracle_price) to match pool price
+            oracle_in_pool_units = 1.0 / df["manipulated_yt_price"]
+            ax1.plot(df["minute"], oracle_in_pool_units, 
+                    linewidth=2, color='red', label='Oracle Price (Manipulated, YT/$)', 
                     alpha=0.8, linestyle='--', zorder=4)
             
             # Highlight wicks with vertical lines for emphasis
             wick_data = df[abs(df["manipulated_yt_price"] - df["true_yt_price"]) > 0.05]  # Significant deviations
             for _, row in wick_data.iterrows():
+                # Convert both prices to YT/$ units for the wick lines
+                true_in_pool_units = 1.0 / row["true_yt_price"]
+                manip_in_pool_units = 1.0 / row["manipulated_yt_price"]
                 ax1.plot([row["minute"], row["minute"]], 
-                        [row["true_yt_price"], row["manipulated_yt_price"]], 
+                        [true_in_pool_units, manip_in_pool_units], 
                         color='darkred', linewidth=1, alpha=0.4, zorder=1)
         
         # Mark crash window
@@ -1516,6 +1522,9 @@ class FlashCrashSimulation:
             true_price = params.get('true_price', 1.0)
             minute = event.get('minute', 0)
             
+            # Convert true_price from $/YT to YT/$ to match chart units
+            true_price_in_pool_units = 1.0 / true_price if true_price > 0 else 1.0
+            
             color = 'darkgreen' if direction == 'sell_yt_for_moet' else 'orange'
             marker = '^' if direction == 'sell_yt_for_moet' else 'v'
             label = ""
@@ -1526,7 +1535,7 @@ class FlashCrashSimulation:
                 label = "ALM Buy YT"
                 alm_buy_labeled = True
             ax1.axvline(x=minute, color=color, linestyle='--', alpha=0.5, linewidth=1)
-            ax1.scatter(minute, true_price, color=color, s=100, 
+            ax1.scatter(minute, true_price_in_pool_units, color=color, s=100, 
                        marker=marker, zorder=5, label=label, edgecolors='black', linewidths=1)
         
         # Mark Algo rebalancing events
@@ -1538,6 +1547,9 @@ class FlashCrashSimulation:
             true_price = params.get('true_price', 1.0)
             minute = event.get('minute', 0)
             
+            # Convert true_price from $/YT to YT/$ to match chart units
+            true_price_in_pool_units = 1.0 / true_price if true_price > 0 else 1.0
+            
             color = 'purple' if direction == 'sell_yt_for_moet' else 'brown'
             marker = 's' if direction == 'sell_yt_for_moet' else 'D'
             label = ""
@@ -1548,12 +1560,12 @@ class FlashCrashSimulation:
                 label = "Algo Buy YT"
                 algo_buy_labeled = True
             ax1.axvline(x=minute, color=color, linestyle=':', alpha=0.5, linewidth=1)
-            ax1.scatter(minute, true_price, color=color, s=100, 
+            ax1.scatter(minute, true_price_in_pool_units, color=color, s=100, 
                        marker=marker, zorder=5, label=label, edgecolors='black', linewidths=1)
         
         ax1.set_xlabel('Minutes')
-        ax1.set_ylabel('YT Price ($)')
-        ax1.set_title('YT Price Evolution: True vs Pool vs Oracle')
+        ax1.set_ylabel('Pool Price (YT/$)')
+        ax1.set_title('MOET:YT Pool Price vs Oracle (Units: YT per $1 MOET)')
         ax1.legend(loc='best', fontsize=9)
         ax1.grid(True, alpha=0.3)
         
@@ -2038,40 +2050,40 @@ class FlashCrashSimulation:
         colors = plt.cm.tab20(np.linspace(0, 1, len(agents_to_track)))
         
         # CHART 1: Health Factor Trajectories for Liquidated Agents
+        # CRITICAL FIX: Use ACTUAL health factor data from sampled_agents, not synthetic estimates
         for idx, agent_id in enumerate(agents_to_track):
             # Get liquidation timing for this agent
             agent_liqs = liq_df[liq_df["agent_id"] == agent_id].sort_values("minute")
-            first_liq_minute = agent_liqs["minute"].min()
-            last_liq_minute = agent_liqs["minute"].max()
             
-            # Create estimated HF trajectory
-            # Start from initial HF, decline during crash, liquidate
-            minutes_timeline = list(range(0, int(last_liq_minute) + 30))
+            # Map agent_id (e.g., "flash_crash_agent_33") to agent_key (e.g., "agent_33")
+            agent_key = f"agent_{agent_id.split('_')[-1]}"
+            
+            # Extract ACTUAL health factor data from detailed_logs
             hf_timeline = []
+            minutes_timeline = []
             
-            for minute in minutes_timeline:
-                if minute < self.config.crash_start_minute:
-                    # Pre-crash: stable at initial HF with small variations
-                    hf = self.config.agent_initial_hf - 0.01 * np.random.random()
-                elif minute < first_liq_minute:
-                    # During crash, declining toward liquidation
-                    crash_progress = (minute - self.config.crash_start_minute) / (first_liq_minute - self.config.crash_start_minute)
-                    hf = self.config.agent_initial_hf - (self.config.agent_initial_hf - 1.0) * crash_progress
-                else:
-                    # After first liquidation, partial recovery
-                    num_liqs_so_far = len(agent_liqs[agent_liqs["minute"] <= minute])
-                    hf = 1.0 + 0.02 * num_liqs_so_far  # Small boost from debt repayment
+            for log_entry in self.results["detailed_logs"]:
+                if "sampled_agents" in log_entry and agent_key in log_entry["sampled_agents"]:
+                    agent_data = log_entry["sampled_agents"][agent_key]
+                    # Show data even after agent becomes inactive (to see full trajectory to liquidation)
+                    minutes_timeline.append(log_entry["minute"])
+                    hf_timeline.append(agent_data["health_factor"])
+            
+            if hf_timeline:
+                # Plot the ACTUAL trajectory
+                ax1.plot(minutes_timeline, hf_timeline, linewidth=1.5, color=colors[idx], 
+                        alpha=0.7, label=f'{agent_id}' if idx < 5 else "")
                 
-                hf_timeline.append(max(0.98, min(hf, 1.2)))
-            
-            # Plot the trajectory
-            ax1.plot(minutes_timeline, hf_timeline, linewidth=1.5, color=colors[idx], 
-                    alpha=0.7, label=f'{agent_id}' if idx < 5 else "")
-            
-            # Mark liquidation points
-            for _, liq in agent_liqs.iterrows():
-                ax1.scatter([liq["minute"]], [1.0], color=colors[idx], s=80, marker='X', 
-                           alpha=0.8, zorder=5)
+                # Mark liquidation points
+                for _, liq in agent_liqs.iterrows():
+                    # Find the actual HF at liquidation time (or close to it)
+                    liq_minute = liq["minute"]
+                    closest_idx = min(range(len(minutes_timeline)), 
+                                     key=lambda i: abs(minutes_timeline[i] - liq_minute))
+                    liq_hf = hf_timeline[closest_idx] if closest_idx < len(hf_timeline) else 1.0
+                    
+                    ax1.scatter([liq_minute], [liq_hf], color=colors[idx], s=80, marker='X', 
+                               alpha=0.8, zorder=5)
         
         # Add reference lines
         ax1.axhline(y=self.config.agent_initial_hf, color='green', linestyle='-', alpha=0.5, 
@@ -2212,7 +2224,9 @@ class FlashCrashSimulation:
             for log_entry in self.results["detailed_logs"]:
                 if "sampled_agents" in log_entry and agent_key in log_entry["sampled_agents"]:
                     agent_data = log_entry["sampled_agents"][agent_key]
-                    if agent_data["active"]:
+                    # CRITICAL FIX: For liquidated agents, show data even after they become inactive
+                    # This allows the chart to show the full decline to liquidation
+                    if liquidated or agent_data["active"]:
                         agent_minutes.append(log_entry["minute"] / 60.0)
                         agent_hf_data.append(agent_data["health_factor"])
             
@@ -2221,9 +2235,12 @@ class FlashCrashSimulation:
                 ax2.plot(agent_minutes, agent_hf_data, linewidth=1.5, 
                         color=colors[i % len(colors)], label=f'Agent {agent_num}', alpha=0.7)
         
-        ax2.axhline(y=1.1, color='blue', linestyle='--', linewidth=1.5, label='Initial HF', alpha=0.7)
-        ax2.axhline(y=1.04, color='green', linestyle='--', linewidth=1.5, label='Target HF', alpha=0.7)
-        ax2.axhline(y=1.025, color='red', linestyle=':', linewidth=1.5, label='Rebalancing HF', alpha=0.7)
+        ax2.axhline(y=self.config.agent_initial_hf, color='blue', linestyle='--', linewidth=1.5, 
+                   label=f'Initial HF ({self.config.agent_initial_hf})', alpha=0.7)
+        ax2.axhline(y=self.config.agent_target_hf, color='green', linestyle='--', linewidth=1.5, 
+                   label=f'Target HF ({self.config.agent_target_hf})', alpha=0.7)
+        ax2.axhline(y=self.config.agent_rebalancing_hf, color='red', linestyle=':', linewidth=1.5, 
+                   label=f'Rebalancing HF ({self.config.agent_rebalancing_hf})', alpha=0.7)
         ax2.axhline(y=1.0, color='darkred', linestyle='--', linewidth=2, label='Liquidation', alpha=0.8)
         
         ax2.set_title('Agent Health Factor Evolution', fontsize=12, fontweight='bold')
@@ -2240,7 +2257,8 @@ class FlashCrashSimulation:
             for log_entry in self.results["detailed_logs"]:
                 if "sampled_agents" in log_entry and agent_key in log_entry["sampled_agents"]:
                     agent_data = log_entry["sampled_agents"][agent_key]
-                    if agent_data["active"]:
+                    # CRITICAL FIX: For liquidated agents, show data even after they become inactive
+                    if liquidated or agent_data["active"]:
                         agent_minutes.append(log_entry["minute"] / 60.0)
                         agent_net_pos.append(agent_data["net_position"])
             
@@ -2264,7 +2282,8 @@ class FlashCrashSimulation:
             for log_entry in self.results["detailed_logs"]:
                 if "sampled_agents" in log_entry and agent_key in log_entry["sampled_agents"]:
                     agent_data = log_entry["sampled_agents"][agent_key]
-                    if agent_data["active"]:
+                    # CRITICAL FIX: For liquidated agents, show data even after they become inactive
+                    if liquidated or agent_data["active"]:
                         agent_minutes.append(log_entry["minute"] / 60.0)
                         agent_yt_value.append(agent_data["yt_value"])
             
@@ -2396,167 +2415,6 @@ class FlashCrashSimulation:
         plt.close()
         
         print(f"📊 Rebalancing Analysis: {len(slippage_costs):,} events, avg slippage ${mean_slippage:.3f}, avg amount ${mean_amount:.0f}")
-        if liq_events:
-            liq_df = pd.DataFrame(liq_events)
-            liq_df["slippage_pct"] = (liq_df["btc_value_gross"] - liq_df["btc_value_net"]) / liq_df["btc_value_gross"] * 100
-            
-            # Group by time windows
-            time_window = 60  # 60 minute windows
-            liq_df["time_window"] = (liq_df["minute"] // time_window) * time_window
-            avg_slippage_over_time = liq_df.groupby("time_window")["slippage_pct"].mean()
-            
-            ax2.plot(avg_slippage_over_time.index, avg_slippage_over_time.values, 
-                    linewidth=2.5, color='#3498db', marker='o', markersize=6)
-            ax2.axvspan(self.config.crash_start_minute, self.config.crash_end_minute, 
-                       alpha=0.2, color='red', label='Crash Window', zorder=0)
-            ax2.set_xlabel('Time (hours)', fontsize=10)
-            ax2.set_ylabel('Avg Slippage (%)', fontsize=10)
-            ax2.set_title('Average Slippage Cost Over Time', fontsize=11, fontweight='bold')
-            ax2.grid(True, alpha=0.3)
-            ax2.legend(loc='best')
-            
-            # Convert minutes to hours for x-axis
-            ax2.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x/60)}h'))
-        else:
-            ax2.text(0.5, 0.5, 'No liquidation events', ha='center', va='center', 
-                    transform=ax2.transAxes, fontsize=12)
-            ax2.set_title('Average Slippage Cost Over Time', fontsize=11, fontweight='bold')
-        
-        # CHART 3: Distribution of Rebalance Amounts
-        ax3 = fig.add_subplot(gs[0, 2])
-        if liq_events:
-            liq_df = pd.DataFrame(liq_events)
-            rebalance_amounts = liq_df["debt_reduction"].values
-            
-            ax3.hist(rebalance_amounts, bins=40, color='#2ecc71', alpha=0.7, edgecolor='black')
-            ax3.set_xlabel('MOET Raised ($)', fontsize=10)
-            ax3.set_ylabel('Frequency', fontsize=10)
-            ax3.set_title('Distribution of Rebalance Amounts', fontsize=11, fontweight='bold')
-            ax3.grid(True, alpha=0.3, axis='y')
-            ax3.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
-            
-            # Add statistics
-            mean_rebal = np.mean(rebalance_amounts)
-            median_rebal = np.median(rebalance_amounts)
-            max_rebal = np.max(rebalance_amounts)
-            ax3.text(0.65, 0.95, f'Mean: ${mean_rebal:,.0f}\nMax: ${max_rebal:,.0f}\nMedian: ${median_rebal:,.0f}',
-                    transform=ax3.transAxes, fontsize=9, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        else:
-            ax3.text(0.5, 0.5, 'No liquidation events', ha='center', va='center', 
-                    transform=ax3.transAxes, fontsize=12)
-            ax3.set_title('Distribution of Rebalance Amounts', fontsize=11, fontweight='bold')
-        
-        # CHART 4: Average Rebalance Amount Over Time
-        ax4 = fig.add_subplot(gs[1, :])
-        if liq_events:
-            liq_df = pd.DataFrame(liq_events)
-            
-            # Group by time windows
-            time_window = 60  # 60 minute windows
-            liq_df["time_window"] = (liq_df["minute"] // time_window) * time_window
-            avg_amount_over_time = liq_df.groupby("time_window")["debt_reduction"].mean()
-            
-            ax4.plot(avg_amount_over_time.index, avg_amount_over_time.values / 1000, 
-                    linewidth=3, color='#f39c12', marker='o', markersize=7, alpha=0.8)
-            ax4.axvspan(self.config.crash_start_minute, self.config.crash_end_minute, 
-                       alpha=0.2, color='red', label='Crash Window', zorder=0)
-            ax4.set_xlabel('Time (hours)', fontsize=11)
-            ax4.set_ylabel('Avg MOET Raised ($K)', fontsize=11)
-            ax4.set_title('Average Rebalance Amount Over Time', fontsize=12, fontweight='bold')
-            ax4.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:.0f}K'))
-            ax4.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x/60)}h'))
-            ax4.grid(True, alpha=0.3)
-            ax4.legend(loc='best')
-        else:
-            ax4.text(0.5, 0.5, 'No liquidation events', ha='center', va='center', 
-                    transform=ax4.transAxes, fontsize=12)
-            ax4.set_title('Average Rebalance Amount Over Time', fontsize=12, fontweight='bold')
-        
-        # CHART 5: Rebalance Frequency (Liquidations per hour)
-        ax5 = fig.add_subplot(gs[2, 0])
-        if liq_events:
-            liq_df = pd.DataFrame(liq_events)
-            liq_df["hour"] = liq_df["minute"] // 60
-            rebal_freq = liq_df.groupby("hour").size()
-            
-            ax5.bar(rebal_freq.index, rebal_freq.values, color='#9b59b6', alpha=0.7, edgecolor='black')
-            ax5.axvspan(self.config.crash_start_minute / 60, self.config.crash_end_minute / 60, 
-                       alpha=0.2, color='red', label='Crash Window', zorder=0)
-            ax5.set_xlabel('Time (hours)', fontsize=10)
-            ax5.set_ylabel('Liquidation Events', fontsize=10)
-            ax5.set_title('Rebalancing Activity Frequency', fontsize=11, fontweight='bold')
-            ax5.grid(True, alpha=0.3, axis='y')
-            ax5.legend(loc='best')
-        else:
-            ax5.text(0.5, 0.5, 'No liquidation events', ha='center', va='center', 
-                    transform=ax5.transAxes, fontsize=12)
-            ax5.set_title('Rebalancing Activity Frequency', fontsize=11, fontweight='bold')
-        
-        # CHART 6: Total Slippage Cost Over Time (Cumulative)
-        ax6 = fig.add_subplot(gs[2, 1])
-        if liq_events:
-            liq_df = pd.DataFrame(liq_events)
-            liq_df["slippage_cost"] = liq_df["btc_value_gross"] - liq_df["btc_value_net"]
-            liq_df_sorted = liq_df.sort_values("minute")
-            liq_df_sorted["cumulative_slippage"] = liq_df_sorted["slippage_cost"].cumsum()
-            
-            ax6.plot(liq_df_sorted["minute"], liq_df_sorted["cumulative_slippage"] / 1000, 
-                    linewidth=2.5, color='#e74c3c', alpha=0.8)
-            ax6.axvspan(self.config.crash_start_minute, self.config.crash_end_minute, 
-                       alpha=0.2, color='orange', label='Crash Window', zorder=0)
-            ax6.set_xlabel('Time (hours)', fontsize=10)
-            ax6.set_ylabel('Cumulative Slippage Cost ($K)', fontsize=10)
-            ax6.set_title('Total Slippage Costs Accumulated', fontsize=11, fontweight='bold')
-            ax6.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:.0f}K'))
-            ax6.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x/60)}h'))
-            ax6.grid(True, alpha=0.3)
-            ax6.legend(loc='best')
-        else:
-            ax6.text(0.5, 0.5, 'No liquidation events', ha='center', va='center', 
-                    transform=ax6.transAxes, fontsize=12)
-            ax6.set_title('Total Slippage Costs Accumulated', fontsize=11, fontweight='bold')
-        
-        # CHART 7: Summary Statistics
-        ax7 = fig.add_subplot(gs[2, 2])
-        ax7.axis('off')
-        
-        if liq_events:
-            liq_df = pd.DataFrame(liq_events)
-            
-            total_liquidations = len(liq_df)
-            total_value_liquidated = liq_df["btc_value_gross"].sum()
-            total_slippage = (liq_df["btc_value_gross"] - liq_df["btc_value_net"]).sum()
-            avg_slippage_pct = (total_slippage / total_value_liquidated) * 100
-            unique_agents = len(liq_df["agent_id"].unique())
-            
-            summary_text = (
-                f"SLIPPAGE SUMMARY\n"
-                f"{'='*30}\n\n"
-                f"Total Liquidation Events: {total_liquidations}\n"
-                f"Unique Agents Liquidated: {unique_agents}\n\n"
-                f"Total Value Liquidated: ${total_value_liquidated:,.0f}\n"
-                f"Total Slippage Cost: ${total_slippage:,.0f}\n\n"
-                f"Average Slippage: {avg_slippage_pct:.2f}%\n"
-                f"Slippage as % of Value: {(total_slippage/total_value_liquidated)*100:.2f}%"
-            )
-        else:
-            summary_text = "No liquidation events to analyze"
-        
-        ax7.text(0.5, 0.5, summary_text, 
-                ha='center', va='center', fontsize=11, fontweight='bold',
-                bbox=dict(boxstyle='round,pad=1.5', facecolor='lightblue', alpha=0.3, 
-                         edgecolor='black', linewidth=2),
-                transform=ax7.transAxes, family='monospace')
-        
-        # Use plt.savefig with bbox_inches='tight' instead of tight_layout to avoid warning
-        plt.savefig(output_dir / "agent_slippage_analysis.png", dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        if liq_events:
-            print(f"📊 Agent Slippage Analysis: {total_liquidations} events, ${total_slippage:,.0f} total slippage")
-        else:
-            print(f"📊 Agent Slippage Analysis: No liquidation events")
     
     def _print_crash_summary(self):
         """Print comprehensive crash test summary"""

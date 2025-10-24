@@ -217,7 +217,7 @@ class ALMRebalancer(BaseAgent):
         # Check if it's time for scheduled rebalancing
         if current_minute >= self.next_rebalance_minute:
             # Calculate true yield token price and pool price
-            true_yt_price = self._calculate_true_yield_token_price(current_minute, protocol_state)
+            true_yt_price = self._calculate_true_yield_token_price(current_minute)
             pool_yt_price = self._get_pool_yield_token_price()
             
             if true_yt_price is None:
@@ -250,15 +250,8 @@ class ALMRebalancer(BaseAgent):
         
         return (AgentAction.HOLD, {})
     
-    def _calculate_true_yield_token_price(self, current_minute: int, protocol_state: dict = None) -> Optional[float]:
-        """Calculate the true yield token price - supports oracle override for stress testing"""
-        
-        # Check if oracle price override is provided (for flash crash scenarios)
-        if protocol_state and "oracle_yt_price" in protocol_state:
-            oracle_price = protocol_state["oracle_yt_price"]
-            return oracle_price
-        
-        # Normal operation: use mathematical price based on 10% APR
+    def _calculate_true_yield_token_price(self, current_minute: int) -> Optional[float]:
+        """Calculate the true yield token price based on 10% APR"""
         return calculate_true_yield_token_price(current_minute, 0.10, 1.0)
     
     def _get_pool_yield_token_price(self) -> Optional[float]:
@@ -578,47 +571,26 @@ class AlgoRebalancer(BaseAgent):
         current_minute = protocol_state.get("current_minute", 0)
         
         # Calculate true yield token price and pool price
-        true_yt_price = self._calculate_true_yield_token_price(current_minute, protocol_state)
+        true_yt_price = self._calculate_true_yield_token_price(current_minute)
         pool_yt_price = self._get_pool_yield_token_price()
         
         if true_yt_price is None or pool_yt_price is None:
             return (AgentAction.HOLD, {})
         
-        # Calculate price deviation in same units
-        # Convert oracle price from $/YT to YT/$ to match pool convention
-        true_price_in_pool_units = 1.0 / true_yt_price  # Flip: $/YT → YT/$
-        price_deviation = abs(pool_yt_price - true_price_in_pool_units) / true_price_in_pool_units
-        
-        # DEBUG: Log during crash window
-        is_crash = 900 <= current_minute <= 925
-        if is_crash and current_minute % 5 == 0:  # Log every 5 minutes during crash
-            print(f"🔍 Algo Rebalancer (min {current_minute}): true=${true_yt_price:.3f} (={true_price_in_pool_units:.3f} YT/$), pool={pool_yt_price:.3f} YT/$, dev={price_deviation*100:.1f}%, thresh={self.deviation_threshold_decimal*100:.2f}%")
+        # Calculate price deviation
+        price_deviation = abs(pool_yt_price - true_yt_price) / true_yt_price
         
         # Only rebalance if deviation exceeds threshold
         if price_deviation >= self.deviation_threshold_decimal:
             rebalance_params = self._calculate_rebalance_amount(true_yt_price, pool_yt_price, current_minute)
             
-            if is_crash:
-                print(f"   → Rebalance amount: ${rebalance_params['amount']:,.0f}, min=${self.state.min_rebalance_amount:,.0f}")
-            
             if rebalance_params["amount"] >= self.state.min_rebalance_amount:
-                if is_crash:
-                    print(f"   ✅ EXECUTING REBALANCE")
                 return (AgentAction.SWAP, rebalance_params)
-            elif is_crash:
-                print(f"   ❌ Amount below minimum")
         
         return (AgentAction.HOLD, {})
     
-    def _calculate_true_yield_token_price(self, current_minute: int, protocol_state: dict = None) -> Optional[float]:
-        """Calculate the true yield token price - supports oracle override for stress testing"""
-        
-        # Check if oracle price override is provided (for flash crash scenarios)
-        if protocol_state and "oracle_yt_price" in protocol_state:
-            oracle_price = protocol_state["oracle_yt_price"]
-            return oracle_price
-        
-        # Normal operation: use mathematical price based on 10% APR
+    def _calculate_true_yield_token_price(self, current_minute: int) -> Optional[float]:
+        """Calculate the true yield token price based on 10% APR"""
         return calculate_true_yield_token_price(current_minute, 0.10, 1.0)
     
     def _get_pool_yield_token_price(self) -> Optional[float]:
@@ -637,29 +609,19 @@ class AlgoRebalancer(BaseAgent):
             return None
     
     def _calculate_rebalance_amount(self, true_price: float, pool_price: float, current_minute: int) -> Dict:
-        """Calculate optimal rebalance amount and direction
+        """Calculate optimal rebalance amount and direction"""
         
-        CRITICAL: Price convention handling
-        - true_price: Oracle price in $/YT (e.g., 0.68 means 1 YT = $0.68)
-        - pool_price: Pool price in YT/$ (e.g., 0.905 means 0.905 YT per $1)
-        - Need to flip true_price to compare: 1/true_price = YT/$
-        """
-        
-        # Convert oracle price from $/YT to YT/$ to match pool convention
-        true_price_in_pool_units = 1.0 / true_price  # Flip: $/YT → YT/$
-        
-        # Now compare in same units (both YT/$)
-        if pool_price > true_price_in_pool_units:
-            # Pool has too many YT per dollar → BUY YT to reduce ratio
+        # FIXED: Correct arbitrage direction logic for Algo rebalancer
+        if pool_price > true_price:
+            # Pool YT is overpriced -> buy YT from pool (remove supply) to lower pool price
             direction = "buy_yt_with_moet"
-            price_diff_pct = (pool_price - true_price_in_pool_units) / true_price_in_pool_units
+            price_diff_pct = (pool_price - true_price) / true_price
         else:
-            # Pool has too few YT per dollar → SELL YT to increase ratio
+            # Pool YT is underpriced -> mint YT externally + sell to pool (add supply) to raise pool price
             direction = "sell_yt_for_moet" 
-            price_diff_pct = (true_price_in_pool_units - pool_price) / true_price_in_pool_units
+            price_diff_pct = (true_price - pool_price) / true_price
         
         # Calculate exact rebalance amount using proper Uniswap V3 math
-        # Pass ORIGINAL true_price ($/YT) - the swap calculation function handles conversion
         rebalance_amount = self._calculate_exact_swap_amount_for_target_price(
             pool_price, true_price, direction
         )
@@ -738,10 +700,7 @@ class AlgoRebalancer(BaseAgent):
                     
             else:  # buy_yt_with_moet
                 # Buy YT from pool with MOET
-                print(f"   🔍 Algo: Attempting to buy YT with ${amount:,.2f} MOET")
-                print(f"   🔍 Algo balance: ${self.state.moet_balance:,.2f} MOET")
                 yt_received = self.yield_token_pool.execute_yield_token_purchase(amount)
-                print(f"   🔍 YT received from pool: {yt_received:.4f}")
                 
                 if yt_received > 0:
                     # Step 1: Show initial state
@@ -781,15 +740,9 @@ class AlgoRebalancer(BaseAgent):
                     
                     self._record_rebalance(params, profit, amount)
                     return True
-                else:
-                    print(f"   ❌ Algo: Pool returned {yt_received:.6f} YT (FAILED)")
-                    print(f"   ❌ Pool may have insufficient YT liquidity or swap failed")
-                    return False
                     
         except Exception as e:
-            print(f"❌ Algo Rebalancer execution error: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Algo Rebalancer execution error: {e}")
             return False
             
         return False
@@ -1187,22 +1140,10 @@ class PoolRebalancerManager:
         
         # Process Algo rebalancer
         algo_action, algo_params = self.algo_rebalancer.decide_action(enhanced_protocol_state, asset_prices)
-        
-        # DEBUG: Log Algo rebalancer decision during crash
-        is_crash = 900 <= current_time <= 925
-        if is_crash and current_time % 5 == 0:
-            dev_bps = enhanced_protocol_state.get("deviation_bps", 0)
-            amount = algo_params.get('amount', 0)
-            min_amt = self.algo_rebalancer.state.min_rebalance_amount
-            print(f"🔍🔍 Algo decide_action() returns: {algo_action}, Amount: ${amount:,.2f}, Min: ${min_amt:,.2f}")
-            print(f"       Passes amount check: {amount > 0}, Passes action check: {algo_action == AgentAction.SWAP}")
-        
         if algo_action == AgentAction.SWAP and algo_params.get("amount", 0) > 0:
             # Add simulation_duration to params for arbitrage delay processing
             algo_params["simulation_duration"] = simulation_duration
             success = self.algo_rebalancer.execute_rebalance(algo_params)
-            if is_crash:
-                print(f"       → execute_rebalance() returned: {success}")
             if success:
                 rebalancing_events.append({
                     "rebalancer": "Algo",

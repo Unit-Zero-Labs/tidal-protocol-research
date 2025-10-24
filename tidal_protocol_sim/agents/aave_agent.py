@@ -274,15 +274,24 @@ class AaveAgent(BaseAgent):
             current_minute
         )
         
+        # Calculate net position value properly (matches High Tide methodology)
+        # Net position = BTC value + YT value - Debt
+        btc_price = asset_prices.get(Asset.BTC, 100_000.0)
+        btc_amount = self.state.supplied_balances.get(Asset.BTC, 0.0)
+        btc_value = btc_amount * btc_price
+        yt_value = yield_summary.get("total_current_value", 0.0)
+        debt_value = self.state.moet_debt
+        net_position_value = btc_value + yt_value - debt_value
+        
         aave_metrics = {
             "risk_profile": self.risk_profile,
             "color": self.color,
             "initial_health_factor": self.state.initial_health_factor,
             "target_health_factor": self.state.target_health_factor,
-            "btc_amount": self.state.supplied_balances.get(Asset.BTC, 0.0),  # Current amount (may be reduced)
+            "btc_amount": btc_amount,  # Current amount (may be reduced)
             "initial_btc_amount": 1.0,  # Always started with 1 BTC
             "initial_moet_debt": self.state.initial_moet_debt,
-            "current_moet_debt": self.state.moet_debt,
+            "current_moet_debt": debt_value,
             "total_interest_accrued": self.state.total_interest_accrued,
             "yield_token_portfolio": yield_summary,
             "total_yield_sold": 0.0,  # AAVE agents don't sell yield tokens
@@ -290,7 +299,7 @@ class AaveAgent(BaseAgent):
             "total_liquidated_collateral": self.state.total_liquidated_collateral,
             "liquidation_penalties": self.state.liquidation_penalties,
             "cost_of_liquidation": cost_of_liquidation,
-            "net_position_value": 100_000.0 - cost_of_liquidation,
+            "net_position_value": net_position_value,  # Properly calculated net position
             "automatic_rebalancing": False
         }
         
