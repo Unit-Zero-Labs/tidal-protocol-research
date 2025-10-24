@@ -90,9 +90,7 @@ class YieldTokenManager:
             actual_yield_tokens_received = self.yield_token_pool.execute_yield_token_purchase(moet_amount)
         
         if actual_yield_tokens_received <= 0:
-            # Pool exhausted - return empty list gracefully (for crash scenarios)
-            print(f"   ⚠️  Pool exhausted: Could not mint YT for ${moet_amount:,.2f} MOET")
-            return []
+            raise ValueError(f"Failed to mint yield tokens for MOET amount {moet_amount}")
             
         # Create yield tokens based on actual amount received
         # Each token represents $1 of initial value, but will rebase over time
