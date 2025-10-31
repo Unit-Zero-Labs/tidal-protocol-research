@@ -62,6 +62,7 @@ class HighTideAgentState(AgentState):
         
         # Rebalancing tracking
         self.rebalancing_events = []
+        self.leverage_increase_events = []  # NEW: Track leverage increases
         self.total_yield_sold = 0.0  # Total YT sold (all purposes)
         self.total_yield_sold_for_rebalancing = 0.0  # YT sold for health factor rebalancing only
         self.total_rebalancing_slippage = 0.0  # Slippage from rebalancing YT sales

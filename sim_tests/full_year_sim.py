@@ -33,37 +33,50 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from tidal_protocol_sim.engine.high_tide_vault_engine import HighTideVaultEngine, HighTideConfig
+from tidal_protocol_sim.engine.aave_protocol_engine import AaveProtocolEngine, AaveConfig
 from tidal_protocol_sim.agents.high_tide_agent import HighTideAgent
+from tidal_protocol_sim.agents.aave_agent import AaveAgent
 from tidal_protocol_sim.agents.pool_rebalancer import PoolRebalancerManager
 from tidal_protocol_sim.core.protocol import TidalProtocol, Asset
 from tidal_protocol_sim.core.yield_tokens import calculate_true_yield_token_price
+from tidal_protocol_sim.core.uniswap_v3_math import create_moet_usdc_pool, create_moet_usdf_pool, UniswapV3SlippageCalculator
 
 
 class FullYearSimConfig:
-    """Configuration for full year simulation with real 2024 BTC pricing"""
+    """Configuration for full year simulation with real 2024 BTC pricing (Capital Efficiency Study)"""
     
     def __init__(self):
         # Test scenario parameters
-        self.test_name = "Full_Year_2024_BTC_Simulation_10min_leverage"
-        self.simulation_duration_hours = 24 * 365  # Full year: 8760 hours
-        self.simulation_duration_minutes = 365 * 24 * 60  # 525,600 minutes
+        self.test_name = "Full_Year_2025_BTC_Low_Vol_Market"
+        self.simulation_duration_hours = 24 * 268  # 268 days for 2025 (Jan 1 - Sept 25)
+        self.simulation_duration_minutes = 268 * 24 * 60  # 385,920 minutes
         
         # BTC pricing data configuration
         self.btc_csv_path = "btc-usd-max.csv"
-        self.btc_2024_data = self._load_2024_btc_data()
+        self.btc_2025_data = self._load_2025_btc_data()
         
-        # Agent configuration - Uniform Tri-Health Factor Profile
-        self.num_agents = 120  # 120 agents for comprehensive testing
+        # AAVE comparison configuration
+        self.run_aave_comparison = True  # Enable AAVE vs High Tide comparison
+        self.use_historical_rates = True  # Use 2025 AAVE rates for both protocols
+        self.rates_csv_path = "rates_compute.csv"
+        self.aave_rates_2025 = self._load_2025_aave_rates() if self.use_historical_rates else None
+        
+        # Agent configuration - Equal HF for Low Vol Comparison (Study 5)
+        self.num_agents = 20  # 20 agents for testing
         self.use_mixed_risk_profiles = False  # Use uniform profile for all agents
-        # All agents use the same tri-health factor profile
-        self.agent_initial_hf = 1.05     # All agents start with 1.05 HF (was 1.1 - more aggressive)
-        self.agent_rebalancing_hf = 1.015  # Trigger rebalancing at 1.015 HF (wider band)
-        self.agent_target_hf = 1.03      # Rebalance to 1.03 HF target (aggressive)
         
-        # BTC price scenario - Real 2024 data
-        self.btc_initial_price = 42208.20  # 2024-01-01 price
-        self.btc_final_price = 92627.28   # 2024-12-31 price (+119% over year)
-        self.btc_price_pattern = "real_2024_data"  # Use actual historical data
+        # Both protocols start at equal health factors for baseline comparison
+        self.agent_initial_hf = 1.3      # Both start at 1.3 HF (equal positioning)
+        self.agent_rebalancing_hf = 1.1  # High Tide rebalancing trigger
+        self.agent_target_hf = 1.2       # High Tide rebalancing target
+        
+        # AAVE: Same initial HF for fair comparison
+        self.aave_initial_hf = 1.3       # Equal starting position (Study 5)
+        
+        # BTC price scenario - Real 2025 data (Low Vol Market)
+        self.btc_initial_price = 93507.86  # 2025-01-01 price  
+        self.btc_final_price = 113320.57   # 2025-09-25 price (+21.2% low vol)
+        self.btc_price_pattern = "real_2025_data"  # Use actual historical data
         
         # Pool configurations - Scaled for 120 agents over full year
         self.moet_btc_pool_config = {
@@ -106,10 +119,12 @@ class FullYearSimConfig:
         self.progress_report_every_n_minutes = 10080  # Weekly progress reports (7 days)
         
         # Advanced MOET system toggle
-        self.enable_advanced_moet_system = True  # Enable sophisticated MOET interest system
+        # When comparing with AAVE, disable advanced system to use same rates for both
+        self.enable_advanced_moet_system = not self.use_historical_rates  # Disable when using AAVE historical rates
         
         # Ecosystem Growth Configuration
-        self.enable_ecosystem_growth = False  # Enable gradual agent addition over time
+        # Disable ecosystem growth when comparing with AAVE for clean comparison
+        self.enable_ecosystem_growth = False  # Disabled for clean comparison
         self.target_btc_deposits = 150_000_000  # $150M target BTC deposits by year end
         self.max_agents = 500  # Maximum 500 agents to prevent system overload
         self.btc_per_agent_range = (2.0, 5.0)  # 2-5 BTC per agent (whale/institutional behavior)
@@ -121,7 +136,7 @@ class FullYearSimConfig:
         self.save_detailed_csv = True
     
     def _load_2024_btc_data(self) -> List[float]:
-        """Load 2024 BTC pricing data from CSV file"""
+        """Load 2024 BTC pricing data from CSV file (Bull Market Year)"""
         btc_prices = []
         
         try:
@@ -139,22 +154,159 @@ class FullYearSimConfig:
             return btc_prices
             
         except FileNotFoundError:
-            print(f"⚠️  Warning: {self.btc_csv_path} not found. Using synthetic 2024 data.")
-            # Fallback: Generate synthetic 2024-like price progression
-            return self._generate_synthetic_2024_data()
+            print(f"⚠️  Warning: {self.btc_csv_path} not found. Using fallback.")
+            return [42208.23] * 365  # Fallback to flat 2024 starting price
+        except Exception as e:
+            print(f"❌ Error loading BTC data: {e}. Using fallback.")
+            return [42208.23] * 365
+    
+    def _load_2024_aave_rates(self) -> Dict[int, float]:
+        """
+        Load 2024 AAVE USDC borrow rates from rates_compute.csv (Bull Market Year)
+        Returns: Dict mapping day_of_year (0-364) -> daily borrow rate
+        """
+        from datetime import datetime
+        
+        rates_by_day = {}
+        
+        try:
+            with open(self.rates_csv_path, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    # Check if this is a 2024 date
+                    if '2024-' in row['date']:
+                        # Parse date to get day of year
+                        date_str = row['date'].split(' ')[0]  # Extract date part before time
+                        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                        day_of_year = date_obj.timetuple().tm_yday - 1  # 0-indexed (0-365 for leap year)
+                        
+                        # Extract borrow rate (avg_variableRate column)
+                        borrow_rate = float(row['avg_variableRate'])
+                        rates_by_day[day_of_year] = borrow_rate
+            
+            # Fill in missing days with interpolation (2024 is a leap year - 366 days)
+            rates_by_day = self._interpolate_missing_days(rates_by_day, 366)
+            
+            print(f"📊 Loaded {len(rates_by_day)} days of 2024 AAVE borrow rates")
+            rates_list = [rates_by_day[i] for i in sorted(rates_by_day.keys())]
+            print(f"📈 2024 Rate Range: {min(rates_list)*100:.2f}% → {max(rates_list)*100:.2f}% APR")
+            print(f"📈 Average Rate: {np.mean(rates_list)*100:.2f}% APR")
+            
+            return rates_by_day
+            
+        except FileNotFoundError:
+            print(f"⚠️  Warning: {self.rates_csv_path} not found. Using fallback 5% APR.")
+            return {i: 0.05 for i in range(366)}
+        except Exception as e:
+            print(f"❌ Error loading AAVE rates: {e}. Using fallback 5% APR.")
+            return {i: 0.05 for i in range(366)}
+    
+    def _load_2025_btc_data(self) -> List[float]:
+        """Load 2025 BTC pricing data from CSV file (Low Vol Market - 268 days)"""
+        btc_prices = []
+        
+        try:
+            with open(self.btc_csv_path, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    # Check if this is a 2025 date
+                    if '2025-' in row['snapped_at']:
+                        price = float(row['price'])
+                        btc_prices.append(price)
+            
+            # Only take first 268 days (Jan 1 - Sept 25)
+            btc_prices = btc_prices[:268]
+            
+            print(f"📊 Loaded {len(btc_prices)} days of 2025 BTC pricing data")
+            print(f"📈 2025 BTC Range: ${btc_prices[0]:,.2f} → ${btc_prices[-1]:,.2f} ({((btc_prices[-1]/btc_prices[0])-1)*100:+.1f}%)")
+            
+            return btc_prices
+            
+        except FileNotFoundError:
+            print(f"⚠️  Warning: {self.btc_csv_path} not found. Using fallback.")
+            return [93507.86] * 268  # Fallback to flat 2025 starting price
+        except Exception as e:
+            print(f"❌ Error loading BTC data: {e}. Using fallback.")
+            return [93507.86] * 268
+    
+    def _load_2025_aave_rates(self) -> Dict[int, float]:
+        """
+        Load 2025 AAVE USDC borrow rates from rates_compute.csv (Low Vol Market - 268 days)
+        Returns: Dict mapping day_of_year (0-267) -> daily borrow rate
+        """
+        from datetime import datetime
+        
+        rates_by_day = {}
+        
+        try:
+            with open(self.rates_csv_path, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    # Check if this is a 2025 date
+                    if '2025-' in row['date']:
+                        # Parse date to get day of year
+                        date_str = row['date'].split(' ')[0]  # Extract date part before time
+                        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                        day_of_year = date_obj.timetuple().tm_yday - 1  # 0-indexed
+                        
+                        # Only include first 268 days (Jan 1 - Sept 25)
+                        if day_of_year < 268:
+                            # Extract borrow rate (avg_variableRate column)
+                            borrow_rate = float(row['avg_variableRate'])
+                            rates_by_day[day_of_year] = borrow_rate
+            
+            # Fill in missing days with interpolation
+            rates_by_day = self._interpolate_missing_days(rates_by_day, 268)
+            
+            print(f"📊 Loaded {len(rates_by_day)} days of 2025 AAVE borrow rates")
+            rates_list = [rates_by_day[i] for i in sorted(rates_by_day.keys())]
+            print(f"📈 2025 Rate Range: {min(rates_list)*100:.2f}% → {max(rates_list)*100:.2f}% APR")
+            print(f"📈 Average Rate: {np.mean(rates_list)*100:.2f}% APR")
+            
+            return rates_by_day
+            
+        except FileNotFoundError:
+            print(f"⚠️  Warning: {self.rates_csv_path} not found. Using fallback 5% APR.")
+            return {i: 0.05 for i in range(268)}
+        except Exception as e:
+            print(f"❌ Error loading AAVE rates: {e}. Using fallback 5% APR.")
+            return {i: 0.05 for i in range(268)}
+    
+    def _load_2022_btc_data(self) -> List[float]:
+        """Load 2022 BTC pricing data from CSV file (Bear Market Year)"""
+        btc_prices = []
+        
+        try:
+            with open(self.btc_csv_path, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    # Check if this is a 2022 date
+                    if '2022-' in row['snapped_at']:
+                        price = float(row['price'])
+                        btc_prices.append(price)
+            
+            print(f"📊 Loaded {len(btc_prices)} days of 2022 BTC pricing data")
+            print(f"📈 2022 BTC Range: ${btc_prices[0]:,.2f} → ${btc_prices[-1]:,.2f} ({((btc_prices[-1]/btc_prices[0])-1)*100:+.1f}%)")
+            
+            return btc_prices
+            
+        except FileNotFoundError:
+            print(f"⚠️  Warning: {self.btc_csv_path} not found. Using synthetic 2022 data.")
+            # Fallback: Generate synthetic 2022-like price progression
+            return self._generate_synthetic_2022_data()
         except Exception as e:
             print(f"❌ Error loading BTC data: {e}. Using synthetic data.")
-            return self._generate_synthetic_2024_data()
+            return self._generate_synthetic_2022_data()
     
-    def _generate_synthetic_2024_data(self) -> List[float]:
-        """Generate synthetic 2024-like BTC price progression as fallback"""
-        # Create 366 days of synthetic data (2024 was leap year)
-        days = 366
+    def _generate_synthetic_2022_data(self) -> List[float]:
+        """Generate synthetic 2022-like BTC price progression as fallback (bear market)"""
+        # Create 365 days of synthetic data (2022 was not a leap year)
+        days = 365
         prices = []
         
-        # Approximate 2024 progression: $42k → $93k with volatility
-        start_price = 42208.20
-        end_price = 92627.28
+        # Approximate 2022 progression: $46k → $17k with volatility (bear market)
+        start_price = 46319.65
+        end_price = 16604.02
         
         for day in range(days):
             # Base progression
@@ -169,31 +321,218 @@ class FullYearSimConfig:
             daily_price = max(daily_price, 10000.0)
             prices.append(daily_price)
         
-        print(f"📊 Generated {len(prices)} days of synthetic 2024 BTC data")
+        print(f"📊 Generated {len(prices)} days of synthetic 2022 BTC data")
         return prices
+    
+    def _load_2022_aave_rates(self) -> Dict[int, float]:
+        """
+        Load 2022 AAVE USDC borrow rates from rates_compute.csv (Bear Market Year)
+        Returns: Dict mapping day_of_year (0-364) -> daily borrow rate
+        """
+        from datetime import datetime
+        
+        rates_by_day = {}
+        
+        try:
+            with open(self.rates_csv_path, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    # Check if this is a 2022 date
+                    if '2022-' in row['date']:
+                        # Parse date to get day of year
+                        date_str = row['date'].split(' ')[0]  # Extract date part before time
+                        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                        day_of_year = date_obj.timetuple().tm_yday - 1  # 0-indexed (0-364)
+                        
+                        # Extract borrow rate (avg_variableRate column)
+                        borrow_rate = float(row['avg_variableRate'])
+                        rates_by_day[day_of_year] = borrow_rate
+            
+            # Fill in missing days with interpolation
+            rates_by_day = self._interpolate_missing_days(rates_by_day, 365)  # 2022 is not a leap year
+            
+            print(f"📊 Loaded {len(rates_by_day)} days of 2022 AAVE borrow rates")
+            rates_list = [rates_by_day[i] for i in sorted(rates_by_day.keys())]
+            print(f"📈 2022 Rate Range: {min(rates_list)*100:.2f}% → {max(rates_list)*100:.2f}% APR")
+            print(f"📈 Average Rate: {np.mean(rates_list)*100:.2f}% APR")
+            
+            return rates_by_day
+            
+        except FileNotFoundError:
+            print(f"⚠️  Warning: {self.rates_csv_path} not found. Using fallback 5% APR.")
+            return {i: 0.05 for i in range(366)}
+        except Exception as e:
+            print(f"❌ Error loading AAVE rates: {e}. Using fallback 5% APR.")
+            return {i: 0.05 for i in range(366)}
+    
+    def _load_2021_btc_data(self) -> List[float]:
+        """Load 2021 BTC pricing data from CSV file (Mixed Market Year)"""
+        btc_prices = []
+        
+        try:
+            with open(self.btc_csv_path, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    # Check if this is a 2021 date
+                    if '2021-' in row['snapped_at']:
+                        price = float(row['price'])
+                        btc_prices.append(price)
+            
+            print(f"📊 Loaded {len(btc_prices)} days of 2021 BTC pricing data")
+            print(f"📈 2021 BTC Range: ${btc_prices[0]:,.2f} → ${btc_prices[-1]:,.2f} ({((btc_prices[-1]/btc_prices[0])-1)*100:+.1f}%)")
+            
+            return btc_prices
+            
+        except FileNotFoundError:
+            print(f"⚠️  Warning: {self.btc_csv_path} not found. Using synthetic 2021 data.")
+            # Fallback: Generate synthetic 2021-like price progression
+            return self._generate_synthetic_2021_data()
+        except Exception as e:
+            print(f"❌ Error loading BTC data: {e}. Using synthetic data.")
+            return self._generate_synthetic_2021_data()
+    
+    def _generate_synthetic_2021_data(self) -> List[float]:
+        """Generate synthetic 2021-like BTC price progression as fallback (mixed market)"""
+        # Create 365 days of synthetic data
+        days = 365
+        prices = []
+        
+        # Approximate 2021 progression: $29k → $64k (April) → $46k (December) with volatility
+        start_price = 29001.72
+        mid_peak = 64000.0  # April peak
+        end_price = 46306.45
+        
+        for day in range(days):
+            progress = day / (days - 1)
+            
+            # Two-phase market: bull run to April, then correction
+            if day < 120:  # First 4 months - bull run
+                phase_progress = day / 120
+                base_price = start_price + (mid_peak - start_price) * phase_progress
+            else:  # Rest of year - correction and consolidation
+                phase_progress = (day - 120) / (days - 120)
+                base_price = mid_peak + (end_price - mid_peak) * phase_progress
+            
+            # Add daily volatility (~3%)
+            daily_volatility = base_price * 0.03 * (random.random() - 0.5) * 2
+            final_price = base_price + daily_volatility
+            prices.append(max(10000, final_price))  # Floor at $10k
+        
+        print(f"📊 Generated {len(prices)} days of synthetic 2021 BTC data")
+        return prices
+    
+    def _load_2021_aave_rates(self) -> Dict[int, float]:
+        """
+        Load 2021 AAVE USDC borrow rates from rates_compute.csv (Mixed Market Year)
+        Returns: Dict mapping day_of_year (0-364) -> daily borrow rate
+        """
+        from datetime import datetime
+        
+        rates_by_day = {}
+        
+        try:
+            with open(self.rates_csv_path, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    # Check if this is a 2021 date
+                    if '2021-' in row['date']:
+                        # Parse date to get day of year
+                        date_str = row['date'].split(' ')[0]  # Extract date part before time
+                        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                        day_of_year = date_obj.timetuple().tm_yday - 1  # 0-indexed (0-364)
+                        
+                        # Extract borrow rate (avg_variableRate column)
+                        borrow_rate = float(row['avg_variableRate'])
+                        rates_by_day[day_of_year] = borrow_rate
+            
+            # Fill in missing days with interpolation
+            rates_by_day = self._interpolate_missing_days(rates_by_day, 365)
+            
+            print(f"📊 Loaded {len(rates_by_day)} days of 2021 AAVE borrow rates")
+            rates_list = [rates_by_day[i] for i in sorted(rates_by_day.keys())]
+            print(f"📈 2021 Rate Range: {min(rates_list)*100:.2f}% → {max(rates_list)*100:.2f}% APR")
+            print(f"📈 Average Rate: {np.mean(rates_list)*100:.2f}% APR")
+            
+            return rates_by_day
+            
+        except FileNotFoundError:
+            print(f"⚠️  Warning: {self.rates_csv_path} not found. Using fallback 5% APR.")
+            return {i: 0.05 for i in range(366)}
+        except Exception as e:
+            print(f"❌ Error loading AAVE rates: {e}. Using fallback 5% APR.")
+            return {i: 0.05 for i in range(366)}
+    
+    def _interpolate_missing_days(self, rates_dict: Dict[int, float], total_days: int) -> Dict[int, float]:
+        """Fill in missing days using linear interpolation"""
+        if len(rates_dict) == total_days:
+            return rates_dict
+        
+        # Get sorted day indices and rates
+        days = sorted(rates_dict.keys())
+        
+        # Fill in missing days
+        complete_rates = {}
+        for day in range(total_days):
+            if day in rates_dict:
+                complete_rates[day] = rates_dict[day]
+            else:
+                # Find nearest days with data
+                lower_day = max([d for d in days if d < day], default=None)
+                upper_day = min([d for d in days if d > day], default=None)
+                
+                if lower_day is None:
+                    # Use first available rate
+                    complete_rates[day] = rates_dict[days[0]]
+                elif upper_day is None:
+                    # Use last available rate
+                    complete_rates[day] = rates_dict[days[-1]]
+                else:
+                    # Linear interpolation
+                    weight = (day - lower_day) / (upper_day - lower_day)
+                    complete_rates[day] = rates_dict[lower_day] * (1 - weight) + rates_dict[upper_day] * weight
+        
+        return complete_rates
+    
+    def get_historical_rate_at_minute(self, minute: int) -> float:
+        """
+        Get historical AAVE borrow rate for a given simulation minute
+        
+        Args:
+            minute: Simulation minute (0 to 385,920)
+        
+        Returns:
+            Daily borrow rate (APR as decimal, e.g. 0.05 = 5%)
+        """
+        if not self.use_historical_rates or self.aave_rates_2025 is None:
+            return 0.05  # Fallback to 5% APR
+        
+        # Convert minute to day (0-267 for 2025 - 268 days)
+        day = min(minute // 1440, 267)
+        
+        return self.aave_rates_2025.get(day, 0.05)
         
     def get_btc_price_at_minute(self, minute: int) -> float:
-        """Get BTC price at given minute using real 2024 data with interpolation"""
+        """Get BTC price at given minute using real 2025 data with interpolation"""
         
-        if not self.btc_2024_data:
+        if not self.btc_2025_data:
             # Fallback to linear progression
             progress = minute / self.simulation_duration_minutes
             return self.btc_initial_price + (self.btc_final_price - self.btc_initial_price) * progress
         
-        # Calculate which day we're on (0-365)
+        # Calculate which day we're on (0-267 for 2025 - 268 days)
         minutes_per_day = 24 * 60  # 1440 minutes per day
         day_of_year = minute // minutes_per_day
         
         # Ensure we don't exceed available data
-        if day_of_year >= len(self.btc_2024_data):
-            return self.btc_2024_data[-1]  # Use last available price
+        if day_of_year >= len(self.btc_2025_data):
+            return self.btc_2025_data[-1]  # Use last available price
         
         # Get current day price
-        current_day_price = self.btc_2024_data[day_of_year]
+        current_day_price = self.btc_2025_data[day_of_year]
         
         # Linear interpolation within the day if we have next day data
-        if day_of_year + 1 < len(self.btc_2024_data):
-            next_day_price = self.btc_2024_data[day_of_year + 1]
+        if day_of_year + 1 < len(self.btc_2025_data):
+            next_day_price = self.btc_2025_data[day_of_year + 1]
             
             # Calculate progress within the current day (0.0 to 1.0)
             minutes_into_day = minute % minutes_per_day
@@ -237,19 +576,29 @@ class FullYearSimulation:
         np.random.seed(42)
         
     def run_test(self) -> Dict[str, Any]:
-        """Run the complete full year simulation"""
+        """Run the complete full year simulation (High Tide only or High Tide vs AAVE comparison)"""
         
-        print("🌍 FULL YEAR 2024 BTC SIMULATION")
+        print("🌍 STUDY 5: 2025 LOW VOL MARKET SIMULATION")
         print("=" * 70)
         print(f"📅 Duration: {self.config.simulation_duration_hours:,} hours ({self.config.simulation_duration_hours//24} days)")
-        print(f"👥 Agents: {self.config.num_agents} High Tide agents (Uniform Tri-HF Profile: {self.config.agent_initial_hf}/{self.config.agent_rebalancing_hf}/{self.config.agent_target_hf})")
-        print(f"📈 BTC 2024 Journey: ${self.config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f} ({((self.config.btc_final_price/self.config.btc_initial_price)-1)*100:+.1f}%)")
+        print(f"👥 Agents: {self.config.num_agents} agents per system")
+        print(f"📈 BTC 2025 Journey: ${self.config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f} ({((self.config.btc_final_price/self.config.btc_initial_price)-1)*100:+.1f}%)")
         print(f"🔄 Pool Arbitrage: {'ENABLED' if self.config.enable_pool_arbing else 'DISABLED'}")
-        print(f"⏱️  ALM Interval: {self.config.alm_rebalance_interval_minutes} minutes (expect {(self.config.simulation_duration_minutes//self.config.alm_rebalance_interval_minutes):,} triggers over year)")
-        print(f"📊 Algo Threshold: {self.config.algo_deviation_threshold_bps} bps")
-        print(f"📊 BTC Data: {len(self.config.btc_2024_data)} daily prices loaded")
-        print(f"⏳ Leverage Increases: ENABLED (agents increase leverage when HF > initial HF)")
-        print()
+        print(f"📊 BTC Data: {len(self.config.btc_2025_data)} daily prices loaded")
+        
+        if self.config.run_aave_comparison:
+            print(f"📊 Mode: HIGH TIDE vs AAVE COMPARISON")
+            print(f"📈 Historical Rates: {'2025 AAVE rates' if self.config.use_historical_rates else 'Fixed 5% APR'}")
+            print()
+            return self._run_comparison_simulation()
+        else:
+            print(f"📊 Mode: HIGH TIDE ONLY")
+            print(f"⏳ Leverage Increases: ENABLED (agents increase leverage when HF > initial HF)")
+            print()
+            return self._run_high_tide_only_simulation()
+    
+    def _run_high_tide_only_simulation(self) -> Dict[str, Any]:
+        """Run High Tide simulation only (original behavior)"""
         
         # Create and configure High Tide engine
         engine = self._create_test_engine()
@@ -275,6 +624,61 @@ class FullYearSimulation:
         
         return self.results
     
+    def _run_comparison_simulation(self) -> Dict[str, Any]:
+        """Run both High Tide and AAVE simulations for comparison"""
+        
+        print("\n" + "=" * 70)
+        print("RUNNING HIGH TIDE SIMULATION (1/2)")
+        print("=" * 70 + "\n")
+        
+        # Run High Tide simulation
+        ht_engine = self._create_test_engine()
+        ht_results = self._run_simulation_with_detailed_tracking(ht_engine)
+        
+        print("\n" + "=" * 70)
+        print("RUNNING AAVE SIMULATION (2/2)")
+        print("=" * 70 + "\n")
+        
+        # Run AAVE simulation
+        aave_engine = self._create_aave_engine()
+        aave_results = self._run_simulation_with_detailed_tracking_aave(aave_engine)
+        
+        # Store both results
+        self.results["high_tide_results"] = ht_results
+        self.results["aave_results"] = aave_results
+        self.results["ht_engine"] = ht_engine
+        self.results["aave_engine"] = aave_engine
+        
+        # Analyze and compare
+        print("\n" + "=" * 70)
+        print("ANALYZING COMPARISON RESULTS")
+        print("=" * 70 + "\n")
+        
+        self._analyze_comparison_results(ht_engine, aave_engine)
+        
+        # Save results
+        self._save_comparison_results()
+        
+        # Generate all charts (detailed + comparison)
+        if self.config.generate_charts:
+            print("\n📊 Generating comprehensive analysis charts...")
+            
+            # Generate detailed charts for High Tide
+            print("\n📈 Creating High Tide detailed analysis...")
+            self._generate_detailed_charts_for_protocol("high_tide", ht_engine)
+            
+            # Generate detailed charts for AAVE
+            print("\n📈 Creating AAVE detailed analysis...")
+            self._generate_detailed_charts_for_protocol("aave", aave_engine)
+            
+            # Generate comparison charts
+            self._generate_comparison_charts()
+        
+        print("\n✅ Full year comparison simulation completed!")
+        self._print_comparison_summary()
+        
+        return self.results
+    
     def _create_test_engine(self) -> HighTideVaultEngine:
         """Create and configure the High Tide engine for testing"""
         
@@ -286,8 +690,10 @@ class FullYearSimulation:
         ht_config.btc_initial_price = self.config.btc_initial_price
         ht_config.btc_final_price_range = (self.config.btc_final_price, self.config.btc_final_price)
         
-        # Enable advanced MOET system
+        # Enable advanced MOET system (disabled when using historical AAVE rates for comparison)
         ht_config.enable_advanced_moet_system = self.config.enable_advanced_moet_system
+        
+        print(f"🔧 Advanced MOET System: {'ENABLED' if ht_config.enable_advanced_moet_system else 'DISABLED (using historical AAVE rates)'}")
         
         # Configure arbitrage agents for the new pool structure
         ht_config.num_arbitrage_agents = 5  # Enable arbitrage agents for peg maintenance
@@ -308,7 +714,19 @@ class FullYearSimulation:
         engine = HighTideVaultEngine(ht_config)
         
         # CRITICAL FIX: Override the default $100k BTC price with 2024 data
-        ht_config.btc_initial_price = self.config.btc_initial_price  # $42,208.20 from 2024-01-01
+        ht_config.btc_initial_price = self.config.btc_initial_price  # $42,208.23 from 2024-01-01
+        
+        # Override MOET rates with historical AAVE rates if enabled (for fair comparison)
+        if self.config.use_historical_rates:
+            print(f"📊 Using historical 2025 AAVE rates for High Tide (avg: {sum(self.config.aave_rates_2025.values()) / len(self.config.aave_rates_2025) * 100:.2f}% APR)")
+            
+            # Create rate override function that uses engine.current_step (simulation minute)
+            def get_historical_aave_rate():
+                current_minute = getattr(engine, 'current_step', 0)
+                return self.config.get_historical_rate_at_minute(current_minute)
+            
+            # Override the borrow rate function
+            engine.protocol.get_moet_borrow_rate = get_historical_aave_rate
         
         # Create uniform profile agents for year-long test
         agents = self._create_uniform_agents(engine)
@@ -332,6 +750,10 @@ class FullYearSimulation:
         
         # Store rebalancer reference for access during simulation
         engine.pool_rebalancer = pool_rebalancer
+        
+        # Add stablecoin pools for deleveraging support (when not using advanced MOET system)
+        if not self.config.enable_advanced_moet_system:
+            self._add_stablecoin_pools_to_engine(engine)
         
         # CRITICAL FIX: Register rebalancer MOET balances with protocol
         # The rebalancers start with MOET that should be counted in total supply
@@ -371,6 +793,174 @@ class FullYearSimulation:
         
         return engine
     
+    def _add_stablecoin_pools_to_engine(self, engine, pool_size: float = 5_000_000.0):
+        """
+        Manually add MOET:stablecoin pools to engine for deleveraging support
+        WITHOUT enabling the full advanced MOET system (no Bonder/Redeemer modules)
+        """
+        print(f"\n🏊 Adding MOET:stablecoin pools for deleveraging:")
+        print(f"   MOET:USDC pool: ${pool_size:,.0f}")
+        print(f"   MOET:USDF pool: ${pool_size:,.0f}")
+        
+        # Create MOET:stablecoin pairs (for step 2 of deleveraging: YT → MOET → USDC/USDF)
+        engine.moet_usdc_pool = create_moet_usdc_pool(
+            pool_size_usd=pool_size,
+            concentration=0.95,  # 95% concentration at 1:1 peg
+            token0_ratio=0.5  # 50/50 split
+        )
+        
+        engine.moet_usdf_pool = create_moet_usdf_pool(
+            pool_size_usd=pool_size,
+            concentration=0.95,  # 95% concentration at 1:1 peg
+            token0_ratio=0.5  # 50/50 split
+        )
+        
+        # Create slippage calculators for MOET:stablecoin pools
+        engine.moet_usdc_calculator = UniswapV3SlippageCalculator(engine.moet_usdc_pool)
+        engine.moet_usdf_calculator = UniswapV3SlippageCalculator(engine.moet_usdf_pool)
+        
+        print(f"✅ Stablecoin pools created for deleveraging chain")
+        print(f"   Path: YT → MOET → USDC/USDF → BTC (market) → Collateral")
+    
+    def _override_aave_liquidation_with_simple_swap(self, engine):
+        """
+        Override AAVE liquidation to use simple swap logic instead of Uniswap pool
+        
+        This uses PARTIAL liquidations (50% of debt) like real AAVE:
+        - Liquidates 50% of the debt
+        - Takes proportional collateral to cover debt + liquidation bonus (5%)
+        - Agent remains active with reduced position
+        - Liquidation fee (5 bps) and slippage (5 bps)
+        """
+        from tidal_protocol_sim.core.protocol import Asset
+        
+        print(f"\n🔧 Overriding AAVE liquidation to use PARTIAL liquidation (50% of debt)")
+        print(f"   Liquidation bonus: 5%, Fees: 5 bps, Slippage: 5 bps")
+        
+        def simple_swap_liquidate(agent_self, current_minute, current_prices):
+            """Partial liquidation - liquidate 50% of debt like real AAVE"""
+            btc_price = current_prices[Asset.BTC]
+            total_btc = agent_self.state.btc_amount
+            total_debt = agent_self.state.moet_debt
+            
+            # AAVE liquidates up to 50% of the debt in a single transaction
+            debt_to_repay = total_debt * 0.5
+            
+            # Calculate BTC needed to cover debt + liquidation bonus (5%)
+            liquidation_bonus = 1.05  # 5% bonus for liquidator
+            btc_value_needed = debt_to_repay * liquidation_bonus
+            btc_to_liquidate = btc_value_needed / btc_price
+            
+            # Ensure we don't liquidate more BTC than available
+            btc_to_liquidate = min(btc_to_liquidate, total_btc)
+            
+            # Apply liquidation fee (5 bps) and slippage (5 bps)
+            liquidation_fee_factor = 0.9995  # 5 bps fee
+            slippage_factor = 0.9995  # 5 bps slippage
+            
+            # Effective price after fees and slippage
+            effective_price = btc_price * liquidation_fee_factor * slippage_factor
+            
+            # Calculate actual MOET received from selling BTC
+            moet_received = btc_to_liquidate * effective_price
+            actual_debt_repaid = min(debt_to_repay, moet_received)
+            
+            # Update agent state - PARTIAL LIQUIDATION
+            # CRITICAL: Must update BOTH btc_amount AND supplied_balances[BTC]
+            agent_self.state.btc_amount -= btc_to_liquidate
+            agent_self.state.supplied_balances[Asset.BTC] -= btc_to_liquidate
+            agent_self.state.moet_debt -= actual_debt_repaid
+            
+            # Agent remains active if they still have collateral
+            # Note: Low debt is GOOD, not a reason to mark inactive!
+            if agent_self.state.btc_amount < 0.001:
+                agent_self.active = False
+            
+            # Record liquidation event
+            liquidation_event = {
+                "minute": current_minute,
+                "agent_id": agent_self.agent_id,
+                "btc_liquidated": btc_to_liquidate,
+                "debt_repaid": actual_debt_repaid,
+                "bad_debt": max(0, debt_to_repay - moet_received),
+                "effective_price": effective_price,
+                "remaining_btc": agent_self.state.btc_amount,
+                "remaining_debt": agent_self.state.moet_debt,
+                "still_active": agent_self.active
+            }
+            
+            # Update protocol pools
+            btc_pool = engine.protocol.asset_pools[Asset.BTC]
+            btc_pool.total_supplied -= btc_to_liquidate
+            
+            # Burn the repaid MOET
+            engine.protocol.moet_system.burn(actual_debt_repaid)
+            
+            return liquidation_event
+        
+        # Override the liquidation method for all AAVE agents
+        for agent in engine.aave_agents:
+            agent.execute_aave_liquidation = lambda minute, prices, a=agent: simple_swap_liquidate(a, minute, prices)
+    
+    def _create_aave_engine(self) -> AaveProtocolEngine:
+        """Create and configure AAVE engine for comparison"""
+        
+        # Create AAVE configuration (matching High Tide setup)
+        aave_config = AaveConfig()
+        aave_config.num_aave_agents = 0  # We'll create custom agents
+        aave_config.btc_decline_duration = self.config.simulation_duration_minutes
+        aave_config.btc_initial_price = self.config.btc_initial_price
+        aave_config.btc_final_price_range = (self.config.btc_final_price, self.config.btc_final_price)
+        
+        # Match pool configurations (for MOET peg/arbitrage)
+        aave_config.moet_btc_pool_size = self.config.moet_btc_pool_config["size"]
+        aave_config.moet_btc_concentration = self.config.moet_btc_pool_config["concentration"]
+        aave_config.moet_yield_pool_size = self.config.moet_yt_pool_config["size"]
+        aave_config.yield_token_concentration = self.config.moet_yt_pool_config["concentration"]
+        aave_config.yield_token_ratio = self.config.moet_yt_pool_config["token0_ratio"]
+        aave_config.use_direct_minting_for_initial = self.config.use_direct_minting_for_initial
+        
+        # Configure arbitrage (same as High Tide)
+        aave_config.num_arbitrage_agents = 5
+        aave_config.arbitrage_agent_balance = 100_000.0
+        
+        # Create engine
+        engine = AaveProtocolEngine(aave_config)
+        
+        # Override MOET rates with historical AAVE rates if enabled
+        if self.config.use_historical_rates:
+            print(f"📊 Using historical 2025 AAVE rates (avg: {sum(self.config.aave_rates_2025.values()) / len(self.config.aave_rates_2025) * 100:.2f}% APR)")
+            
+            # Create rate override function that uses engine.current_step (simulation minute)
+            def get_historical_aave_rate():
+                current_minute = getattr(engine, 'current_step', 0)
+                return self.config.get_historical_rate_at_minute(current_minute)
+            
+            # Override the borrow rate function
+            engine.protocol.get_moet_borrow_rate = get_historical_aave_rate
+        
+        # Add stablecoin pools for consistency (AAVE agents don't delever but pools should exist)
+        self._add_stablecoin_pools_to_engine(engine)
+        
+        # Create AAVE agents matching High Tide parameters
+        agents = self._create_uniform_aave_agents(engine)
+        engine.aave_agents = agents
+        
+        # Override AAVE liquidation to use simple swap (avoid Uniswap pool liquidity issues)
+        self._override_aave_liquidation_with_simple_swap(engine)
+        
+        # Add agents to engine's agent dict
+        for agent in agents:
+            engine.agents[agent.agent_id] = agent
+            agent.engine = engine
+        
+        self._log_event(0, "ENGINE_SETUP", "AAVE engine created", {
+            "num_agents": len(agents),
+            "historical_rates": self.config.use_historical_rates
+        })
+        
+        return engine
+    
     def _create_uniform_agents(self, engine) -> List[HighTideAgent]:
         """Create agents with uniform tri-health factor profile for year-long simulation"""
         
@@ -403,6 +993,40 @@ class FullYearSimulation:
         
         return agents
     
+    def _create_uniform_aave_agents(self, engine) -> List[AaveAgent]:
+        """Create AAVE agents with conservative HF (1.95) - typical of real USDC borrowers"""
+        
+        agents = []
+        
+        for i in range(self.config.num_agents):
+            agent_id = f"aave_year_sim_agent_{i:03d}"
+            
+            # Create AAVE agent with conservative 1.95 initial HF (median of real borrowers)
+            # Note: rebalancing_hf and target_hf are not used since AAVE is buy-and-hold
+            agent = AaveAgent(
+                agent_id,
+                self.config.aave_initial_hf,       # 1.95 HF (real-world median)
+                1.5,                                # Placeholder (not used - AAVE doesn't rebalance)
+                1.6,                                # Placeholder (not used - AAVE doesn't rebalance)
+                initial_balance=self.config.btc_initial_price
+            )
+            
+            # CRITICAL: Set yield token pool reference for AAVE agents to enable YT purchases
+            agent.state.yield_token_manager.yield_token_pool = engine.yield_token_pool
+            
+            agents.append(agent)
+            
+            self._log_event(0, "AGENT_CREATED", f"Created {agent_id}", {
+                "initial_hf": self.config.aave_initial_hf,
+                "type": "AAVE"
+            })
+        
+        print(f"✅ Created {len(agents)} AAVE agents:")
+        print(f"   Initial HF: {self.config.aave_initial_hf} (median from 1,600+ real USDC borrowers)")
+        print(f"   Strategy: Buy-and-hold with yield accrual (no rebalancing)")
+        
+        return agents
+    
     def _run_simulation_with_detailed_tracking(self, engine):
         """Run simulation with comprehensive tracking of all rebalancing activities"""
         
@@ -419,6 +1043,19 @@ class FullYearSimulation:
         
         # Run custom simulation loop with pool rebalancing integration
         return self._run_custom_simulation_with_pool_rebalancing(engine)
+    
+    def _run_simulation_with_detailed_tracking_aave(self, engine):
+        """Run AAVE simulation with detailed tracking (no rebalancing)"""
+        
+        print("🚀 Starting AAVE simulation (buy-and-hold strategy)...")
+        
+        if self.config.simulation_duration_minutes >= 100_000:
+            print("⚡ PERFORMANCE OPTIMIZATIONS ENABLED")
+            print("   • Daily snapshots (every 1440 minutes)")
+            print()
+        
+        # AAVE agents don't rebalance, so we just run without pool rebalancing
+        return self._run_custom_simulation_aave(engine)
     
     def _process_ecosystem_growth(self, engine, current_minute: int, current_btc_price: float) -> List[Dict]:
         """Process ecosystem growth by adding new agents over time"""
@@ -892,6 +1529,172 @@ class FullYearSimulation:
         
         return results
     
+    def _run_custom_simulation_aave(self, engine):
+        """Run simplified AAVE simulation (no agent rebalancing)"""
+        
+        print(f"Starting AAVE simulation with {len(engine.aave_agents)} agents")
+        print(f"BTC progression: ${self.config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f}")
+        print(f"Strategy: Buy-and-hold with yield accrual (no active rebalancing)")
+        
+        # Initialize tracking
+        engine.btc_price_history = []
+        engine.current_step = 0
+        
+        # Agent health factor snapshots for tracking
+        agent_snapshots = {}
+        
+        # Track liquidation events per agent
+        liquidation_events = []
+        agent_liquidation_counts = {agent.agent_id: 0 for agent in engine.aave_agents}
+        
+        for minute in range(self.config.simulation_duration_minutes):
+            engine.current_step = minute
+            
+            # Update BTC price using 2024 data
+            new_btc_price = self.config.get_btc_price_at_minute(minute)
+            engine.state.current_prices[Asset.BTC] = new_btc_price
+            
+            # Store BTC price daily (memory optimization)
+            if minute % 1440 == 0:
+                engine.btc_price_history.append(new_btc_price)
+            
+            # Update protocol state
+            engine.protocol.current_block = minute
+            engine.protocol.accrue_interest()
+            
+            # Update agent debt interest (using historical AAVE rates if enabled)
+            if hasattr(engine, '_update_agent_debt_interest'):
+                engine._update_agent_debt_interest(minute)
+            
+            # AAVE agents buy YT at minute 0 only (with direct 1:1 minting), then hold
+            if minute == 0 and hasattr(engine, '_process_aave_agents'):
+                engine._process_aave_agents(minute)  # Initial YT purchase at minute 0
+            
+            # Check for liquidations and capture events
+            if hasattr(engine, '_check_aave_liquidations'):
+                # Store liquidation events before checking
+                pre_liquidation_count = len(engine.liquidation_events) if hasattr(engine, 'liquidation_events') else 0
+                
+                engine._check_aave_liquidations(minute)
+                
+                # Check if new liquidations occurred
+                if hasattr(engine, 'liquidation_events'):
+                    post_liquidation_count = len(engine.liquidation_events)
+                    if post_liquidation_count > pre_liquidation_count:
+                        # New liquidation(s) occurred
+                        for event in engine.liquidation_events[pre_liquidation_count:]:
+                            agent_id = event.get('agent_id')
+                            if agent_id in agent_liquidation_counts:
+                                agent_liquidation_counts[agent_id] += 1
+                            liquidation_events.append(event)
+            
+            # Record AAVE metrics (includes agent_health_history tracking)
+            if hasattr(engine, '_record_aave_metrics'):
+                engine._record_aave_metrics(minute)
+            
+            # Collect agent health factor snapshots (daily for memory efficiency)
+            if minute % 1440 == 0:
+                for agent in engine.aave_agents:
+                    if agent.active:
+                        if agent.agent_id not in agent_snapshots:
+                            agent_snapshots[agent.agent_id] = {
+                                "timestamps": [],
+                                "health_factors": [],
+                                "collateral": [],
+                                "debt": []
+                            }
+                        agent_snapshots[agent.agent_id]["timestamps"].append(minute)
+                        agent_snapshots[agent.agent_id]["health_factors"].append(agent.state.health_factor)
+                        agent_snapshots[agent.agent_id]["collateral"].append(agent.state.btc_amount * new_btc_price)
+                        agent_snapshots[agent.agent_id]["debt"].append(agent.state.moet_debt)
+            
+            # Progress reporting (weekly)
+            if minute > 0 and minute % 10080 == 0:
+                days_elapsed = minute / 1440
+                weeks_elapsed = days_elapsed / 7
+                active_agents = sum(1 for a in engine.aave_agents if a.active)
+                avg_hf = sum(a.state.health_factor for a in engine.aave_agents if a.active) / max(active_agents, 1)
+                print(f"📅 Week {weeks_elapsed:.0f}/52: BTC ${new_btc_price:,.0f} | "
+                      f"Active agents: {active_agents}/{len(engine.aave_agents)} | "
+                      f"Avg HF: {avg_hf:.3f}")
+        
+        # Generate results
+        print("📊 Generating AAVE simulation results...")
+        print(f"   Total liquidation events: {len(liquidation_events)}")
+        print(f"   Agents liquidated: {sum(1 for count in agent_liquidation_counts.values() if count > 0)}/{len(agent_liquidation_counts)}")
+        
+        # Build agent_outcomes with liquidation tracking
+        agent_outcomes = []
+        for agent in engine.aave_agents:
+            agent._update_health_factor(engine.state.current_prices)
+            portfolio = agent.get_detailed_portfolio_summary(engine.state.current_prices, self.config.simulation_duration_minutes - 1)
+            
+            liquidation_count = agent_liquidation_counts.get(agent.agent_id, 0)
+            was_liquidated = liquidation_count > 0
+            
+            outcome = {
+                "agent_id": agent.agent_id,
+                "initial_health_factor": getattr(agent.state, 'initial_health_factor', self.config.aave_initial_hf),
+                "final_health_factor": agent.state.health_factor,
+                "survived": not was_liquidated,  # Survived = never liquidated
+                "was_liquidated": was_liquidated,
+                "liquidation_count": liquidation_count,
+                "btc_amount": agent.state.btc_amount,
+                "current_moet_debt": agent.state.moet_debt,
+                "yield_token_value": portfolio["yield_token_portfolio"]["total_current_value"],
+                "net_position_value": portfolio["net_position_value"],
+                "total_yield_earned": portfolio["yield_token_portfolio"]["total_accrued_yield"],
+            }
+            agent_outcomes.append(outcome)
+        
+        # Build comprehensive results
+        results = {
+            "simulation_metadata": {
+                "duration_minutes": self.config.simulation_duration_minutes,
+                "duration_days": self.config.simulation_duration_minutes / 1440,
+                "btc_initial": self.config.btc_initial_price,
+                "btc_final": engine.state.current_prices[Asset.BTC]
+            },
+            "agent_outcomes": agent_outcomes,
+            "liquidation_events": liquidation_events,
+            "agent_health_history": engine.agent_health_history if hasattr(engine, 'agent_health_history') else [],
+            "agent_health_snapshots": agent_snapshots,
+            "btc_price_history": engine.btc_price_history,
+            "summary": {
+                "total_agents": len(engine.aave_agents),
+                "survived": sum(1 for a in agent_outcomes if a["survived"]),
+                "liquidated": sum(1 for a in agent_outcomes if a["was_liquidated"]),
+                "total_liquidation_events": len(liquidation_events)
+            }
+        }
+        
+        return results
+    
+    def _compile_aave_agent_performance(self, agents: List) -> Dict:
+        """Compile AAVE agent performance metrics"""
+        
+        active_agents = [a for a in agents if a.active]
+        liquidated_agents = [a for a in agents if not a.active]
+        
+        return {
+            "summary": {
+                "total_agents": len(agents),
+                "active_agents": len(active_agents),
+                "liquidated_agents": len(liquidated_agents),
+                "survival_rate": len(active_agents) / len(agents) if agents else 0
+            },
+            "individual_performance": {
+                agent.agent_id: {
+                    "active": agent.active,
+                    "health_factor": agent.state.health_factor,
+                    "btc_amount": agent.state.btc_amount,
+                    "moet_debt": agent.state.moet_debt,
+                    "net_position_value": agent.calculate_net_position_value() if hasattr(agent, 'calculate_net_position_value') else 0
+                }
+                for agent in agents
+            }
+        }
+    
     def _log_event(self, minute: int, event_type: str, message: str, data: Dict = None):
         """Log detailed event with timestamp"""
         
@@ -974,9 +1777,9 @@ class FullYearSimulation:
                 "total_agents": len(agent_data),
                 "survived_agents": sum(1 for a in agent_data if a["survived"]),
                 "survival_rate": sum(1 for a in agent_data if a["survived"]) / len(agent_data) if agent_data else 0,
-                "total_rebalances": sum(a["rebalance_count"] for a in agent_data),
-                "total_slippage_costs": sum(a["total_slippage"] for a in agent_data),
-                "avg_final_hf": np.mean([a["final_hf"] for a in agent_data if a["survived"]]) if any(a["survived"] for a in agent_data) else 0
+                "total_rebalances": sum(a.get("rebalance_count", a.get("rebalancing_events", 0)) for a in agent_data),
+                "total_slippage_costs": sum(a.get("total_slippage", a.get("total_slippage_costs", a.get("total_rebalancing_slippage", 0))) for a in agent_data),
+                "avg_final_hf": np.mean([a.get("final_hf", a.get("final_health_factor", 0)) for a in agent_data if a["survived"]]) if any(a["survived"] for a in agent_data) else 0
             }
         }
     
@@ -1017,6 +1820,920 @@ class FullYearSimulation:
             }
         
         return pool_evolution
+    
+    def _analyze_comparison_results(self, ht_engine, aave_engine):
+        """Analyze and compare High Tide vs AAVE results"""
+        
+        print("📊 Comparing High Tide vs AAVE performance...")
+        
+        # Get results from both engines
+        ht_results = self.results["high_tide_results"]
+        aave_results = self.results["aave_results"]
+        
+        # DEBUG: Check what's actually in the results
+        print(f"\n🔍 DEBUG: High Tide results keys: {ht_results.keys()}")
+        print(f"🔍 DEBUG: AAVE results keys: {aave_results.keys()}")
+        
+        if "agent_outcomes" in ht_results:
+            ht_outcomes = ht_results.get("agent_outcomes", [])
+            if ht_outcomes:
+                print(f"🔍 DEBUG: HT agent_outcomes count: {len(ht_outcomes)}")
+                print(f"🔍 DEBUG: Sample HT agent: {ht_outcomes[0]}")
+        
+        if "agent_performance" in aave_results:
+            print(f"🔍 DEBUG: AAVE agent_performance keys: {aave_results['agent_performance'].keys()}")
+            summary = aave_results['agent_performance'].get('summary', {})
+            print(f"🔍 DEBUG: AAVE summary: {summary}")
+            indiv = aave_results['agent_performance'].get('individual_performance', {})
+            if indiv:
+                first_agent_id = list(indiv.keys())[0]
+                print(f"🔍 DEBUG: Sample AAVE agent ({first_agent_id}): {indiv[first_agent_id]}")
+        
+        # Extract key metrics
+        # BOTH use agent_outcomes structure!
+        ht_perf = ht_results.get("agent_outcomes", [])
+        aave_perf = aave_results.get("agent_outcomes", [])
+        
+        # Calculate return metrics
+        initial_investment_per_agent = self.config.btc_initial_price  # Each agent started with 1 BTC
+        
+        # High Tide returns
+        ht_survivors = [a for a in ht_perf if a.get("survived", False)]
+        ht_net_values = [a.get("net_position_value", 0) for a in ht_survivors]
+        ht_avg_net_value = np.mean(ht_net_values) if ht_net_values else 0
+        ht_avg_return = ((ht_avg_net_value - initial_investment_per_agent) / initial_investment_per_agent) if initial_investment_per_agent > 0 else 0
+        
+        # AAVE returns
+        aave_survivors = [a for a in aave_perf if a.get("survived", False)]
+        aave_net_values = [a.get("net_position_value", 0) for a in aave_survivors]
+        aave_avg_net_value = np.mean(aave_net_values) if aave_net_values else 0
+        aave_avg_return = ((aave_avg_net_value - initial_investment_per_agent) / initial_investment_per_agent) if initial_investment_per_agent > 0 else 0
+        
+        # Calculate comparison metrics
+        comparison = {
+            "high_tide": {
+                "total_agents": len(ht_perf),
+                "survivors": sum(1 for a in ht_perf if a.get("survived", False)),
+                "survival_rate": sum(1 for a in ht_perf if a.get("survived", False)) / len(ht_perf) if ht_perf else 0,
+                "liquidated_agents": sum(1 for a in ht_perf if not a.get("survived", True)),
+                "avg_final_hf": np.mean([a.get("final_health_factor", 0) for a in ht_perf if a.get("survived", False)]) if ht_perf else 0,
+                "total_rebalances": sum(a.get("rebalancing_events", 0) for a in ht_perf),
+                "total_leverage_increases": sum(a.get("leverage_increase_events", 0) for a in ht_perf),
+                "total_position_adjustments": sum(a.get("total_position_adjustments", 0) for a in ht_perf),
+                "avg_net_position_value": ht_avg_net_value,
+                "avg_return_pct": ht_avg_return * 100,
+                "initial_investment": initial_investment_per_agent
+            },
+            "aave": {
+                "total_agents": len(aave_perf),
+                "survivors": sum(1 for a in aave_perf if a.get("survived", False)),
+                "survival_rate": sum(1 for a in aave_perf if a.get("survived", False)) / len(aave_perf) if aave_perf else 0,
+                "liquidated_agents": sum(1 for a in aave_perf if not a.get("survived", True)),
+                "total_liquidation_events": sum(a.get("liquidation_count", 0) for a in aave_perf),
+                "avg_final_hf": np.mean([a.get("final_health_factor", 0) for a in aave_perf if a.get("survived", False)]) if aave_perf else 0,
+                "total_rebalances": 0,  # AAVE doesn't rebalance
+                "total_leverage_increases": 0,  # AAVE doesn't actively manage leverage
+                "total_position_adjustments": 0,  # AAVE is buy-and-hold
+                "avg_net_position_value": aave_avg_net_value,
+                "avg_return_pct": aave_avg_return * 100,
+                "initial_investment": initial_investment_per_agent
+            }
+        }
+        
+        # Store comparison
+        self.results["comparison_summary"] = comparison
+        
+        print(f"✅ High Tide Survival Rate: {comparison['high_tide']['survival_rate']:.1%}")
+        print(f"✅ AAVE Survival Rate: {comparison['aave']['survival_rate']:.1%}")
+        print(f"📈 High Tide Avg Final HF: {comparison['high_tide']['avg_final_hf']:.3f}")
+        print(f"📈 AAVE Avg Final HF: {comparison['aave']['avg_final_hf']:.3f}")
+    
+    def _save_comparison_results(self):
+        """Save comparison results"""
+        
+        # Create results directory for comparison
+        test_name = f"{self.config.test_name}_HT_vs_AAVE_Comparison"
+        output_dir = Path("tidal_protocol_sim/results") / test_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save comparison results JSON
+        results_path = output_dir / f"comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        # Convert for JSON serialization
+        json_results = self._convert_for_json(self.results)
+        
+        with open(results_path, 'w', encoding='utf-8') as f:
+            json.dump(json_results, f, indent=2)
+        
+        print(f"📁 Comparison results saved to: {results_path}")
+    
+    def _generate_comparison_charts(self):
+        """Generate comparison charts for High Tide vs AAVE"""
+        
+        print("📊 Generating comparison charts...")
+        
+        # Create output directory
+        test_name = f"{self.config.test_name}_HT_vs_AAVE_Comparison"
+        output_dir = Path("tidal_protocol_sim/results") / test_name / "charts"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Set plotting style
+        plt.style.use('default')
+        sns.set_palette("husl")
+        
+        # Get results
+        ht_results = self.results.get("high_tide_results", {})
+        aave_results = self.results.get("aave_results", {})
+        
+        # Chart 1: Survival Comparison
+        self._create_survival_comparison_chart(output_dir, ht_results, aave_results)
+        
+        # Chart 2: Health Factor Evolution (side by side)
+        self._create_health_factor_comparison_chart(output_dir, ht_results, aave_results)
+        
+        # Chart 3: Agent Performance Metrics
+        self._create_performance_metrics_chart(output_dir, ht_results, aave_results)
+        
+        # Chart 4: Net Position and APY Evolution Comparison
+        self._create_net_position_apy_comparison_chart(output_dir, ht_results, aave_results)
+        
+        # Chart 5: BTC Capital Preservation Comparison
+        self._create_btc_capital_preservation_chart(output_dir, ht_results, aave_results)
+        
+        print(f"✅ Generated comparison charts in {output_dir}")
+    
+    def _generate_detailed_charts_for_protocol(self, protocol_name: str, engine):
+        """Generate detailed analysis charts for a specific protocol (high_tide or aave)"""
+        
+        # Create output directory for this protocol
+        test_name = f"{self.config.test_name}_{protocol_name.upper()}_Detailed"
+        output_dir = Path("tidal_protocol_sim/results") / test_name / "charts"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Set matplotlib style
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        sns.set_style("darkgrid")
+        plt.rcParams['figure.facecolor'] = 'white'
+        
+        print(f"   Generating charts for {protocol_name.upper()} in {output_dir}")
+        
+        # Get results for this protocol
+        results_key = f"{protocol_name}_results"
+        if results_key not in self.results:
+            print(f"   ⚠️  No results found for {protocol_name}")
+            return
+        
+        # Temporarily swap results to use existing chart methods
+        original_results = self.results.copy()
+        protocol_results = self.results[results_key]
+        
+        # Create a temporary results structure that the chart methods expect
+        temp_results = {
+            "agent_performance": {
+                "agent_details": protocol_results.get("agent_outcomes", []),
+                "summary": {
+                    "total_agents": len(protocol_results.get("agent_outcomes", [])),
+                    "survived": sum(1 for a in protocol_results.get("agent_outcomes", []) if a.get("survived", False))
+                }
+            },
+            "simulation_results": protocol_results,
+            "pool_state_snapshots": protocol_results.get("pool_state_snapshots", []),
+            "detailed_logs": protocol_results.get("detailed_logs", []),
+            "rebalancing_events": protocol_results.get("rebalancing_events", {
+                "agent_rebalances": [],
+                "pool_rebalances": []
+            })
+        }
+        
+        self.results = temp_results
+        
+        try:
+            # Generate core charts (these should work for both protocols)
+            print("      Creating time series evolution chart...")
+            self._create_time_series_evolution_chart(output_dir)
+            
+            print("      Creating agent health factor chart...")
+            self._create_agent_health_factor_chart(output_dir)
+            
+            print("      Creating agent performance chart...")
+            self._create_agent_performance_chart(output_dir)
+            
+            print("      Creating net APY analysis chart...")
+            self._create_net_apy_analysis_chart(output_dir)
+            
+            print("      Creating yield strategy comparison chart...")
+            self._create_yield_strategy_comparison_chart(output_dir)
+            
+            # Only create these for High Tide (MOET-specific)
+            if protocol_name == "high_tide":
+                print("      Creating rebalancing timeline chart...")
+                self._create_rebalancing_timeline_chart(output_dir)
+                
+                if protocol_results.get("pool_state_snapshots"):
+                    print("      Creating pool price evolution chart...")
+                    self._create_pool_price_evolution_chart(output_dir)
+                    
+                    print("      Creating pool balance evolution chart...")
+                    self._create_pool_balance_evolution_chart(output_dir)
+                
+                # Only if advanced MOET is enabled
+                if self.config.enable_advanced_moet_system:
+                    print("      Creating MOET system analysis charts...")
+                    self._create_moet_system_analysis_chart(output_dir)
+                    self._create_moet_reserve_management_chart(output_dir)
+                    self._create_redeemer_analysis_chart(output_dir)
+                    self._create_arbitrage_activity_chart(output_dir)
+                    self._create_arbitrage_time_series_chart(output_dir)
+                    self._create_peg_monitoring_chart(output_dir)
+                    self._create_bond_auction_analysis_chart(output_dir)
+            
+            print(f"   ✅ Generated detailed charts for {protocol_name.upper()} in {output_dir}")
+            
+        except Exception as e:
+            print(f"   ⚠️  Error generating charts for {protocol_name}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        finally:
+            # Restore original results
+            self.results = original_results
+    
+    def _create_survival_comparison_chart(self, output_dir, ht_results, aave_results):
+        """Create survival rate comparison chart"""
+        
+        # Get survival data
+        ht_perf = ht_results.get("agent_outcomes", [])
+        aave_perf = aave_results.get("agent_outcomes", [])
+        
+        ht_survival = sum(1 for a in ht_perf if a.get("survived", False)) / len(ht_perf) if ht_perf else 0
+        aave_survival = sum(1 for a in aave_perf if a.get("survived", False)) / len(aave_perf) if aave_perf else 0
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        systems = ['High Tide\n(Active Rebalancing)', 'AAVE\n(Buy & Hold)']
+        survival_rates = [ht_survival * 100, aave_survival * 100]
+        colors = ['#2ecc71', '#e74c3c']
+        
+        bars = ax.bar(systems, survival_rates, color=colors, alpha=0.7, edgecolor='black', linewidth=1.5)
+        
+        # Add value labels on bars
+        for bar, rate in zip(bars, survival_rates):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{rate:.1f}%',
+                   ha='center', va='bottom', fontsize=14, fontweight='bold')
+        
+        ax.set_ylabel('Survival Rate (%)', fontsize=12, fontweight='bold')
+        ax.set_title('Agent Survival Rate: High Tide vs AAVE\nFull Year 2024 (BTC: $42k → $93k)', 
+                    fontsize=14, fontweight='bold', pad=20)
+        ax.set_ylim(0, 110)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+        ax.axhline(y=100, color='green', linestyle='--', alpha=0.5, label='100% Survival')
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / 'survival_comparison.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print("   ✅ Created survival comparison chart")
+    
+    def _create_health_factor_comparison_chart(self, output_dir, ht_results, aave_results):
+        """Create health factor evolution comparison"""
+        
+        # Get agent snapshots
+        ht_snapshots = ht_results.get("agent_health_snapshots", {})
+        aave_snapshots = aave_results.get("agent_health_snapshots", {})
+        
+        if not ht_snapshots and not aave_snapshots:
+            print("   ⚠️  No health factor data available")
+            return
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        # High Tide chart
+        for agent_id, data in list(ht_snapshots.items())[:10]:  # Show first 10 agents
+            timestamps = np.array(data["timestamps"]) / 1440  # Convert to days
+            hfs = data["health_factors"]
+            ax1.plot(timestamps, hfs, alpha=0.6, linewidth=1)
+        
+        ax1.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='Liquidation Threshold')
+        ax1.axhline(y=1.015, color='orange', linestyle='--', linewidth=1.5, alpha=0.7, label='Rebalancing Trigger')
+        ax1.set_xlabel('Days', fontsize=11, fontweight='bold')
+        ax1.set_ylabel('Health Factor', fontsize=11, fontweight='bold')
+        ax1.set_title('High Tide: Health Factor Evolution\n(10 sample agents)', fontsize=12, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(fontsize=9)
+        ax1.set_ylim(0.9, 1.15)
+        
+        # AAVE chart
+        for agent_id, data in list(aave_snapshots.items())[:10]:  # Show first 10 agents
+            timestamps = np.array(data["timestamps"]) / 1440  # Convert to days
+            hfs = data["health_factors"]
+            ax2.plot(timestamps, hfs, alpha=0.6, linewidth=1)
+        
+        ax2.axhline(y=1.0, color='red', linestyle='--', linewidth=2, label='Liquidation Threshold')
+        ax2.set_xlabel('Days', fontsize=11, fontweight='bold')
+        ax2.set_ylabel('Health Factor', fontsize=11, fontweight='bold')
+        ax2.set_title('AAVE: Health Factor Evolution\n(10 sample agents)', fontsize=12, fontweight='bold')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(fontsize=9)
+        ax2.set_ylim(0.9, 1.15)
+        
+        plt.suptitle('Health Factor Evolution Comparison: Full Year 2024', 
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(output_dir / 'health_factor_comparison.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print("   ✅ Created health factor comparison chart")
+    
+    def _create_performance_metrics_chart(self, output_dir, ht_results, aave_results):
+        """Create performance metrics comparison"""
+        
+        # Get performance data
+        ht_perf = ht_results.get("agent_outcomes", [])
+        aave_perf = aave_results.get("agent_outcomes", [])
+        
+        # Calculate metrics
+        ht_active = sum(1 for a in ht_perf if a.get("survived", False))
+        ht_total = len(ht_perf)
+        ht_rebalances = sum(a.get("rebalancing_events", 0) for a in ht_perf)
+        ht_leverage_increases = sum(a.get("leverage_increase_events", 0) for a in ht_perf)
+        ht_total_adjustments = sum(a.get("total_position_adjustments", 0) for a in ht_perf)
+        
+        aave_active = sum(1 for a in aave_perf if a.get("survived", False))
+        aave_total = len(aave_perf)
+        
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        
+        # Chart 1: Active vs Liquidated Agents
+        ax = axes[0, 0]
+        x = np.arange(2)
+        width = 0.35
+        
+        active_counts = [ht_active, aave_active]
+        liquidated_counts = [ht_total - ht_active, aave_total - aave_active]
+        
+        ax.bar(x - width/2, active_counts, width, label='Active', color='#2ecc71', alpha=0.7)
+        ax.bar(x + width/2, liquidated_counts, width, label='Liquidated', color='#e74c3c', alpha=0.7)
+        
+        ax.set_ylabel('Number of Agents', fontsize=11, fontweight='bold')
+        ax.set_title('Agent Status at Year End', fontsize=12, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(['High Tide', 'AAVE'])
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Chart 2: Survival Rate %
+        ax = axes[0, 1]
+        survival_rates = [ht_active/ht_total*100 if ht_total > 0 else 0, 
+                         aave_active/aave_total*100 if aave_total > 0 else 0]
+        colors = ['#2ecc71', '#e74c3c']
+        bars = ax.bar(['High Tide', 'AAVE'], survival_rates, color=colors, alpha=0.7)
+        
+        for bar, rate in zip(bars, survival_rates):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{rate:.1f}%', ha='center', va='bottom', fontweight='bold')
+        
+        ax.set_ylabel('Survival Rate (%)', fontsize=11, fontweight='bold')
+        ax.set_title('Survival Rate Comparison', fontsize=12, fontweight='bold')
+        ax.set_ylim(0, 110)
+        ax.grid(axis='y', alpha=0.3)
+        ax.axhline(y=100, color='green', linestyle='--', alpha=0.5)
+        
+        # Chart 3: Position Management Activity (Stacked Bar)
+        ax = axes[1, 0]
+        x_pos = np.arange(2)
+        width = 0.5
+        
+        # Stacked bars for High Tide showing defensive rebalancing and leverage increases
+        defensive_counts = [ht_rebalances, 0]  # AAVE doesn't rebalance
+        aggressive_counts = [ht_leverage_increases, 0]  # AAVE doesn't increase leverage
+        
+        bars1 = ax.bar(x_pos, defensive_counts, width, label='Defensive (Sell YT)', color='#e74c3c', alpha=0.7)
+        bars2 = ax.bar(x_pos, aggressive_counts, width, bottom=defensive_counts, label='Aggressive (Borrow More)', color='#2ecc71', alpha=0.7)
+        
+        # Add value labels
+        for i, (def_count, agg_count) in enumerate(zip(defensive_counts, aggressive_counts)):
+            total = def_count + agg_count
+            if total > 0:
+                ax.text(i, total, f'{total:,}', ha='center', va='bottom', fontweight='bold')
+        
+        ax.set_ylabel('Position Adjustments', fontsize=11, fontweight='bold')
+        ax.set_title('Active Position Management (Full Year)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(['High Tide\n(Active)', 'AAVE\n(Passive)'])
+        ax.legend(loc='upper left', fontsize=9)
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Chart 4: Strategy Summary (text)
+        ax = axes[1, 1]
+        ax.axis('off')
+        
+        # Calculate survival percentages and returns safely
+        ht_survival_pct = (ht_active / ht_total * 100) if ht_total > 0 else 0.0
+        aave_survival_pct = (aave_active / aave_total * 100) if aave_total > 0 else 0.0
+        
+        # Get return data from comparison summary
+        comparison = self.results.get("comparison_summary", {})
+        ht_return = comparison.get("high_tide", {}).get("avg_return_pct", 0)
+        aave_return = comparison.get("aave", {}).get("avg_return_pct", 0)
+        ht_avg_pos = comparison.get("high_tide", {}).get("avg_net_position_value", 0)
+        aave_avg_pos = comparison.get("aave", {}).get("avg_net_position_value", 0)
+        
+        summary_text = f"""
+COMPARISON SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+High Tide (Active Management):
+  • Survived: {ht_active}/{ht_total} ({ht_survival_pct:.1f}%)
+  • Avg Return: {ht_return:+.1f}%
+  • Avg Position: ${ht_avg_pos:,.0f}
+  
+Position Adjustments: {ht_total_adjustments:,}
+  • Defensive: {ht_rebalances:,}
+  • Aggressive: {ht_leverage_increases:,}
+
+AAVE (Buy & Hold):
+  • Survived: {aave_active}/{aave_total} ({aave_survival_pct:.1f}%)
+  • Avg Return: {aave_return:+.1f}%
+  • Avg Position: ${aave_avg_pos:,.0f}
+  • Position Adjustments: 0
+
+Outperformance: {(ht_return - aave_return):+.1f}%
+
+Market: 2024 Bull (+119% BTC)
+        """
+        
+        ax.text(0.1, 0.95, summary_text, transform=ax.transAxes,
+               fontsize=10, verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+        
+        plt.suptitle('Performance Metrics: High Tide vs AAVE (Full Year 2024)', 
+                    fontsize=14, fontweight='bold', y=0.995)
+        plt.tight_layout()
+        plt.savefig(output_dir / 'performance_metrics.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print("   ✅ Created performance metrics chart")
+    
+    def _create_net_position_apy_comparison_chart(self, output_dir, ht_results, aave_results):
+        """Create 2x2 comparison chart: Net Position Evolution (top) and APY Comparison (bottom left)"""
+        
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(18, 12))
+        fig.suptitle('High Tide vs AAVE: Net Position & APY Evolution', fontsize=16, fontweight='bold')
+        
+        # Get BTC price history
+        ht_sim_results = ht_results.get("simulation_results", ht_results)
+        aave_sim_results = aave_results.get("simulation_results", aave_results)
+        
+        btc_history = ht_sim_results.get("btc_price_history", [])
+        
+        # Extract High Tide time series data from agent_health_history
+        # agent_health_history is a list of timestep dictionaries: [{minute, btc_price, agents: [...]}]
+        ht_health_history = ht_sim_results.get("agent_health_history", [])
+        ht_agent_data = []
+        
+        if ht_health_history and len(ht_health_history) > 0:
+            # Get first agent ID from first timestep
+            first_timestep = ht_health_history[0]
+            if "agents" in first_timestep and len(first_timestep["agents"]) > 0:
+                first_agent_id = first_timestep["agents"][0]["agent_id"]
+                
+                # Extract data for this agent across all timesteps
+                for timestep in ht_health_history:
+                    # Find this agent's data in this timestep
+                    agent_data_in_timestep = next(
+                        (a for a in timestep.get("agents", []) if a.get("agent_id") == first_agent_id),
+                        None
+                    )
+                    if agent_data_in_timestep:
+                        hour = timestep.get("minute", 0) / 60.0
+                        ht_agent_data.append({
+                            "hour": hour,
+                            "net_position": agent_data_in_timestep.get("net_position_value", 0),
+                            "btc_price": timestep.get("btc_price", 42000)
+                        })
+        
+        # Extract AAVE time series data from agent_health_history
+        aave_health_history = aave_sim_results.get("agent_health_history", [])
+        aave_agent_data = []
+        if aave_health_history and len(aave_health_history) > 0:
+            # Get first agent ID from first timestep
+            first_timestep = aave_health_history[0]
+            if "agents" in first_timestep and len(first_timestep["agents"]) > 0:
+                first_agent_id = first_timestep["agents"][0]["agent_id"]
+                
+                # Extract data for this agent across all timesteps
+                for timestep in aave_health_history:
+                    # Find this agent's data in this timestep
+                    agent_data_in_timestep = next(
+                        (a for a in timestep.get("agents", []) if a.get("agent_id") == first_agent_id),
+                        None
+                    )
+                    if agent_data_in_timestep:
+                        hour = timestep.get("minute", 0) / 60.0
+                        aave_agent_data.append({
+                            "hour": hour,
+                            "net_position": agent_data_in_timestep.get("net_position_value", 0),
+                            "btc_price": timestep.get("btc_price", 42000)
+                        })
+        
+        # Debug: Check data extraction
+        print(f"📊 Extracted High Tide data points: {len(ht_agent_data)}")
+        print(f"📊 Extracted AAVE data points: {len(aave_agent_data)}")
+        if ht_agent_data:
+            print(f"   HT first point: hour={ht_agent_data[0]['hour']:.1f}, net_pos=${ht_agent_data[0]['net_position']:,.0f}")
+            print(f"   HT last point: hour={ht_agent_data[-1]['hour']:.1f}, net_pos=${ht_agent_data[-1]['net_position']:,.0f}")
+        if aave_agent_data:
+            print(f"   AAVE first point: hour={aave_agent_data[0]['hour']:.1f}, net_pos=${aave_agent_data[0]['net_position']:,.0f}")
+            print(f"   AAVE last point: hour={aave_agent_data[-1]['hour']:.1f}, net_pos=${aave_agent_data[-1]['net_position']:,.0f}")
+        
+        # Top Left: High Tide Net Position Evolution
+        if ht_agent_data:
+            hours = [d["hour"] for d in ht_agent_data]
+            net_positions = [d["net_position"] for d in ht_agent_data]
+            ax1.plot(hours, net_positions, linewidth=2.5, color='#2E86AB', label='High Tide Net Position')
+            ax1.fill_between(hours, net_positions, alpha=0.2, color='#2E86AB')
+            ax1.set_title('High Tide: Net Position Evolution', fontsize=13, fontweight='bold')
+            ax1.set_xlabel('Hours', fontsize=11)
+            ax1.set_ylabel('Net Position Value ($)', fontsize=11)
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(fontsize=10)
+            
+            # Add final value annotation
+            if net_positions:
+                final_val = net_positions[-1]
+                ax1.axhline(y=final_val, color='red', linestyle='--', alpha=0.5, linewidth=1)
+                ax1.text(hours[-1]*0.95, final_val*1.02, f'Final: ${final_val:,.0f}', 
+                        ha='right', fontsize=10, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            ax1.text(0.5, 0.5, 'No High Tide time series data available', 
+                    ha='center', va='center', transform=ax1.transAxes, fontsize=12)
+            ax1.set_title('High Tide: Net Position Evolution', fontsize=13, fontweight='bold')
+        
+        # Top Right: AAVE Net Position Evolution
+        if aave_agent_data:
+            hours = [d["hour"] for d in aave_agent_data]
+            net_positions = [d["net_position"] for d in aave_agent_data]
+            ax2.plot(hours, net_positions, linewidth=2.5, color='#A23B72', label='AAVE Net Position')
+            ax2.fill_between(hours, net_positions, alpha=0.2, color='#A23B72')
+            ax2.set_title('AAVE: Net Position Evolution', fontsize=13, fontweight='bold')
+            ax2.set_xlabel('Hours', fontsize=11)
+            ax2.set_ylabel('Net Position Value ($)', fontsize=11)
+            ax2.grid(True, alpha=0.3)
+            ax2.legend(fontsize=10)
+            
+            # Add final value annotation
+            if net_positions:
+                final_val = net_positions[-1]
+                ax2.axhline(y=final_val, color='red', linestyle='--', alpha=0.5, linewidth=1)
+                ax2.text(hours[-1]*0.95, final_val*1.02, f'Final: ${final_val:,.0f}', 
+                        ha='right', fontsize=10, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            ax2.text(0.5, 0.5, 'No AAVE time series data available', 
+                    ha='center', va='center', transform=ax2.transAxes, fontsize=12)
+            ax2.set_title('AAVE: Net Position Evolution', fontsize=13, fontweight='bold')
+        
+        # Bottom Left: High Tide APY vs AAVE APY
+        if ht_agent_data and aave_agent_data and len(ht_agent_data) > 1 and len(aave_agent_data) > 1:
+            # Calculate annualized APYs
+            initial_btc_price = ht_agent_data[0]["btc_price"]
+            initial_ht_value = ht_agent_data[0]["net_position"]
+            initial_aave_value = aave_agent_data[0]["net_position"]
+            
+            ht_apys = []
+            aave_apys = []
+            hours = []
+            
+            for i in range(1, min(len(ht_agent_data), len(aave_agent_data))):
+                hour = ht_agent_data[i]["hour"]
+                hours.append(hour)
+                days_elapsed = hour / 24.0
+                
+                if days_elapsed > 0:
+                    # High Tide APY
+                    ht_return = (ht_agent_data[i]["net_position"] / initial_ht_value - 1) * (365 / days_elapsed) * 100
+                    ht_apys.append(ht_return)
+                    
+                    # AAVE APY
+                    aave_return = (aave_agent_data[i]["net_position"] / initial_aave_value - 1) * (365 / days_elapsed) * 100
+                    aave_apys.append(aave_return)
+            
+            ax3.plot(hours, ht_apys, linewidth=2.5, color='#2E86AB', label='High Tide APY', alpha=0.9)
+            ax3.plot(hours, aave_apys, linewidth=2.5, color='#A23B72', label='AAVE APY', alpha=0.9)
+            ax3.axhline(y=0, color='black', linestyle='-', alpha=0.3, linewidth=1)
+            ax3.set_title('Annualized APY Comparison', fontsize=13, fontweight='bold')
+            ax3.set_xlabel('Hours', fontsize=11)
+            ax3.set_ylabel('APY (%)', fontsize=11)
+            ax3.grid(True, alpha=0.3)
+            ax3.legend(fontsize=11, loc='best')
+            
+            # Add final APY annotations
+            if ht_apys and aave_apys:
+                final_ht_apy = ht_apys[-1]
+                final_aave_apy = aave_apys[-1]
+                outperformance = final_ht_apy - final_aave_apy
+                
+                ax3.text(0.02, 0.98, f'High Tide Final: {final_ht_apy:.2f}%\nAAVE Final: {final_aave_apy:.2f}%\nOutperformance: +{outperformance:.2f}%',
+                        transform=ax3.transAxes, fontsize=10, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.3))
+        else:
+            ax3.text(0.5, 0.5, 'Insufficient data for APY comparison', 
+                    ha='center', va='center', transform=ax3.transAxes, fontsize=12)
+            ax3.set_title('Annualized APY Comparison', fontsize=13, fontweight='bold')
+        
+        # Bottom Right: Summary Statistics
+        ax4.axis('off')
+        
+        # Get final metrics from results
+        ht_perf = ht_results.get("agent_outcomes", [])
+        aave_perf = aave_results.get("agent_outcomes", [])
+        
+        ht_survivors = [a for a in ht_perf if a.get("survived", False)]
+        aave_survivors = [a for a in aave_perf if a.get("survived", False)]
+        
+        ht_avg_return = np.mean([a.get("net_position_value", 0) for a in ht_survivors]) / 42208.20 * 100 - 100 if ht_survivors else 0
+        aave_avg_return = np.mean([a.get("net_position_value", 0) for a in aave_survivors]) / 42208.20 * 100 - 100 if aave_survivors else 0
+        
+        # Get market info from test metadata
+        test_meta = self.results.get("test_metadata", {})
+        year = "2021" if "2021" in test_meta.get("test_name", "") else "2024"
+        initial_price = test_meta.get("btc_initial_price", 42208)
+        final_price = test_meta.get("btc_final_price", 92627)
+        btc_return = ((final_price / initial_price) - 1) * 100
+        duration_days = test_meta.get("simulation_duration_hours", 8760) // 24
+        
+        summary_text = f"""
+COMPARISON SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━
+
+Market Conditions:
+• Duration: {duration_days} days ({year})
+• BTC: ${initial_price:,.0f} → ${final_price:,.0f} ({btc_return:+.1f}%)
+• Interest: Historical AAVE rates
+
+High Tide (Active Management):
+• Avg Return: +{ht_avg_return:.2f}%
+• Final HF: {np.mean([a.get("final_health_factor", 0) for a in ht_survivors]) if ht_survivors else 0:.3f}
+• Position Adjustments: {sum(a.get("total_position_adjustments", 0) for a in ht_perf):,}
+
+AAVE (Buy & Hold):
+• Avg Return: +{aave_avg_return:.2f}%
+• Final HF: {np.mean([a.get("final_health_factor", 0) for a in aave_survivors]) if aave_survivors else 0:.3f}
+• Position Adjustments: 0
+
+Performance Advantage:
+• Return Difference: +{ht_avg_return - aave_avg_return:.2f}%
+• Strategy: Active rebalancing outperformed
+  passive buy-and-hold by {ht_avg_return/aave_avg_return if aave_avg_return > 0 else 0:.2f}x
+        """
+        
+        ax4.text(0.1, 0.95, summary_text, transform=ax4.transAxes, fontsize=10,
+                verticalalignment='top', fontfamily='monospace',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "net_position_apy_comparison.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print("   ✅ Created net position and APY comparison chart")
+    
+    def _create_btc_capital_preservation_chart(self, output_dir, ht_results, aave_results):
+        """Create 2x2 BTC Capital Preservation chart showing BTC accumulation vs buy-and-hold"""
+        
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(18, 12))
+        fig.suptitle('Bear Market Capital Preservation: BTC Accumulation Analysis', fontsize=16, fontweight='bold')
+        
+        # Get simulation results
+        ht_sim_results = ht_results.get("simulation_results", ht_results)
+        aave_sim_results = aave_results.get("simulation_results", aave_results)
+        
+        # Extract High Tide time series data
+        ht_health_history = ht_sim_results.get("agent_health_history", [])
+        ht_btc_data = []
+        if ht_health_history and len(ht_health_history) > 0:
+            first_timestep = ht_health_history[0]
+            if "agents" in first_timestep and len(first_timestep["agents"]) > 0:
+                first_agent_id = first_timestep["agents"][0]["agent_id"]
+                print(f"📊 Extracting High Tide BTC data for agent {first_agent_id}")
+                for timestep in ht_health_history:
+                    agent_data = next((a for a in timestep.get("agents", []) if a.get("agent_id") == first_agent_id), None)
+                    if agent_data:
+                        hour = timestep.get("minute", 0) / 60.0
+                        btc_amount = agent_data.get("btc_amount", 0)
+                        btc_price = timestep.get("btc_price", 46320)
+                        btc_value = btc_amount * btc_price
+                        ht_btc_data.append({
+                            "hour": hour,
+                            "btc_amount": btc_amount,
+                            "btc_value": btc_value,
+                            "btc_price": btc_price
+                        })
+                print(f"   ✅ Extracted {len(ht_btc_data)} High Tide data points")
+                if ht_btc_data:
+                    print(f"   📈 First BTC amount: {ht_btc_data[0]['btc_amount']:.4f}, Last BTC amount: {ht_btc_data[-1]['btc_amount']:.4f}")
+        
+        # Extract AAVE time series data
+        aave_health_history = aave_sim_results.get("agent_health_history", [])
+        aave_btc_data = []
+        if aave_health_history and len(aave_health_history) > 0:
+            first_timestep = aave_health_history[0]
+            if "agents" in first_timestep and len(first_timestep["agents"]) > 0:
+                first_agent_id = first_timestep["agents"][0]["agent_id"]
+                print(f"📊 Extracting AAVE BTC data for agent {first_agent_id}")
+                for timestep in aave_health_history:
+                    agent_data = next((a for a in timestep.get("agents", []) if a.get("agent_id") == first_agent_id), None)
+                    if agent_data:
+                        hour = timestep.get("minute", 0) / 60.0
+                        # AAVE records BTC as "remaining_collateral"
+                        btc_amount = agent_data.get("remaining_collateral", 0)
+                        btc_price = timestep.get("btc_price", 46320)
+                        btc_value = btc_amount * btc_price
+                        aave_btc_data.append({
+                            "hour": hour,
+                            "btc_amount": btc_amount,
+                            "btc_value": btc_value,
+                            "btc_price": btc_price
+                        })
+                print(f"   ✅ Extracted {len(aave_btc_data)} AAVE data points")
+                if aave_btc_data:
+                    print(f"   📈 First BTC amount: {aave_btc_data[0]['btc_amount']:.4f}, Last BTC amount: {aave_btc_data[-1]['btc_amount']:.4f}")
+        
+        # Top Left: High Tide BTC Value vs. BTC Buy and Hold
+        if ht_btc_data:
+            hours = [d["hour"] for d in ht_btc_data]
+            ht_values = [d["btc_value"] for d in ht_btc_data]
+            
+            # Buy and hold: 1 BTC throughout
+            buyhold_values = [1.0 * d["btc_price"] for d in ht_btc_data]
+            
+            ax1.plot(hours, ht_values, linewidth=2.5, color='#2E86AB', label='High Tide BTC Value', alpha=0.9)
+            ax1.plot(hours, buyhold_values, linewidth=2.5, color='#FFB84D', label='BTC Buy & Hold', alpha=0.9, linestyle='--')
+            ax1.fill_between(hours, ht_values, buyhold_values, where=[hv >= bh for hv, bh in zip(ht_values, buyhold_values)], 
+                            alpha=0.2, color='green', label='Outperformance')
+            ax1.fill_between(hours, ht_values, buyhold_values, where=[hv < bh for hv, bh in zip(ht_values, buyhold_values)], 
+                            alpha=0.2, color='red', label='Underperformance')
+            ax1.set_title('High Tide: BTC Value vs. Buy & Hold', fontsize=13, fontweight='bold')
+            ax1.set_xlabel('Hours', fontsize=11)
+            ax1.set_ylabel('BTC Value ($)', fontsize=11)
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(fontsize=10, loc='upper right')
+            
+            # Add final comparison annotation
+            if ht_values and buyhold_values:
+                final_ht = ht_values[-1]
+                final_bh = buyhold_values[-1]
+                diff_pct = ((final_ht / final_bh) - 1) * 100
+                ax1.text(0.02, 0.02, f'Final HT: ${final_ht:,.0f}\nFinal B&H: ${final_bh:,.0f}\nDifference: {diff_pct:+.1f}%',
+                        transform=ax1.transAxes, fontsize=10, verticalalignment='bottom',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            ax1.text(0.5, 0.5, 'No High Tide data available', ha='center', va='center', transform=ax1.transAxes, fontsize=12)
+            ax1.set_title('High Tide: BTC Value vs. Buy & Hold', fontsize=13, fontweight='bold')
+        
+        # Top Right: AAVE BTC Value vs. BTC Buy and Hold
+        if aave_btc_data:
+            hours = [d["hour"] for d in aave_btc_data]
+            aave_values = [d["btc_value"] for d in aave_btc_data]
+            
+            # Buy and hold: 1 BTC throughout
+            buyhold_values = [1.0 * d["btc_price"] for d in aave_btc_data]
+            
+            ax2.plot(hours, aave_values, linewidth=2.5, color='#A23B72', label='AAVE BTC Value', alpha=0.9)
+            ax2.plot(hours, buyhold_values, linewidth=2.5, color='#FFB84D', label='BTC Buy & Hold', alpha=0.9, linestyle='--')
+            ax2.fill_between(hours, aave_values, buyhold_values, where=[av >= bh for av, bh in zip(aave_values, buyhold_values)], 
+                            alpha=0.2, color='green', label='Outperformance')
+            ax2.fill_between(hours, aave_values, buyhold_values, where=[av < bh for av, bh in zip(aave_values, buyhold_values)], 
+                            alpha=0.2, color='red', label='Underperformance')
+            ax2.set_title('AAVE: BTC Value vs. Buy & Hold', fontsize=13, fontweight='bold')
+            ax2.set_xlabel('Hours', fontsize=11)
+            ax2.set_ylabel('BTC Value ($)', fontsize=11)
+            ax2.grid(True, alpha=0.3)
+            ax2.legend(fontsize=10, loc='upper right')
+            
+            # Add final comparison annotation
+            if aave_values and buyhold_values:
+                final_aave = aave_values[-1]
+                final_bh = buyhold_values[-1]
+                diff_pct = ((final_aave / final_bh) - 1) * 100
+                ax2.text(0.02, 0.02, f'Final AAVE: ${final_aave:,.0f}\nFinal B&H: ${final_bh:,.0f}\nDifference: {diff_pct:+.1f}%',
+                        transform=ax2.transAxes, fontsize=10, verticalalignment='bottom',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            ax2.text(0.5, 0.5, 'No AAVE data available', ha='center', va='center', transform=ax2.transAxes, fontsize=12)
+            ax2.set_title('AAVE: BTC Value vs. Buy & Hold', fontsize=13, fontweight='bold')
+        
+        # Bottom Left: High Tide BTC Holdings (quantity)
+        if ht_btc_data:
+            hours = [d["hour"] for d in ht_btc_data]
+            btc_amounts = [d["btc_amount"] for d in ht_btc_data]
+            
+            ax3.plot(hours, btc_amounts, linewidth=2.5, color='#2E86AB', label='High Tide BTC Holdings')
+            ax3.fill_between(hours, btc_amounts, alpha=0.2, color='#2E86AB')
+            ax3.axhline(y=1.0, color='orange', linestyle='--', alpha=0.7, linewidth=2, label='Initial (1 BTC)')
+            ax3.set_title('High Tide: BTC Holdings Over Time', fontsize=13, fontweight='bold')
+            ax3.set_xlabel('Hours', fontsize=11)
+            ax3.set_ylabel('BTC Amount', fontsize=11)
+            ax3.grid(True, alpha=0.3)
+            ax3.legend(fontsize=10)
+            
+            # Add final BTC amount annotation
+            if btc_amounts:
+                final_btc = btc_amounts[-1]
+                initial_btc = 1.0
+                change_pct = ((final_btc / initial_btc) - 1) * 100
+                ax3.text(hours[-1]*0.95, final_btc*1.02, f'{final_btc:.4f} BTC\n({change_pct:+.2f}%)', 
+                        ha='right', fontsize=11, fontweight='bold',
+                        bbox=dict(boxstyle='round', facecolor='lightgreen' if change_pct > 0 else 'lightcoral', alpha=0.8))
+        else:
+            ax3.text(0.5, 0.5, 'No High Tide data available', ha='center', va='center', transform=ax3.transAxes, fontsize=12)
+            ax3.set_title('High Tide: BTC Holdings Over Time', fontsize=13, fontweight='bold')
+        
+        # Bottom Right: AAVE BTC Holdings (quantity)
+        if aave_btc_data:
+            hours = [d["hour"] for d in aave_btc_data]
+            btc_amounts = [d["btc_amount"] for d in aave_btc_data]
+            
+            ax4.plot(hours, btc_amounts, linewidth=2.5, color='#A23B72', label='AAVE BTC Holdings')
+            ax4.fill_between(hours, btc_amounts, alpha=0.2, color='#A23B72')
+            ax4.axhline(y=1.0, color='orange', linestyle='--', alpha=0.7, linewidth=2, label='Initial (1 BTC)')
+            ax4.set_title('AAVE: BTC Holdings Over Time', fontsize=13, fontweight='bold')
+            ax4.set_xlabel('Hours', fontsize=11)
+            ax4.set_ylabel('BTC Amount', fontsize=11)
+            ax4.grid(True, alpha=0.3)
+            ax4.legend(fontsize=10)
+            
+            # Add final BTC amount annotation
+            if btc_amounts:
+                final_btc = btc_amounts[-1]
+                initial_btc = 1.0
+                change_pct = ((final_btc / initial_btc) - 1) * 100
+                ax4.text(hours[-1]*0.95, max(btc_amounts)*0.9, f'{final_btc:.4f} BTC\n({change_pct:+.2f}%)', 
+                        ha='right', fontsize=11, fontweight='bold',
+                        bbox=dict(boxstyle='round', facecolor='lightgreen' if change_pct > 0 else 'lightcoral', alpha=0.8))
+        else:
+            ax4.text(0.5, 0.5, 'No AAVE data available', ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+            ax4.set_title('AAVE: BTC Holdings Over Time', fontsize=13, fontweight='bold')
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "btc_capital_preservation_comparison.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print("   ✅ Created BTC capital preservation comparison chart")
+    
+    def _print_comparison_summary(self):
+        """Print comparison summary"""
+        
+        comparison = self.results.get("comparison_summary", {})
+        
+        if not comparison:
+            print("\n⚠️  No comparison data available")
+            return
+        
+        print("\n" + "=" * 70)
+        print("COMPARISON SUMMARY: HIGH TIDE vs AAVE")
+        print("=" * 70)
+        
+        ht = comparison.get("high_tide", {})
+        aave = comparison.get("aave", {})
+        
+        print(f"\n📊 Liquidation Rates:")
+        print(f"   High Tide: {(1 - ht.get('survival_rate', 0)):.1%} liquidated ({ht.get('total_agents', 0) - ht.get('survivors', 0)}/{ht.get('total_agents', 0)} agents)")
+        print(f"   AAVE:      {(1 - aave.get('survival_rate', 0)):.1%} liquidated ({aave.get('total_agents', 0) - aave.get('survivors', 0)}/{aave.get('total_agents', 0)} agents)")
+        if aave.get('total_liquidation_events'):
+            print(f"   AAVE Total Liquidation Events: {aave.get('total_liquidation_events', 0):,} (multiple liquidations per agent)")
+        
+        print(f"\n📈 Average Final Health Factors:")
+        print(f"   High Tide: {ht.get('avg_final_hf', 0):.3f}")
+        print(f"   AAVE:      {aave.get('avg_final_hf', 0):.3f}")
+        
+        print(f"\n💰 Return Performance:")
+        print(f"   Initial Investment: ${ht.get('initial_investment', 0):,.2f} per agent (1 BTC)")
+        print(f"   High Tide:")
+        print(f"      • Avg Final Position: ${ht.get('avg_net_position_value', 0):,.2f}")
+        print(f"      • Avg Return: {ht.get('avg_return_pct', 0):+.2f}%")
+        print(f"   AAVE:")
+        print(f"      • Avg Final Position: ${aave.get('avg_net_position_value', 0):,.2f}")
+        print(f"      • Avg Return: {aave.get('avg_return_pct', 0):+.2f}%")
+        print(f"   Outperformance: {(ht.get('avg_return_pct', 0) - aave.get('avg_return_pct', 0)):+.2f}% higher returns")
+        
+        print(f"\n🔄 Active Position Management:")
+        print(f"   High Tide (Initial HF: {self.config.agent_initial_hf}):")
+        print(f"      • Defensive Rebalancing (sell YT when HF < {self.config.agent_rebalancing_hf}): {ht.get('total_rebalances', 0):,}")
+        print(f"      • Leverage Increases (borrow more when HF > {self.config.agent_initial_hf}): {ht.get('total_leverage_increases', 0):,}")
+        print(f"      • Total Position Adjustments: {ht.get('total_position_adjustments', 0):,}")
+        print(f"   AAVE (Initial HF: {self.config.aave_initial_hf}):")
+        print(f"      • Total Position Adjustments: {aave.get('total_position_adjustments', 0):,} (buy-and-hold)")
+        
+        print("\n" + "=" * 70)
     
     def _save_test_results(self):
         """Save comprehensive test results"""
@@ -1249,8 +2966,9 @@ class FullYearSimulation:
         
         # Chart 1: Initial vs Final Health Factors
         agent_ids = [a["agent_id"] for a in agent_data]
-        initial_hfs = [a["initial_hf"] for a in agent_data]
-        final_hfs = [a["final_hf"] for a in agent_data]
+        # Handle both field name formats (old and new)
+        initial_hfs = [a.get("initial_hf", a.get("initial_health_factor", 0)) for a in agent_data]
+        final_hfs = [a.get("final_hf", a.get("final_health_factor", 0)) for a in agent_data]
         survived = [a["survived"] for a in agent_data]
         
         colors = ['green' if s else 'red' for s in survived]
@@ -1266,8 +2984,9 @@ class FullYearSimulation:
         ax1.grid(True, alpha=0.3)
         
         # Chart 2: Rebalancing Activity by Agent
-        rebalance_counts = [a["rebalance_count"] for a in agent_data]
-        slippage_costs = [a["total_slippage"] for a in agent_data]
+        # Handle both field name formats (old and new)
+        rebalance_counts = [a.get("rebalance_count", a.get("rebalancing_events", 0)) for a in agent_data]
+        slippage_costs = [a.get("total_slippage", a.get("total_slippage_costs", a.get("total_rebalancing_slippage", 0))) for a in agent_data]
         
         bars = ax2.bar(range(len(agent_ids)), rebalance_counts, color=colors, alpha=0.7)
         ax2.set_xlabel('Agent')
@@ -1295,22 +3014,33 @@ class FullYearSimulation:
         fig, ax = plt.subplots(figsize=(14, 8))
         fig.suptitle('Rebalancing Activity Timeline', fontsize=16, fontweight='bold')
         
+        # Handle both dict and list formats for rebalancing_events
+        rebalancing_events = self.results.get("rebalancing_events", {})
+        if isinstance(rebalancing_events, list):
+            # If it's a list, treat it as agent rebalances
+            agent_events = rebalancing_events
+            alm_events = []
+        elif isinstance(rebalancing_events, dict):
+            agent_events = rebalancing_events.get("agent_rebalances", [])
+            alm_events = rebalancing_events.get("alm_rebalances", [])
+        else:
+            agent_events = []
+            alm_events = []
+        
         # Plot agent rebalances
-        agent_events = self.results["rebalancing_events"]["agent_rebalances"]
         if agent_events:
-            agent_hours = [e["hour"] for e in agent_events]
+            agent_hours = [e.get("hour", e.get("minute", 0) / 60) for e in agent_events]
             ax.scatter(agent_hours, [1] * len(agent_hours), alpha=0.7, s=50, color='blue', label='Agent Rebalances')
         
         # Plot ALM rebalances
-        alm_events = self.results["rebalancing_events"]["alm_rebalances"]
         if alm_events:
-            alm_hours = [e["hour"] for e in alm_events]
+            alm_hours = [e.get("hour", e.get("minute", 0) / 60) for e in alm_events]
             ax.scatter(alm_hours, [2] * len(alm_hours), alpha=0.7, s=100, color='green', marker='s', label='ALM Rebalances')
         
         # Plot Algo rebalances
-        algo_events = self.results["rebalancing_events"]["algo_rebalances"]
+        algo_events = rebalancing_events.get("algo_rebalances", []) if isinstance(rebalancing_events, dict) else []
         if algo_events:
-            algo_hours = [e["hour"] for e in algo_events]
+            algo_hours = [e.get("hour", e.get("minute", 0) / 60) for e in algo_events]
             ax.scatter(algo_hours, [3] * len(algo_hours), alpha=0.7, s=100, color='red', marker='^', label='Algo Rebalances')
         
         ax.set_xlabel('Hours')
@@ -1343,7 +3073,8 @@ class FullYearSimulation:
         ax1.set_title('Agent Survival Rate')
         
         # Chart 2: Net position distribution
-        net_positions = [a["net_position"] for a in agent_data if a["survived"]]
+        # Handle both field name formats (old and new)
+        net_positions = [a.get("net_position", a.get("net_position_value", 0)) for a in agent_data if a["survived"]]
         if net_positions:
             ax2.hist(net_positions, bins=10, alpha=0.7, color='blue', edgecolor='black')
             ax2.set_xlabel('Net Position ($)')
@@ -1352,7 +3083,8 @@ class FullYearSimulation:
             ax2.grid(True, alpha=0.3)
         
         # Chart 3: Slippage costs
-        slippage_costs = [a["total_slippage"] for a in agent_data]
+        # Handle both field name formats (old and new)
+        slippage_costs = [a.get("total_slippage", a.get("total_slippage_costs", a.get("total_rebalancing_slippage", 0))) for a in agent_data]
         agent_indices = range(len(agent_data))
         colors = ['green' if a["survived"] else 'red' for a in agent_data]
         
@@ -1365,7 +3097,8 @@ class FullYearSimulation:
         ax3.grid(True, alpha=0.3)
         
         # Chart 4: Health factor final distribution
-        final_hfs = [a["final_hf"] for a in agent_data if a["survived"]]
+        # Handle both field name formats (old and new)
+        final_hfs = [a.get("final_hf", a.get("final_health_factor", 0)) for a in agent_data if a["survived"]]
         if final_hfs:
             ax4.hist(final_hfs, bins=10, alpha=0.7, color='green', edgecolor='black')
             ax4.axvline(x=self.config.agent_target_hf, color='red', linestyle='--', label='Target HF')
@@ -4220,25 +5953,37 @@ Frequency: Hourly (when deficit exists)"""
 def main():
     """Main execution function"""
     
-    print("Full Year 2024 BTC Simulation")
+    print("STUDY 5: 2025 Low Vol Market Simulation")
     print("=" * 50)
-    print()
-    print("This simulation will run for a full year (365 days) using real 2024 BTC pricing data.")
-    print("Features:")
-    print("• 120 High Tide agents with uniform tri-health factor profile")
-    print("  - Initial HF: 1.1, Rebalancing HF: 1.025, Target HF: 1.04")
-    print("• Leverage increases when BTC rises (HF > initial HF)")
-    print("• Pool rebalancing with ALM (12h intervals) and Algo (50 bps threshold)")
-    print("• Real 2024 BTC price progression: $42k → $93k (+119%)")
     print()
     
     # Create configuration
     config = FullYearSimConfig()
     
+    if config.run_aave_comparison:
+        print("COMPARISON MODE: High Tide vs AAVE")
+        print("This simulation compares High Tide's active rebalancing vs AAVE's buy-and-hold strategy.")
+        print()
+        print("Features:")
+        print("• 20 agents per system (High Tide & AAVE)")
+        print("• Both use 2025 historical AAVE borrow rates")
+        print("• High Tide: Active rebalancing (HF: 1.3 → 1.1 → 1.2)")
+        print("• AAVE: Buy-and-hold (no rebalancing)")
+        print("• Real 2025 BTC: $94k → $113k (+21.2%) - 268 days")
+    else:
+        print("This simulation will run for 268 days using real 2025 BTC pricing data.")
+        print("Features:")
+        print("• 20 High Tide agents with uniform tri-health factor profile")
+        print("  - Initial HF: 1.3, Rebalancing HF: 1.1, Target HF: 1.2")
+        print("• Leverage increases when BTC rises (HF > initial HF)")
+        print("• Pool rebalancing with ALM (12h intervals) and Algo (50 bps threshold)")
+        print("• Real 2025 BTC price progression: $94k → $113k (+21.2%)")
+        print("• Ecosystem growth to $150M deposits")
+    
+    print()
     print(f"Configuration:")
     print(f"• Duration: {config.simulation_duration_hours:,} hours ({config.simulation_duration_hours//24} days)")
-    print(f"• Agents: {config.num_agents} High Tide agents")
-    print(f"• BTC Data: {len(config.btc_2024_data)} daily prices from 2024")
+    print(f"• BTC Data: {len(config.btc_2025_data)} daily prices from 2025")
     print(f"• Pool Sizes: MOET:BTC ${config.moet_btc_pool_config['size']:,}, MOET:YT ${config.moet_yt_pool_config['size']:,}")
     print()
     
@@ -4248,14 +5993,20 @@ def main():
     
     # Run the full year simulation
     print("\n🌍 FULL YEAR SIMULATION STARTING")
-    print("This will take significant time - progress reports every week...")
+    if config.run_aave_comparison:
+        print("Mode: High Tide vs AAVE Comparison (120 agents each)")
+        print("This will take significant time - running both simulations...")
+    else:
+        print("Mode: High Tide with Ecosystem Growth")
+        print("This will take significant time - progress reports every week...")
     
     try:
         simulation = FullYearSimulation(config)
         
         # ECOSYSTEM GROWTH: Enable scaling to $150M deposits with optimized parameters
-        # Max 500 agents, 2-5 BTC each, leverages existing logging optimizations
-        simulation.enable_ecosystem_growth(target_btc_deposits=150_000_000, growth_start_delay_days=30)
+        # Disabled when running AAVE comparison for clean apples-to-apples comparison
+        if not config.run_aave_comparison:
+            simulation.enable_ecosystem_growth(target_btc_deposits=150_000_000, growth_start_delay_days=30)
         
         results = simulation.run_test()
         

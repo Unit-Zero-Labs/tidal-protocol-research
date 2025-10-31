@@ -231,11 +231,17 @@ class AaveProtocolEngine(TidalProtocolEngine):
         
         if moet_amount <= 0:
             return False
-            
+        
+        # AAVE agent determines direct minting internally based on minute == 0
         success = agent.execute_yield_token_purchase(moet_amount, minute)
         
         if success:
-            self.yield_token_pool.execute_yield_token_purchase(moet_amount)
+            # For direct minting at minute 0, update pool reserves to maintain synchronization
+            if minute == 0:
+                self.yield_token_pool.moet_reserve += moet_amount
+            else:
+                # Normal Uniswap purchase (shouldn't happen for AAVE buy-and-hold)
+                self.yield_token_pool.execute_yield_token_purchase(moet_amount)
             
             self.yield_token_trades.append({
                 "minute": minute,

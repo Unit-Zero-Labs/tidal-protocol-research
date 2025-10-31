@@ -445,6 +445,14 @@ class HighTideVaultEngine(TidalProtocolEngine):
                 else:
                     print(f"           ❌ Leverage increase YT purchase failed")
             
+            # Record leverage increase event
+            if yt_purchase_success:
+                agent.state.leverage_increase_events.append({
+                    "minute": minute,
+                    "moet_borrowed": amount,
+                    "health_factor_before": agent.state.health_factor
+                })
+            
             return yt_purchase_success
         
         print(f"           ❌ Borrow failed")
@@ -687,7 +695,8 @@ class HighTideVaultEngine(TidalProtocolEngine):
                     "net_position_value": portfolio["net_position_value"],
                     "yield_token_value": portfolio["yield_token_portfolio"]["total_current_value"],
                     "total_yield_sold": portfolio["total_yield_sold"],
-                    "rebalancing_events": portfolio["rebalancing_events_count"]
+                    "rebalancing_events": portfolio["rebalancing_events_count"],
+                    "btc_amount": portfolio["btc_amount"]  # Track BTC holdings for capital preservation analysis
                 })
                 
             self.agent_health_history.append({
@@ -984,6 +993,9 @@ class HighTideVaultEngine(TidalProtocolEngine):
             agent_rebalancing_events = [event for event in self.rebalancing_events 
                                        if event["agent_id"] == agent.agent_id]
             
+            # Get leverage increase events from agent state
+            agent_leverage_events = agent.state.leverage_increase_events if hasattr(agent.state, 'leverage_increase_events') else []
+            
             outcome = {
                 "agent_id": agent.agent_id,
                 "agent_type": "high_tide_agent",  # Specify agent type
@@ -998,6 +1010,9 @@ class HighTideVaultEngine(TidalProtocolEngine):
                 "total_yield_sold": portfolio["total_yield_sold"],
                 "rebalancing_events": len(agent_rebalancing_events),
                 "rebalancing_events_list": agent_rebalancing_events,  # FIXED: Real engine events
+                "leverage_increase_events": len(agent_leverage_events),  # NEW: Track leverage increases
+                "leverage_increase_events_list": agent_leverage_events,  # NEW: Full event list
+                "total_position_adjustments": len(agent_rebalancing_events) + len(agent_leverage_events),  # NEW: Combined metric
                 "survived": agent.state.health_factor > 1.0,
                 "yield_token_value": portfolio["yield_token_portfolio"]["total_current_value"],
                 # Add debt tracking fields for CSV
