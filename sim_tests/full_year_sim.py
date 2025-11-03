@@ -47,8 +47,8 @@ class FullYearSimConfig:
     
     def __init__(self):
         # Test scenario parameters
-        self.test_name = "Full_Year_2025_BTC_Low_Vol_Market"
-        self.simulation_duration_hours = 24 * 268  # 268 days for 2025 (Jan 1 - Sept 25)
+        self.test_name = "Full_Year_2025_BTC_Low_Vol_Market_Advanced_MOET_vs_AAVE_Historical"
+        self.simulation_duration_hours = 24 * 268  # 268 days for 2025 (available data)
         self.simulation_duration_minutes = 268 * 24 * 60  # 385,920 minutes
         
         # BTC pricing data configuration
@@ -57,12 +57,12 @@ class FullYearSimConfig:
         
         # AAVE comparison configuration
         self.run_aave_comparison = True  # Enable AAVE vs High Tide comparison
-        self.use_historical_rates = True  # Use 2025 AAVE rates for both protocols
+        self.use_historical_rates = True  # Use 2025 AAVE rates for AAVE only
         self.rates_csv_path = "rates_compute.csv"
         self.aave_rates_2025 = self._load_2025_aave_rates() if self.use_historical_rates else None
         
-        # Agent configuration - Equal HF for Low Vol Comparison (Study 5)
-        self.num_agents = 20  # 20 agents for testing
+        # Agent configuration - Equal HF for 2025 Low Vol Market
+        self.num_agents = 1  # 1 agent for detailed tracking
         self.use_mixed_risk_profiles = False  # Use uniform profile for all agents
         
         # Both protocols start at equal health factors for baseline comparison
@@ -71,11 +71,11 @@ class FullYearSimConfig:
         self.agent_target_hf = 1.2       # High Tide rebalancing target
         
         # AAVE: Same initial HF for fair comparison
-        self.aave_initial_hf = 1.3       # Equal starting position (Study 5)
+        self.aave_initial_hf = 1.3       # Equal starting position
         
         # BTC price scenario - Real 2025 data (Low Vol Market)
-        self.btc_initial_price = 93507.86  # 2025-01-01 price  
-        self.btc_final_price = 113320.57   # 2025-09-25 price (+21.2% low vol)
+        self.btc_initial_price = 93429.74  # 2025-01-01 price  
+        self.btc_final_price = 96104.37    # 2025-09-25 price (+2.9% low vol)
         self.btc_price_pattern = "real_2025_data"  # Use actual historical data
         
         # Pool configurations - Scaled for 120 agents over full year
@@ -119,8 +119,17 @@ class FullYearSimConfig:
         self.progress_report_every_n_minutes = 10080  # Weekly progress reports (7 days)
         
         # Advanced MOET system toggle
-        # When comparing with AAVE, disable advanced system to use same rates for both
-        self.enable_advanced_moet_system = not self.use_historical_rates  # Disable when using AAVE historical rates
+        # OPTION 1: Fair comparison - both protocols use same historical rates
+        # self.enable_advanced_moet_system = not self.use_historical_rates
+        
+        # OPTION 2: Asymmetric comparison - High Tide uses dynamic system, AAVE uses historical
+        # This shows High Tide's native economic model vs AAVE's real historical rates
+        self.enable_advanced_moet_system = True  # Always enable for High Tide
+        
+        # Note: When enable_advanced_moet_system=True AND use_historical_rates=True:
+        # - High Tide agents face dynamic MOET rates (r_floor + r_bond_cost)
+        # - AAVE agents face fixed historical rates from CSV
+        # This creates an asymmetric but realistic comparison
         
         # Ecosystem Growth Configuration
         # Disable ecosystem growth when comparing with AAVE for clean comparison
@@ -498,7 +507,7 @@ class FullYearSimConfig:
         Get historical AAVE borrow rate for a given simulation minute
         
         Args:
-            minute: Simulation minute (0 to 385,920)
+            minute: Simulation minute (0 to 524,160)
         
         Returns:
             Daily borrow rate (APR as decimal, e.g. 0.05 = 5%)
@@ -506,8 +515,8 @@ class FullYearSimConfig:
         if not self.use_historical_rates or self.aave_rates_2025 is None:
             return 0.05  # Fallback to 5% APR
         
-        # Convert minute to day (0-267 for 2025 - 268 days)
-        day = min(minute // 1440, 267)
+        # Convert minute to day (0-364 for 2024 - 365 days)
+        day = min(minute // 1440, 364)
         
         return self.aave_rates_2025.get(day, 0.05)
         
@@ -578,17 +587,20 @@ class FullYearSimulation:
     def run_test(self) -> Dict[str, Any]:
         """Run the complete full year simulation (High Tide only or High Tide vs AAVE comparison)"""
         
-        print("🌍 STUDY 5: 2025 LOW VOL MARKET SIMULATION")
+        print("🌍 STUDY 5: 2025 LOW VOL MARKET - ADVANCED MOET vs HISTORICAL AAVE")
         print("=" * 70)
         print(f"📅 Duration: {self.config.simulation_duration_hours:,} hours ({self.config.simulation_duration_hours//24} days)")
         print(f"👥 Agents: {self.config.num_agents} agents per system")
-        print(f"📈 BTC 2025 Journey: ${self.config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f} ({((self.config.btc_final_price/self.config.btc_initial_price)-1)*100:+.1f}%)")
+        print(f"📊 BTC 2025 Low Vol Market: ${self.config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f} ({((self.config.btc_final_price/self.config.btc_initial_price)-1)*100:+.1f}%)")
         print(f"🔄 Pool Arbitrage: {'ENABLED' if self.config.enable_pool_arbing else 'DISABLED'}")
         print(f"📊 BTC Data: {len(self.config.btc_2025_data)} daily prices loaded")
         
         if self.config.run_aave_comparison:
-            print(f"📊 Mode: HIGH TIDE vs AAVE COMPARISON")
-            print(f"📈 Historical Rates: {'2025 AAVE rates' if self.config.use_historical_rates else 'Fixed 5% APR'}")
+            print(f"📊 Mode: ASYMMETRIC COMPARISON")
+            print(f"💎 High Tide: Advanced MOET System (dynamic rates)")
+            print(f"📈 AAVE: Historical 2025 rates from CSV")
+            print(f"💰 Both start at 1.3 Initial HF (equal positioning)")
+            print(f"💎 Weekly yield harvest enabled for High Tide")
             print()
             return self._run_comparison_simulation()
         else:
@@ -718,7 +730,7 @@ class FullYearSimulation:
         
         # Override MOET rates with historical AAVE rates if enabled (for fair comparison)
         if self.config.use_historical_rates:
-            print(f"📊 Using historical 2025 AAVE rates for High Tide (avg: {sum(self.config.aave_rates_2025.values()) / len(self.config.aave_rates_2025) * 100:.2f}% APR)")
+            print(f"📊 Using historical 2021 AAVE rates for High Tide (avg: {sum(self.config.aave_rates_2025.values()) / len(self.config.aave_rates_2025) * 100:.2f}% APR)")
             
             # Create rate override function that uses engine.current_step (simulation minute)
             def get_historical_aave_rate():
@@ -929,7 +941,7 @@ class FullYearSimulation:
         
         # Override MOET rates with historical AAVE rates if enabled
         if self.config.use_historical_rates:
-            print(f"📊 Using historical 2025 AAVE rates (avg: {sum(self.config.aave_rates_2025.values()) / len(self.config.aave_rates_2025) * 100:.2f}% APR)")
+            print(f"📊 Using historical 2021 AAVE rates (avg: {sum(self.config.aave_rates_2025.values()) / len(self.config.aave_rates_2025) * 100:.2f}% APR)")
             
             # Create rate override function that uses engine.current_step (simulation minute)
             def get_historical_aave_rate():
@@ -2462,7 +2474,7 @@ Market: 2024 Bull (+119% BTC)
         
         # Get market info from test metadata
         test_meta = self.results.get("test_metadata", {})
-        year = "2021" if "2021" in test_meta.get("test_name", "") else "2024"
+        year = "2025" if "2025" in test_meta.get("test_name", "") else ("2024" if "2024" in test_meta.get("test_name", "") else ("2021" if "2021" in test_meta.get("test_name", "") else "2022"))
         initial_price = test_meta.get("btc_initial_price", 42208)
         final_price = test_meta.get("btc_final_price", 92627)
         btc_return = ((final_price / initial_price) - 1) * 100
@@ -2732,6 +2744,30 @@ Performance Advantage:
         print(f"      • Total Position Adjustments: {ht.get('total_position_adjustments', 0):,}")
         print(f"   AAVE (Initial HF: {self.config.aave_initial_hf}):")
         print(f"      • Total Position Adjustments: {aave.get('total_position_adjustments', 0):,} (buy-and-hold)")
+        
+        # Add detailed accounting breakdown for High Tide
+        print(f"\n📋 HIGH TIDE ACCOUNTING BREAKDOWN:")
+        ht_agents = self.results.get("high_tide_results", {}).get("agent_outcomes", [])
+        if ht_agents:
+            agent = ht_agents[0]  # Show first agent as example
+            yt_portfolio = agent.get("yield_token_portfolio", {})
+            print(f"   Agent: {agent.get('agent_id', 'unknown')}")
+            print(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print(f"   💰 YT Initial Value: ${yt_portfolio.get('total_initial_value', 0):,.2f}")
+            print(f"   📈 Total MOET Borrowed (Principal): ${agent.get('current_moet_debt', 0) - agent.get('total_interest_accrued', 0):,.2f}")
+            print(f"   📊 Interest Accrued: ${agent.get('total_interest_accrued', 0):,.2f}")
+            print(f"   💵 Total MOET Debt: ${agent.get('current_moet_debt', 0):,.2f}")
+            print(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print(f"   🔴 YT Sold (Yield Harvest): ${agent.get('total_deleveraging_sales', 0):,.2f}")
+            print(f"   💎 Current YT Value: ${yt_portfolio.get('total_current_value', 0):,.2f}")
+            print(f"   🪙 BTC Accumulated: {agent.get('btc_amount', 0):.4f} BTC")
+            print(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            discrepancy = yt_portfolio.get('total_initial_value', 0) - (agent.get('current_moet_debt', 0) - agent.get('total_interest_accrued', 0))
+            print(f"   ⚠️  DISCREPANCY CHECK:")
+            print(f"       YT Purchased should equal MOET Borrowed (ex-interest)")
+            print(f"       Difference: ${abs(discrepancy):,.2f}")
+            if abs(discrepancy) > 100:
+                print(f"       ❌ ACCOUNTING ERROR DETECTED!")
         
         print("\n" + "=" * 70)
     
@@ -5953,7 +5989,7 @@ Frequency: Hourly (when deficit exists)"""
 def main():
     """Main execution function"""
     
-    print("STUDY 5: 2025 Low Vol Market Simulation")
+    print("STUDY 5: 2025 Low Vol Market - Advanced MOET vs Historical AAVE")
     print("=" * 50)
     print()
     
@@ -5965,19 +6001,21 @@ def main():
         print("This simulation compares High Tide's active rebalancing vs AAVE's buy-and-hold strategy.")
         print()
         print("Features:")
-        print("• 20 agents per system (High Tide & AAVE)")
-        print("• Both use 2025 historical AAVE borrow rates")
-        print("• High Tide: Active rebalancing (HF: 1.3 → 1.1 → 1.2)")
-        print("• AAVE: Buy-and-hold (no rebalancing)")
-        print("• Real 2025 BTC: $94k → $113k (+21.2%) - 268 days")
+        print("• 1 agent per system (High Tide & AAVE)")
+        print("• High Tide: Advanced MOET System (dynamic rates: 2% + bond cost)")
+        print("• AAVE: Historical 2025 rates from CSV")
+        print("• High Tide: Active rebalancing (HF: 1.3 → 1.1 → 1.2) - Equal HF")
+        print("• AAVE: Buy-and-hold (HF: 1.3) - Equal HF")
+        print("• Real 2025 BTC: $93k → $96k (+2.9%) - 268 days")
+        print("• 💎 Weekly yield harvest (sell only YT rebasing yield)")
     else:
         print("This simulation will run for 268 days using real 2025 BTC pricing data.")
         print("Features:")
-        print("• 20 High Tide agents with uniform tri-health factor profile")
+        print("• High Tide agents with uniform tri-health factor profile")
         print("  - Initial HF: 1.3, Rebalancing HF: 1.1, Target HF: 1.2")
         print("• Leverage increases when BTC rises (HF > initial HF)")
         print("• Pool rebalancing with ALM (12h intervals) and Algo (50 bps threshold)")
-        print("• Real 2025 BTC price progression: $94k → $113k (+21.2%)")
+        print("• Real 2025 BTC price progression: $93k → $96k (+2.9%)")
         print("• Ecosystem growth to $150M deposits")
     
     print()

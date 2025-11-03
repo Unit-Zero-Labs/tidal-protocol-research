@@ -77,9 +77,11 @@ class HighTideAgentState(AgentState):
         # Interest tracking
         self.total_interest_accrued = 0.0
         self.last_interest_update_minute = 0
+        self.current_moet_borrow_rate = 0.0  # Store current borrow rate for net yield calculation
         
         # Deleveraging tracking
         self.last_weekly_delever_minute = 0  # Track last weekly deleveraging
+        self.last_weekly_yt_price = 0.0  # Track YT price from last weekly deleveraging
         self.deleveraging_events = []  # Track deleveraging history
         self.total_deleveraging_sales = 0.0  # Total YT sold for deleveraging
         self.total_deleveraging_slippage = 0.0  # Total slippage from deleveraging chain
@@ -147,6 +149,7 @@ class HighTideAgent(BaseAgent):
         # This allows agents to take advantage of opportunities much faster than weekly checks
         if current_minute % 10 == 0:  # Every 10 minutes
             if self._check_leverage_opportunity(asset_prices):
+                print(f"🔄 LEVERAGE OPPORTUNITY at minute {current_minute}: HF {self.state.health_factor:.4f} > {self.state.initial_health_factor:.4f}")
                 return self._execute_leverage_increase(asset_prices, current_minute)
         
         # Check if rebalancing is needed (HF below initial threshold)
@@ -226,7 +229,13 @@ class HighTideAgent(BaseAgent):
         target_debt = collateral_value / self.state.initial_health_factor
         additional_moet_needed = target_debt - current_debt
         
+        print(f"   💰 Collateral Value: ${collateral_value:,.2f}")
+        print(f"   📊 Current Debt: ${current_debt:,.2f}")
+        print(f"   🎯 Target Debt (HF={self.state.initial_health_factor}): ${target_debt:,.2f}")
+        print(f"   ➕ Additional MOET to borrow: ${additional_moet_needed:,.2f}")
+        
         if additional_moet_needed <= 0:
+            print(f"   ⚠️  No additional borrowing needed")
             return (AgentAction.HOLD, {})
         
         return (AgentAction.BORROW, {
@@ -477,6 +486,9 @@ class HighTideAgent(BaseAgent):
     
     def update_debt_interest(self, current_minute: int, btc_pool_borrow_rate: float):
         """Update debt with accrued interest based on BTC pool utilization"""
+        # Store the current borrow rate for net yield calculation
+        self.state.current_moet_borrow_rate = btc_pool_borrow_rate
+        
         if current_minute <= self.state.last_interest_update_minute:
             return
             
@@ -523,8 +535,15 @@ class HighTideAgent(BaseAgent):
             
             # Calculate actual YT received for logging
             yt_received = sum(token.initial_value for token in new_tokens)
-            print(f"           💰 YT Purchase: ${moet_amount:,.2f} MOET → ${yt_received:,.2f} YT")
-            print(f"           💳 MOET Balance: ${moet_balance:,.2f} → ${self.state.token_balances[Asset.MOET]:,.2f}")
+            
+            # DETAILED TRANSACTION LOG
+            total_yt_value = self.state.yield_token_manager.calculate_total_value(current_minute)
+            print(f"🔵 YT PURCHASE TRANSACTION (Minute {current_minute}):")
+            print(f"   💸 MOET Spent: ${moet_amount:,.2f}")
+            print(f"   💰 YT Received: ${yt_received:,.2f}")
+            print(f"   📊 Total YT Value: ${total_yt_value:,.2f}")
+            print(f"   💳 MOET Balance: ${moet_balance:,.2f} → ${self.state.token_balances[Asset.MOET]:,.2f}")
+            print(f"   📈 Total MOET Debt: ${self.state.moet_debt:,.2f}")
             
             return True
         
@@ -569,15 +588,22 @@ class HighTideAgent(BaseAgent):
             # Track slippage and purpose-specific metrics
             slippage_loss = max(0, yield_tokens_to_sell - moet_raised)  # YT should be ~1:1 with MOET
             
+            # DETAILED TRANSACTION LOG
+            remaining_yt_value = self.state.yield_token_manager.calculate_total_value(current_minute)
+            print(f"🔴 YT SALE TRANSACTION (Minute {current_minute}):")
+            print(f"   📉 YT Sold: ${yield_tokens_to_sell:,.2f}")
+            print(f"   💰 MOET Received: ${moet_raised:,.2f}")
+            print(f"   📊 Remaining YT Value: ${remaining_yt_value:,.2f}")
+            print(f"   💳 MOET Balance: ${self.state.token_balances[Asset.MOET]:,.2f}")
+            print(f"   📈 Total MOET Debt: ${self.state.moet_debt:,.2f}")
+            print(f"   🎯 Purpose: {purpose}")
+            
             if purpose == "rebalancing":
                 self.state.total_yield_sold_for_rebalancing += yield_tokens_to_sell
                 self.state.total_rebalancing_slippage += slippage_loss
-                print(f"        💸 {self.agent_id}: Rebalancing YT sale: ${yield_tokens_to_sell:,.0f} YT → ${moet_raised:,.0f} MOET (slippage: ${slippage_loss:.2f})")
             elif purpose == "deleveraging":
                 # Deleveraging tracking will be handled in execute_deleveraging method
-                print(f"        💸 {self.agent_id}: Deleveraging YT sale: ${yield_tokens_to_sell:,.0f} YT → ${moet_raised:,.0f} MOET (slippage: ${slippage_loss:.2f})")
-            else:
-                print(f"        💸 {self.agent_id}: YT sale ({purpose}): ${yield_tokens_to_sell:,.0f} YT → ${moet_raised:,.0f} MOET (slippage: ${slippage_loss:.2f})")
+                pass
         else:
             print(f"    ❌ {self.agent_id}: No MOET raised from yield token sale")
             
@@ -702,7 +728,7 @@ class HighTideAgent(BaseAgent):
         if self.state.health_factor > hf_threshold:
             return self._execute_hf_deleveraging(asset_prices, current_minute)
         
-        # Check 2: Weekly deleveraging (1% of YT position)
+        # Check 2: Weekly deleveraging (harvest yield weekly)
         minutes_per_week = 7 * 24 * 60  # 10,080 minutes
         if current_minute - self.state.last_weekly_delever_minute >= minutes_per_week:
             return self._execute_weekly_deleveraging(asset_prices, current_minute)
@@ -741,33 +767,80 @@ class HighTideAgent(BaseAgent):
         })
     
     def _execute_weekly_deleveraging(self, asset_prices: Dict[Asset, float], current_minute: int) -> tuple:
-        """Execute weekly 1% YT position deleveraging"""
-        # Calculate 1% of current YT position
-        total_yt_value = sum(token.get_current_value(current_minute) 
-                           for token in self.state.yield_token_manager.yield_tokens)
-        
-        if total_yt_value <= 0:
+        """Execute weekly deleveraging by selling only the NET yield (YT yield - MOET interest cost)"""
+        if not self.state.yield_token_manager.yield_tokens:
             return ("no_action", {})
         
-        yt_to_sell = total_yt_value * 0.01  # 1% of position
+        # Use GLOBAL YT price function (all tokens have same price at any moment)
+        from tidal_protocol_sim.core.yield_tokens import calculate_true_yield_token_price
+        current_yt_price = calculate_true_yield_token_price(current_minute, 0.10, 1.0)
         
-        # Update last weekly delever time
+        # Calculate total YT quantity held
+        total_yt_quantity = sum(token.quantity for token in self.state.yield_token_manager.yield_tokens)
+        
+        if total_yt_quantity <= 0:
+            return ("no_action", {})
+        
+        # Current YT price is now the global price
+        
+        # Initialize last_weekly_yt_price if this is the first weekly deleveraging
+        if self.state.last_weekly_yt_price == 0.0:
+            # First week - record price but don't sell yet (no yield accrued)
+            self.state.last_weekly_yt_price = current_yt_price
+            self.state.last_weekly_delever_minute = current_minute
+            print(f"📅 {self.agent_id}: First weekly check - recording YT price ${current_yt_price:.6f}/token")
+            return ("no_action", {})
+        
+        # Calculate accrued YT yield from price appreciation (rebasing)
+        last_price = self.state.last_weekly_yt_price  # Store for logging
+        yt_price_increase = current_yt_price - last_price
+        
+        if yt_price_increase <= 0:
+            # Price didn't increase (unusual but possible) - don't sell
+            print(f"📅 {self.agent_id}: Weekly check - no YT price increase (${last_price:.6f} → ${current_yt_price:.6f})")
+            self.state.last_weekly_yt_price = current_yt_price
+            self.state.last_weekly_delever_minute = current_minute
+            return ("no_action", {})
+        
+        # Calculate total YT yield accrued across all quantity
+        yt_yield_value = yt_price_increase * total_yt_quantity
+        
+        print(f"\n{'='*80}")
+        print(f"📅 WEEKLY HARVEST at minute {current_minute} (Week {current_minute//(7*24*60) + 1})")
+        print(f"{'='*80}")
+        print(f"   Global YT Price: ${last_price:.6f} → ${current_yt_price:.6f} (+${yt_price_increase:.6f})")
+        print(f"   Total YT Quantity: {total_yt_quantity:.2f}")
+        print(f"   YT Yield Earned: ${yt_yield_value:,.2f} ({total_yt_quantity:.2f} quantity × ${yt_price_increase:.6f})")
+        print(f"   Selling yield and converting to BTC (not accounting for MOET interest)")
+        print(f"   Current BTC: {self.state.btc_amount:.6f}, Current Debt: ${self.state.moet_debt:,.2f}, Current HF: {self.state.health_factor:.4f}")
+        
+        # Always harvest if we have positive YT yield (ignore MOET interest)
+        if yt_yield_value <= 0:
+            print(f"   ⚠️  No YT yield - skipping harvest")
+            self.state.last_weekly_yt_price = current_yt_price
+            self.state.last_weekly_delever_minute = current_minute
+            return ("no_action", {})
+        
+        # Update tracking
+        self.state.last_weekly_yt_price = current_yt_price
         self.state.last_weekly_delever_minute = current_minute
         
-        print(f"📅 {self.agent_id}: Weekly deleveraging - selling 1% of YT position (${yt_to_sell:,.0f})")
-        
         return ("delever_weekly", {
-            "yt_amount": yt_to_sell,
-            "reason": "weekly_deleveraging",
+            "yt_amount": yt_yield_value,
+            "reason": "weekly_yt_yield_harvest",
             "current_minute": current_minute,
-            "percentage": 0.01
+            "yt_yield": yt_yield_value
         })
     
-    def execute_deleveraging(self, params: dict, current_minute: int) -> bool:
+    def execute_deleveraging(self, params: dict, current_minute: int, asset_prices: Dict[Asset, float] = None) -> bool:
         """
         Execute deleveraging by selling YT and following the swap chain:
         YT → MOET → USDC/USDF → BTC
         """
+        # If no asset prices provided, get them from engine state
+        if asset_prices is None:
+            asset_prices = {Asset.BTC: self.engine.state.current_prices.get(Asset.BTC, 50000)}
+        
         yt_amount = params.get("yt_amount", 0)
         reason = params.get("reason", "unknown")
         
@@ -786,7 +859,7 @@ class HighTideAgent(BaseAgent):
         print(f"   ✅ Step 1: Sold ${yt_amount:,.0f} YT → ${moet_received:,.0f} MOET")
         
         # Step 2-4: Execute the full swap chain: MOET → USDC/USDF → BTC
-        btc_received = self._execute_deleveraging_swap_chain(moet_received, current_minute)
+        btc_received = self._execute_deleveraging_swap_chain(moet_received, current_minute, asset_prices)
         
         if btc_received <= 0:
             print(f"   ❌ Failed to complete swap chain")
@@ -822,7 +895,7 @@ class HighTideAgent(BaseAgent):
         
         return True
     
-    def _execute_deleveraging_swap_chain(self, moet_amount: float, current_minute: int) -> float:
+    def _execute_deleveraging_swap_chain(self, moet_amount: float, current_minute: int, asset_prices: Dict[Asset, float]) -> float:
         """
         Execute simplified deleveraging: MOET → BTC at market price with fees
         Much simpler and more realistic than complex pool routing
@@ -944,6 +1017,9 @@ class HighTideAgent(BaseAgent):
             success = self.engine.protocol.supply(self.agent_id, Asset.BTC, btc_received)
             
             if success:
+                old_btc = self.state.btc_amount
+                old_hf = self.state.health_factor
+                
                 # Update agent's BTC collateral amount
                 self.state.btc_amount += btc_received
                 
@@ -951,8 +1027,15 @@ class HighTideAgent(BaseAgent):
                 if Asset.BTC in self.state.token_balances:
                     self.state.token_balances[Asset.BTC] = max(0, self.state.token_balances[Asset.BTC] - btc_received)
                 
+                # Recalculate HF after BTC deposit
+                self._update_health_factor(asset_prices)
+                new_hf = self.state.health_factor
+                
                 print(f"   ✅ Step 4: Successfully deposited {btc_received:.6f} BTC as collateral")
-                print(f"   📊 New total BTC collateral: {self.state.btc_amount:.6f} BTC")
+                print(f"   📊 BTC: {old_btc:.6f} → {self.state.btc_amount:.6f} BTC")
+                print(f"   📊 Health Factor: {old_hf:.4f} → {new_hf:.4f}")
+                print(f"   📊 Current Debt: ${self.state.moet_debt:,.2f}")
+                print(f"   🔍 LEVERAGE CHECK: HF {new_hf:.4f} {'>' if new_hf > self.state.initial_health_factor else '<='} Initial HF {self.state.initial_health_factor:.4f}")
             else:
                 print(f"   ❌ Failed to deposit BTC as collateral - supply() returned False")
             

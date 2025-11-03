@@ -39,24 +39,26 @@ def calculate_true_yield_token_price(current_minute: int, apr: float = 0.10, ini
 
 @dataclass
 class YieldToken:
-    """Individual yield token with continuous yield accrual (rebasing)"""
+    """
+    Fungible yield token that uses global pricing.
+    All YT tokens have the same price at any given moment, regardless of when they were created.
+    """
     
-    def __init__(self, initial_value: float, apr: float = 0.10, creation_minute: int = 0):
-        self.initial_value = initial_value  # Value at creation time
-        self.apr = apr
-        self.creation_minute = creation_minute
+    def __init__(self, quantity: float, apr: float = 0.10, creation_minute: int = 0):
+        self.quantity = quantity  # Number of YT tokens held
+        self.apr = apr  # APR for the global price function
+        self.creation_minute = creation_minute  # For tracking only, not used in valuation
+        
+        # Legacy field for backward compatibility with accounting that tracks "initial_value"
+        # This represents the QUANTITY at creation, which equals the value at creation time
+        # since YT price starts at $1.00 at minute 0
+        self.initial_value = quantity
         
     def get_current_value(self, current_minute: int) -> float:
-        """Calculate current value including accrued yield (rebasing)"""
-        if current_minute < self.creation_minute:
-            return self.initial_value
-            
-        minutes_elapsed = current_minute - self.creation_minute
-        # Convert APR to per-minute rate: APR * (minutes_elapsed / minutes_per_year)
-        # For 10% APR over 60 minutes: 0.10 * (60 / 525600) = 0.0000114
-        minutes_per_year = 365 * 24 * 60  # 525,600 minutes per year
-        minute_rate = self.apr * (minutes_elapsed / minutes_per_year)
-        return self.initial_value * (1 + minute_rate)
+        """Calculate current value using GLOBAL YT price function"""
+        # Use the global price function - all YT tokens have same price at this moment
+        global_yt_price = calculate_true_yield_token_price(current_minute, self.apr, initial_price=1.0)
+        return self.quantity * global_yt_price
         
     def get_sellable_value(self, current_minute: int) -> float:
         """Get value that can be sold (with minimal slippage)"""
@@ -98,12 +100,22 @@ class YieldTokenManager:
         new_tokens = []
         
         if actual_yield_tokens_received > 0:
-            # Create a single token with the exact amount (including fractional part)
-            token = YieldToken(actual_yield_tokens_received, 0.10, current_minute)
+            # Convert USD value received to YT quantity using global price
+            current_yt_price = calculate_true_yield_token_price(current_minute, 0.10, 1.0)
+            yt_quantity = actual_yield_tokens_received / current_yt_price
+            
+            # Create a token with the quantity (fungible tokens priced globally)
+            # CRITICAL: Set initial_value to moet_amount for accounting consistency
+            # This ensures that when we sell, we deduct the correct MOET cost basis
+            token = YieldToken(yt_quantity, 0.10, current_minute)
+            token.initial_value = moet_amount  # Override with MOET cost for accounting
             new_tokens.append(token)
             self.yield_tokens.append(token)
             
-        self.total_initial_value_invested += actual_yield_tokens_received
+        # Track the MOET amount spent for accounting purposes
+        # Note: actual_yield_tokens_received can differ from moet_amount due to Uniswap slippage
+        # We track moet_amount to match debt accounting
+        self.total_initial_value_invested += moet_amount
         return new_tokens
         
     def sell_yield_tokens(self, moet_amount_needed: float, current_minute: int) -> tuple[float, float]:
@@ -155,10 +167,13 @@ class YieldTokenManager:
             # If we still need more and have tokens left, sell fractional amount
             if fractional_amount_needed > 0 and self.yield_tokens:
                 fractional_fraction = fractional_amount_needed / token_value
-                # Reduce the first remaining token by the fractional amount
+                # Reduce both quantity (actual YT held) and initial_value (accounting cost) proportionally
+                self.yield_tokens[0].quantity *= (1 - fractional_fraction)
                 self.yield_tokens[0].initial_value *= (1 - fractional_fraction)
+                # Also deduct the sold portion from total accounting
+                self.total_initial_value_invested -= (self.yield_tokens[0].initial_value * fractional_fraction / (1 - fractional_fraction))
                 # If the token becomes too small, remove it
-                if self.yield_tokens[0].initial_value < 0.01:
+                if self.yield_tokens[0].quantity < 0.01:
                     removed_token = self.yield_tokens.pop(0)
                     self.total_initial_value_invested -= removed_token.initial_value
         
@@ -265,10 +280,13 @@ class YieldTokenManager:
                 remaining_to_remove -= token_value
                 self.total_initial_value_invested -= token.initial_value
             else:
-                # Remove partial token
+                # Remove partial token - reduce both quantity and accounting cost
                 fraction_to_remove = remaining_to_remove / token_value
+                sold_initial_value = token.initial_value * fraction_to_remove
+                token.quantity *= (1 - fraction_to_remove)
                 token.initial_value *= (1 - fraction_to_remove)
-                if token.initial_value < 0.01:  # Remove if too small
+                self.total_initial_value_invested -= sold_initial_value
+                if token.quantity < 0.01:  # Remove if too small
                     tokens_to_remove.append(i)
                     self.total_initial_value_invested -= token.initial_value
                 remaining_to_remove = 0

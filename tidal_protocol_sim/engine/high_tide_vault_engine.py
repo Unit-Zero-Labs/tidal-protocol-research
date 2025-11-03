@@ -416,10 +416,11 @@ class HighTideVaultEngine(TidalProtocolEngine):
         if amount <= 0:
             return False
         
-        # Reduced logging for ecosystem growth
-        if minute % 1440 == 0 or len(self.high_tide_agents) <= 150:
-            print(f"           📈 ENGINE: Executing leverage increase borrow for {agent.agent_id}")
-            print(f"           Amount: ${amount:,.2f} MOET at minute {minute}")
+        # DETAILED TRANSACTION LOG
+        print(f"🟢 MOET BORROW TRANSACTION (Minute {minute}):")
+        print(f"   💵 Amount Borrowed: ${amount:,.2f}")
+        print(f"   📈 Current Debt: ${agent.state.moet_debt:,.2f}")
+        print(f"   💳 Current MOET Balance: ${agent.state.token_balances[Asset.MOET]:,.2f}")
         
         # Borrow additional MOET
         if self.protocol.borrow(agent.agent_id, amount):
@@ -427,23 +428,21 @@ class HighTideVaultEngine(TidalProtocolEngine):
             agent.state.moet_debt += amount
             agent.state.token_balances[Asset.MOET] += amount
             
-            if minute % 1440 == 0 or len(self.high_tide_agents) <= 150:  # Reduced logging
-                print(f"           ✅ Borrow successful - New debt: ${agent.state.moet_debt:,.2f}, MOET balance: ${agent.state.token_balances[Asset.MOET]:,.2f}")
+            print(f"   ✅ Borrow successful")
+            print(f"   📊 New Debt: ${agent.state.moet_debt:,.2f}")
+            print(f"   💳 New MOET Balance: ${agent.state.token_balances[Asset.MOET]:,.2f}")
             
             # Determine if we should use direct minting (minute 0 + config enabled)
             use_direct_minting = (minute == 0 and self.high_tide_config.use_direct_minting_for_initial)
             
             # Use new MOET to buy more yield tokens
-            # Reduced logging for ecosystem growth - only log occasionally
-            if minute % 1440 == 0 or len(self.high_tide_agents) <= 150:  # Daily or if small agent count
-                print(f"           🚀 LEVERAGE INCREASE: Purchasing ${amount:,.2f} worth of yield tokens with borrowed MOET")
+            print(f"   🚀 LEVERAGE INCREASE: Purchasing ${amount:,.2f} worth of yield tokens")
             yt_purchase_success = agent.execute_yield_token_purchase(amount, minute, use_direct_minting)
             
-            if minute % 1440 == 0 or len(self.high_tide_agents) <= 150:  # Reduced logging
-                if yt_purchase_success:
-                    print(f"           ✅ Leverage increase YT purchase successful")
-                else:
-                    print(f"           ❌ Leverage increase YT purchase failed")
+            if yt_purchase_success:
+                print(f"   ✅ Leverage increase YT purchase successful")
+            else:
+                print(f"   ❌ Leverage increase YT purchase failed")
             
             # Record leverage increase event
             if yt_purchase_success:
@@ -596,8 +595,12 @@ class HighTideVaultEngine(TidalProtocolEngine):
         
         print(f"🔻 Engine executing {action_type} for {agent.agent_id}: ${yt_amount:,.0f} YT ({reason})")
         
-        # Execute deleveraging through agent
-        success = agent.execute_deleveraging(params, minute)
+        # Get current asset prices from engine state
+        current_btc_price = self.state.current_prices.get(Asset.BTC, 50000)
+        asset_prices = {Asset.BTC: current_btc_price}
+        
+        # Execute deleveraging through agent with asset prices
+        success = agent.execute_deleveraging(params, minute, asset_prices)
         
         if success:
             # Record deleveraging event for engine tracking
