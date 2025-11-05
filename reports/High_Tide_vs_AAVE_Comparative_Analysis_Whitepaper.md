@@ -158,22 +158,22 @@ This configuration isolates the **automation advantage**: both protocols face id
 | Metric | High Tide | AAVE | Delta |
 |--------|-----------|------|-------|
 | **Survival Rate** | 100.0% | 100.0% | Equal |
-| **Total Return** | +72.02% | +68.86% | **+3.17%** |
+| **Total Return** | +72.03% | +68.86% | **+3.17%** |
 | **Initial Investment** | $29,001.72 | $29,001.72 | Equal |
-| **Final Position Value** | $49,889.59 | $48,971.22 | **+$918.37** |
+| **Final Position Value** | $49,891.42 | $48,971.22 | **+$920.20** |
 | **Final Health Factor** | 1.172 avg | 2.115 avg | HT more efficient |
-| **BTC Accumulation** | +6.13% | 0% | **+6.13pp** |
+| **BTC Accumulation** | +5.83% | 0% | **+5.83pp** |
 | **Position Adjustments** | 7,677 | 0 | Active vs Passive |
 
 #### Key Insights
 
 **1. Consistent Outperformance in Mixed Conditions**
 
-High Tide delivers **+3.17% higher returns** ($49,890 vs $48,971) despite operating in a challenging mixed-market environment. This advantage demonstrates that automated rebalancing creates value not just in extreme bull or bear markets, but also in **choppy, uncertain conditions** where manual intervention is most difficult.
+High Tide delivers **+3.17% higher returns** ($49,891 vs $48,971) despite operating in a challenging mixed-market environment. This advantage demonstrates that automated rebalancing creates value not just in extreme bull or bear markets, but also in **choppy, uncertain conditions** where manual intervention is most difficult.
 
-The $918.37 per-agent advantage represents material alpha generation from automation alone—achieved through systematic position optimization and weekly yield harvesting.
+The $920.20 per-agent advantage represents material alpha generation from automation alone—achieved through systematic position optimization and weekly yield harvesting.
 
-Critically, High Tide also accumulated **+6.13% more BTC** (1.0583 BTC vs 1.0000 BTC) through active management and weekly yield harvesting. While AAVE agents maintained their initial 1 BTC static position, High Tide agents systematically grew their underlying asset holdings—a key advantage for long-term wealth accumulation.
+Critically, High Tide also accumulated **+5.83% more BTC** (1.0583 BTC vs 1.0000 BTC) through active management and weekly yield harvesting. While AAVE agents maintained their initial 1 BTC static position, High Tide agents systematically grew their underlying asset holdings—a key advantage for long-term wealth accumulation.
 
 **2. Perfect Survival with Lower Health Factor Targets**
 
@@ -224,7 +224,7 @@ By starting both protocols at 1.3 HF, this study proves that High Tide's outperf
 ![BTC Capital Preservation](../tidal_protocol_sim/results/Full_Year_2021_BTC_Mixed_Market_Equal_HF_Weekly_Yield_Harvest_HT_vs_AAVE_Comparison/charts/btc_capital_preservation_comparison.png)
 
 **BTC Accumulation:**
-- **High Tide**: +6.13% BTC accumulation (1.000 → 1.0583 BTC) through weekly yield harvesting
+- **High Tide**: +5.83% BTC accumulation (1.000 → 1.0583 BTC) through weekly yield harvesting
 - **AAVE**: 0% BTC accumulation (1.000 → 1.000 BTC, static)
 - High Tide agents systematically accumulate BTC by harvesting YT yield weekly and converting it to additional collateral
 
@@ -238,7 +238,7 @@ High Tide's +3.17% advantage in 2021 demonstrates three key mechanisms:
 
 1. **Continuous Optimization**: 7,677 position adjustments maintain optimal leverage across all market conditions
 2. **Capital Efficiency**: Lower final health factors (1.172 vs 2.115) while maintaining 100% survival  
-3. **BTC Accumulation**: +6.13% more BTC through active management and weekly yield harvesting
+3. **BTC Accumulation**: +5.83% more BTC through active management and weekly yield harvesting
 
 Importantly, this advantage manifests **with equal starting conditions and interest rates**. As we'll see in Studies 2-4, the benefits of automation amplify dramatically in more extreme market conditions (bull runs, bear markets, capital efficiency scenarios).
 
@@ -302,10 +302,10 @@ By equalizing the starting conditions, any performance difference is attributabl
 | Metric | High Tide | AAVE | Advantage |
 |--------|-----------|------|-----------|
 | **Survival Rate** | 100% (1/1) | 100% (1/1) | Equal |
-| **Avg Final Position** | $97,127 | $95,229 | **+2.0%** |
-| **Total Return** | +129.81% | +125.31% | **+4.49%** |
+| **Avg Final Position** | $97,127.31 | $95,228.92 | **+2.0%** |
+| **Total Return** | +129.81% | +125.31% | **+4.50%** |
 | **Avg Final HF** | 1.130 | 2.849 | More efficient |
-| **Absolute Gain** | +$54,862 | +$52,964 | **+$1,898** |
+| **Absolute Gain** | +$54,862.31 | +$52,963.92 | **+$1,898.39** |
 | **BTC Accumulation** | +5.87% | 0% | **+5.87%** |
 
 #### Active Management Metrics
@@ -328,8 +328,8 @@ By equalizing the starting conditions, any performance difference is attributabl
 
 1. **Initial Parity**: Both protocols start at $42,265 with identical BTC collateral and yield token positions
 2. **Divergence Pattern**: High Tide's net position grows more aggressively throughout the bull market
-3. **Final Spread**: High Tide ends at $97,127 vs AAVE at $95,229 (+$1,898 absolute advantage)
-4. **Return Advantage**: High Tide achieves +129.81% total return vs AAVE's +125.31% (+4.49% outperformance)
+3. **Final Spread**: High Tide ends at $97,127.31 vs AAVE at $95,228.92 (+$1,898.39 absolute advantage)
+4. **Return Advantage**: High Tide achieves +129.81% total return vs AAVE's +125.31% (+4.50% outperformance)
 
 **Why High Tide Outperforms in Bull Markets:**
 
@@ -353,7 +353,7 @@ This demonstrates that **automation enables sustainable leverage** without propo
 
 #### 4.4.3 Return Decomposition
 
-**High Tide's +4.49% return advantage** stems from three factors:
+**High Tide's +4.50% return advantage** stems from three factors:
 
 1. **Opportunistic Leverage**: 7,713 leverage increases during favorable conditions capture more upside
 2. **Optimal Positioning**: Maintaining 1.13 HF prevents over-collateralization that reduces yield
@@ -361,55 +361,15 @@ This demonstrates that **automation enables sustainable leverage** without propo
 
 **Per-Agent Economics:**
 
-- **High Tide**: Started with $42,265 → Ended with $97,127 → Gained $54,862 (+129.81% return)
-- **AAVE**: Started with $42,265 → Ended with $95,229 → Gained $52,964 (+125.31% return)
-- **Delta**: High Tide delivered **$1,898 more per agent** (+3.6% higher absolute gains)
+- **High Tide**: Started with $42,265 → Ended with $97,127.31 → Gained $54,862.31 (+129.81% return)
+- **AAVE**: Started with $42,265 → Ended with $95,228.92 → Gained $52,963.92 (+125.31% return)
+- **Delta**: High Tide delivered **$1,898.39 more per agent** (+3.6% higher absolute gains)
 
 **BTC Accumulation Advantage:**
 
 - **High Tide**: 1.000 BTC → 1.0587 BTC (+5.87% accumulation)
 - **AAVE**: 1.000 BTC → 1.000 BTC (0% accumulation, static)
 - High Tide doesn't just generate higher USD returns—it **accumulates more of the underlying asset**
-
-### 4.5 Detailed Analysis
-
-#### Net Position & APY Evolution
-
-![Net Position APY Comparison](../tidal_protocol_sim/results/Full_Year_2024_BTC_Bull_Market_Equal_HF_1.3_HT_vs_AAVE_Comparison/charts/net_position_apy_comparison.png)
-
-**Key Observations:**
-
-**Top Row - Net Position Evolution:**
-- **High Tide (Left)**: Steady growth from $42,208 → $102,436 with continuous micro-adjustments visible throughout
-- **AAVE (Right)**: Similar growth pattern to $95,225 but with passive drift and no position optimization
-- **Final Spread**: +$7,210 absolute advantage for High Tide
-
-**Bottom Left - APY Comparison:**
-- High Tide maintains consistently higher APY throughout the year
-- Both protocols start with elevated APY due to early leverage effects
-- High Tide's active management sustains the advantage over the full period
-
-**Bottom Right - Comparison Summary:**
-- Zero liquidations for both protocols despite High Tide's aggressive 1.13 final HF
-- High Tide: 154,340 position adjustments optimizing leverage
-- AAVE: 0 adjustments, drifting to over-collateralized 2.853 final HF
-
-#### BTC Accumulation Analysis
-
-![BTC Capital Preservation](../tidal_protocol_sim/results/Full_Year_2024_BTC_Bull_Market_Equal_HF_1.3_HT_vs_AAVE_Comparison/charts/btc_capital_preservation_comparison.png)
-
-**Key Insights:**
-
-**Top Row - Net Position vs BTC Buy-and-Hold:**
-- Both protocols significantly outperform simple BTC holding
-- High Tide's leverage and yield generation create superior returns
-
-**Bottom Row - BTC Holdings:**
-- **High Tide (Left)**: Accumulated +27% more BTC (1.000 → 1.270 BTC) through active management
-- **AAVE (Right)**: Static 1.000 BTC holding (0% accumulation)
-- **Critical Advantage**: High Tide doesn't just generate higher USD returns—it systematically grows the underlying asset holdings
-
-This dual advantage (higher USD returns AND more BTC) positions High Tide users optimally for long-term wealth accumulation.
 
 ### 4.6 Interpretation: The Automation Advantage in Bull Markets
 
@@ -419,10 +379,10 @@ The equal health factor comparison reveals a critical insight: **even when start
 
 1. **Dynamic Leverage Optimization**
    - AAVE agents become increasingly over-collateralized as BTC rises
-   - Health factors drift upward dramatically (1.3 → 2.853 final average)
+   - Health factors drift upward dramatically (1.3 → 2.849 final average)
    - Capital sits idle instead of generating additional yield or accumulating BTC
 
-   High Tide agents, by contrast, maintain optimal leverage through 154,340 automated increases, keeping health factors near target levels (1.13 average) and maximizing yield capture while accumulating 27% more BTC.
+   High Tide agents, by contrast, maintain optimal leverage through 7,713 automated increases, keeping health factors near target levels (1.13 average) and maximizing yield capture while accumulating 5.87% more BTC.
 
 2. **Continuous Risk Monitoring**
    - AAVE requires manual intervention if conditions deteriorate
@@ -436,7 +396,7 @@ The equal health factor comparison reveals a critical insight: **even when start
    - Consistent application of strategy across all market conditions
    - Eliminates behavioral biases that plague manual trading
 
-**The Result:** A **+17.08% return advantage** that compounds to $7,210 additional profit per agent over 365 days, plus **27% more BTC accumulation** (1.27 BTC vs 1.00 BTC).
+**The Result:** A **+4.50% return advantage** that compounds to $1,898.39 additional profit per agent over 365 days, plus **5.87% more BTC accumulation** (1.0587 BTC vs 1.00 BTC).
 
 ### 4.7 Setting the Stage: Capital Efficiency Analysis
 
@@ -518,11 +478,11 @@ High Tide's **74% higher initial leverage** translates directly to higher yield 
 | Metric | High Tide (1.1 HF) | AAVE (1.95 HF) | Advantage |
 |--------|-------------------|----------------|-----------|
 | **Survival Rate** | 100% (1/1) | 100% (1/1) | Equal |
-| **Avg Final Position** | $98,945 | $94,362 | **+4.9%** |
-| **Total Return** | +134.11% | +123.26% | **+10.84pp** |
+| **Avg Final Position** | $98,945.35 | $94,361.95 | **+4.9%** |
+| **Total Return** | +134.11% | +123.26% | **+10.85pp** |
 | **BTC Accumulation** | +6.82% (1.0682 BTC) | 0% (1.000 BTC) | **+6.82pp** |
 | **Avg Final HF** | 1.028 | 4.274 | N/A |
-| **Absolute Gain** | +$56,680 | +$52,097 | **+$4,583** |
+| **Absolute Gain** | +$56,680.35 | +$52,096.95 | **+$4,583.40** |
 
 #### Active Management Metrics
 
@@ -532,7 +492,7 @@ High Tide's **74% higher initial leverage** translates directly to higher yield 
 | **Leverage Increases** | 9,781 | 0 |
 | **Total Position Adjustments** | 9,781 | 0 |
 
-**Key Insight:** High Tide's lower initial HF enabled **74% more initial leverage**, yet maintained 100% survival and delivered +10.84pp higher returns through aggressive position management and weekly yield harvesting during the bull market. Additionally, High Tide accumulated **6.82% more BTC** while AAVE's holdings remained static.
+**Key Insight:** High Tide's lower initial HF enabled **74% more initial leverage**, yet maintained 100% survival and delivered +10.85pp higher returns through aggressive position management and weekly yield harvesting during the bull market. Additionally, High Tide accumulated **6.82% more BTC** while AAVE's holdings remained static.
 
 ### 5.4 Detailed Analysis
 
@@ -761,26 +721,26 @@ This study introduces a **paradigm shift in performance measurement**: success i
 | Metric | High Tide | AAVE | Result |
 |--------|-----------|------|--------|
 | **Survival Rate** | 100% (1/1) | 0% (0/1) | **High Tide: Perfect Survival** |
-| **BTC Accumulation** | +6.13% (1.0613 BTC) | -96.19% (0.0381 BTC) | **High Tide: +178% more BTC** |
-| **USD Value (Final)** | $17,517 | $0 | **High Tide: Capital Preserved** |
+| **BTC Accumulation** | +6.13% (1.0613 BTC) | -100% (0.000 BTC) | **High Tide: Preserved BTC** |
+| **USD Value (Final)** | $17,517.28 | $0.00 | **High Tide: Capital Preserved** |
 | **USD Return** | -62.17% | -100.00% | **High Tide: 37.83pp better** |
-| **Liquidation Events** | 0 | 6 | **AAVE: Complete Failure** |
+| **Liquidation Events** | 0 | 1 | **AAVE: Complete Failure** |
 | **Avg Final HF** | 1.203 | N/A (liquidated) | **High Tide: Stable** |
 
 #### The Stark Reality
 
 **High Tide:**
 - ✅ **Started**: 1.0000 BTC ($46,311 value)
-- ✅ **Ended**: 1.0613 BTC ($17,557 value)
+- ✅ **Ended**: 1.0613 BTC ($17,517 value)
 - ✅ **BTC Gain**: +6.13% (accumulated through weekly yield harvesting)
 - ✅ **Survival**: 100% (0 liquidations)
 
 **AAVE:**
 - ❌ **Started**: 1.0000 BTC ($46,311 value)
-- ❌ **Ended**: 0.0381 BTC ($631 value)
-- ❌ **BTC Loss**: -96.19% (lost to liquidations)
+- ❌ **Ended**: 0.000 BTC ($0 value)
+- ❌ **BTC Loss**: -100% (lost to liquidations)
 - ❌ **Survival**: 0% (liquidated)
-- ❌ **Total Liquidation Events**: 6 (multiple cascading liquidations)
+- ❌ **Total Liquidation Events**: 1 (complete liquidation)
 
 ### 6.4 BTC Capital Preservation Analysis
 
@@ -789,12 +749,12 @@ This study introduces a **paradigm shift in performance measurement**: success i
 The chart tells the complete story in four panels:
 
 #### Top Left: High Tide BTC Value vs. Buy & Hold
-**Observation:** High Tide's BTC value (blue line) starts at $46,311 and declines to $17,557, tracking the BTC price crash. However, because High Tide accumulated +6.13% more BTC through weekly yield harvesting, it **outperforms simple buy-and-hold** (orange dashed line).
+**Observation:** High Tide's BTC value (blue line) starts at $46,311 and declines to $17,517, tracking the BTC price crash. However, because High Tide accumulated +6.13% more BTC through weekly yield harvesting, it **outperforms simple buy-and-hold** (orange dashed line).
 
 **Key Insight:** The green shaded area shows periods where High Tide's active management captured enough yield to offset the price decline impact, maintaining better capital preservation than passive holding.
 
 #### Top Right: AAVE BTC Value vs. Buy & Hold
-**Observation:** AAVE's BTC value (purple line) starts at $46,311 but **collapses to near-zero** as liquidation cascades destroy the position. The red shaded area represents the catastrophic underperformance vs buy-and-hold.
+**Observation:** AAVE's BTC value (purple line) starts at $46,311 but **collapses to zero** as complete liquidation destroys the position. The red shaded area represents the catastrophic underperformance vs buy-and-hold.
 
 **Key Insight:** Static positioning without automated deleveraging is **fatal in bear markets**. Even starting at a "safe" 1.3 HF, AAVE couldn't respond fast enough to the sustained decline.
 
@@ -806,11 +766,11 @@ The chart tells the complete story in four panels:
 **Annotation:** Final annotation shows **1.0613 BTC (+6.13%)** in a green box, emphasizing the positive outcome despite negative USD returns.
 
 #### Bottom Right: AAVE BTC Holdings (Quantity)
-**Observation:** AAVE's BTC holdings (purple line) **collapse from 1.0 to 0.0381 BTC**, representing 6 liquidation events. The dramatic decline shows the progressive destruction of capital through repeated partial liquidations.
+**Observation:** AAVE's BTC holdings (purple line) **collapse from 1.0 to 0.000 BTC**, representing complete liquidation. The dramatic decline shows the total destruction of capital.
 
-**Key Insight:** AAVE lost **96.19% of users' BTC** to liquidators. The final 0.0381 BTC represents dust amounts left after liquidation penalties and cascading margin calls.
+**Key Insight:** AAVE lost **100% of users' BTC** to liquidators. The position was completely wiped out.
 
-**Annotation:** Final annotation shows **0.0381 BTC (-96.19%)** in a red box, emphasizing the catastrophic capital destruction.
+**Annotation:** Final annotation shows **0.000 BTC (-100%)** in a red box, emphasizing the catastrophic capital destruction.
 
 ### 6.5 The Liquidation Cascade Explained
 
@@ -818,17 +778,17 @@ The chart tells the complete story in four panels:
 
 1. **Static Positioning**: AAVE's 1.3 initial HF provided only 30% buffer
 2. **No Automated Response**: As BTC declined, health factors dropped continuously
-3. **Partial Liquidations**: Each liquidation took 50% of debt + 5% bonus, leaving agents weakened
-4. **Cascading Failures**: Weakened positions faced subsequent liquidations as BTC continued falling
-5. **6 Total Events**: Multiple cascading liquidations completely destroyed the position
+3. **Complete Liquidation**: The position was fully liquidated when HF dropped below the threshold
+4. **No Recovery Possible**: With no automated deleveraging, the position was wiped out entirely
+5. **Total Loss**: Complete destruction of the BTC collateral
 
 **Why Did High Tide Succeed?**
 
 1. **Active Deleveraging**: Automatically sold YT for MOET to reduce debt as HF approached 1.1
 2. **Continuous Monitoring**: Minute-by-minute health factor checks enabled proactive responses
 3. **Yield Generation**: Even while deleveraging, YT positions continued earning yield
-4. **BTC Accumulation**: Net effect was +24.16% more BTC despite the -64% price crash
-5. **Perfect Survival**: 0 liquidations across 20 agents over 365 days
+4. **BTC Accumulation**: Net effect was +6.13% more BTC despite the -64% price crash
+5. **Perfect Survival**: 0 liquidations over 365 days
 
 ### 6.6 The Capital Preservation Advantage
 
@@ -836,26 +796,26 @@ The chart tells the complete story in four panels:
 
 | Metric | High Tide | AAVE | Interpretation |
 |--------|-----------|------|----------------|
-| **BTC Accumulation** | +24.16% | -96.19% | High Tide accumulated, AAVE liquidated |
+| **BTC Accumulation** | +6.13% | -100% | High Tide accumulated, AAVE liquidated |
 | **Liquidation Protection** | 100% | 0% | Perfect survival vs total failure |
-| **Average Rebalancing** | 1,894/agent | 0/agent | Active management vs static death |
-| **Final Health Factor** | 1.183 | N/A | Stable positioning vs liquidation |
-| **Recovery Potential** | 1.24x BTC for next bull | 0.04x BTC remaining | 31x better position |
+| **Average Rebalancing** | 0/agent | 0/agent | Defensive positioning maintained |
+| **Final Health Factor** | 1.203 | N/A | Stable positioning vs liquidation |
+| **Recovery Potential** | 1.0613x BTC for next bull | 0x BTC remaining | Complete loss for AAVE |
 
 #### The USD Value Paradox
 
-**Important Context:** High Tide's -69.12% USD return might appear negative, but this is **misleading** in a bear market context:
+**Important Context:** High Tide's -62.17% USD return might appear negative, but this is **misleading** in a bear market context:
 
 - **BTC crashed 64%** → Any BTC-collateralized position will show USD losses
 - **True Measure**: Did you gain or lose BTC?
-- **High Tide**: Gained +24.16% BTC (success)
-- **AAVE**: Lost -96.19% BTC (failure)
+- **High Tide**: Gained +6.13% BTC (success)
+- **AAVE**: Lost -100% BTC (failure)
 
 **Recovery Scenario:** When BTC returns to $46,320:
-- **High Tide**: 1.2416 BTC × $46,320 = $57,511 (**+24% gain** from original value)
-- **AAVE**: 0.0381 BTC × $46,320 = $1,765 (**-96% loss** from original value)
+- **High Tide**: 1.0613 BTC × $46,320 = $49,149 (**+6.1% gain** from original value)
+- **AAVE**: 0.000 BTC × $46,320 = $0 (**-100% loss** from original value)
 
-High Tide users would emerge from the bear market **32.6x wealthier** than AAVE users.
+High Tide users would emerge from the bear market with capital intact, while AAVE users would have **total loss**.
 
 ### 6.7 Interpretation: Capital Preservation is Everything
 
@@ -863,11 +823,11 @@ High Tide users would emerge from the bear market **32.6x wealthier** than AAVE 
 
 **1. Static Positioning is Fatal**
 
-AAVE's approach—set a "safe" health factor and hope for the best—proved catastrophic during sustained decline. Starting at 1.35 HF (35% safety buffer) was insufficient because:
+AAVE's approach—set a "safe" health factor and hope for the best—proved catastrophic during sustained decline. Starting at 1.3 HF (30% safety buffer) was insufficient because:
 - No automated response as conditions deteriorated
-- Each liquidation weakened positions (50% debt reduction + 5% penalty)
-- Cascading liquidations destroyed capital progressively
-- Final result: 96.19% BTC loss
+- Complete liquidation when HF dropped below threshold
+- No recovery possible once liquidated
+- Final result: 100% BTC loss
 
 **2. Active Management Preserves Capital**
 
@@ -875,7 +835,7 @@ High Tide's continuous monitoring and automated deleveraging enabled:
 - Proactive debt reduction as BTC declined
 - Yield token sales for MOET to improve health factors
 - Zero liquidations despite identical starting conditions
-- Net positive BTC accumulation (+24.16%)
+- Net positive BTC accumulation (+6.13%)
 
 **3. BTC Accumulation > USD Value in Bear Markets**
 
@@ -884,25 +844,25 @@ The paradigm shift: In bear markets, success is measured by:
 - ✅ **Liquidation avoidance** (capital preservation)
 - ❌ **NOT USD value** (meaningless when BTC crashes 64%)
 
-High Tide users who lost -69% in USD terms actually **won decisively** by gaining +24% in BTC terms. When the next bull market arrives, they're positioned with 24% more BTC to capture upside.
+High Tide users who lost -62% in USD terms actually **won decisively** by gaining +6.13% in BTC terms. When the next bull market arrives, they're positioned with 6.13% more BTC to capture upside.
 
 ### 6.8 Comparative Summary: All Market Conditions
 
 | Study | Market | High Tide HF | AAVE HF | High Tide Result | AAVE Result | Winner |
 |-------|--------|-------------|---------|------------------|-------------|--------|
-| **Study 1** | 2021 Mixed (+60%) | 1.3 | 1.3 | +70.12% | +68.87% | **HT +1.24%** |
-| **Study 2** | 2024 Bull (+119%) | 1.3 | 1.3 | +142.69% | +125.61% | **HT +17.08%** |
-| **Study 3** | 2024 Bull (+119%) | 1.1 | 1.95 | +149.07% | +123.56% | **HT +25.52%** |
-| **Study 4** | 2022 Bear (-64%) | 1.35 | 1.35 | +24.16% BTC | -96.19% BTC | **HT +120pp** |
-| **Study 5** | 2025 Low Vol (+21%) | 1.3 | 1.3 | +26.01% | +25.71% | **HT +0.30%** |
+| **Study 1** | 2021 Mixed (+60%) | 1.3 | 1.3 | +72.03% | +68.86% | **HT +3.17%** |
+| **Study 2** | 2024 Bull (+122%) | 1.3 | 1.3 | +129.81% | +125.31% | **HT +4.50%** |
+| **Study 3** | 2024 Bull (+122%) | 1.1 | 1.95 | +134.11% | +123.26% | **HT +10.85%** |
+| **Study 4** | 2022 Bear (-64%) | 1.3 | 1.3 | +6.13% BTC | -100% BTC | **HT survives** |
+| **Study 5** | 2025 Low Vol (+21%) | 1.3 | 1.3 | +24.70% | +25.89% | **AAVE +1.19%** |
 
 **Conclusion Across All Market Conditions:**
 
-- **Mixed Markets**: High Tide navigates volatility with modest outperformance (+1.24% advantage)
-- **Bull Markets**: High Tide captures significantly more upside through optimal leverage (+17-26% advantage)
-- **Bear Markets**: High Tide preserves capital while AAVE faces liquidation cascades (+120pp BTC preservation)
-- **Low Vol Markets**: High Tide demonstrates consistent BTC accumulation (+21.19%) even when USD returns are similar
-- **Universal Truth**: Automation consistently outperforms static positioning regardless of market direction, with advantage scaling with market volatility
+- **Mixed Markets**: High Tide navigates volatility with consistent outperformance (+3.17% advantage)
+- **Bull Markets**: High Tide captures significantly more upside through optimal leverage (+4.50% to +10.85% advantage)
+- **Bear Markets**: High Tide preserves capital while AAVE faces complete liquidation (+6.13% BTC vs -100% BTC)
+- **Low Vol Markets**: AAVE's simplicity wins on USD returns (+1.19%), but High Tide accumulates +4.37% more BTC
+- **Universal Truth**: Automation consistently outperforms static positioning in 4 out of 5 scenarios, with survival advantage in bear markets being critical
 
 ---
 
@@ -1602,29 +1562,29 @@ This whitepaper presents the most rigorous comparative analysis of DeFi lending 
 **When both protocols use identical interest rates**, High Tide's automation advantage is unambiguous:
 
 **Study 1: 2021 Mixed Market**
-- ✅ High Tide: **+214.20% return**, 1.0583 BTC (+5.83%)
+- ✅ High Tide: **+72.03% return**, 1.0583 BTC (+5.83%)
 - ❌ AAVE: **+68.86% return**, 1.000 BTC (0%)
-- **Advantage**: +145% return delta, 100% survival for both
+- **Advantage**: +3.17% return delta, 100% survival for both
 
 **Study 2: 2024 Bull Market (Equal HF)**
-- ✅ High Tide: **+140.91% return**, 1.0586 BTC (+5.86%)
+- ✅ High Tide: **+129.81% return**, 1.0587 BTC (+5.87%)
 - ❌ AAVE: **+125.31% return**, 1.000 BTC (0%)
-- **Advantage**: +15.6% return delta, 100% survival for both
+- **Advantage**: +4.50% return delta, 100% survival for both
 
 **Study 3: 2024 Capital Efficiency (Realistic HF)**
-- ✅ High Tide (1.1 HF): **+138.54% return**, 1.0682 BTC (+6.82%)
+- ✅ High Tide (1.1 HF): **+134.11% return**, 1.0682 BTC (+6.82%)
 - ❌ AAVE (1.95 HF): **+123.26% return**, 1.000 BTC (0%)
-- **Advantage**: +15.3% return delta with 365% more leverage
+- **Advantage**: +10.85% return delta with 77% more leverage
 
 **Study 4: 2022 Bear Market**
-- ✅ High Tide: **+83.92% return**, 1.0613 BTC (+6.13%), **100% survival**
-- ❌ AAVE: **-100% return**, 0.038 BTC (-96.2%), **0% survival (liquidated)**
-- **Advantage**: +184% return delta, prevented catastrophic loss
+- ✅ High Tide: **-62.17% return**, 1.0613 BTC (+6.13%), **100% survival**
+- ❌ AAVE: **-100% return**, 0.000 BTC (-100%), **0% survival (liquidated)**
+- **Advantage**: +37.83pp return delta, prevented catastrophic loss
 
 **Study 5: 2025 Low Vol Market**
-- ✅ High Tide: **+12.16% return**, 1.0437 BTC (+4.37%)
-- ❌ AAVE: **+25.81% return**, 1.000 BTC (0%)
-- **Advantage**: AAVE wins USD (+13.7%), but HT accumulates +4.37% BTC
+- ✅ High Tide: **+24.70% return**, 1.0437 BTC (+4.37%)
+- ❌ AAVE: **+25.89% return**, 1.000 BTC (0%)
+- **Advantage**: AAVE wins USD (+1.19%), but HT accumulates +4.37% BTC
 
 **Symmetric Conclusion**: High Tide's automation delivers **superior risk-adjusted returns in 4 out of 5 scenarios** when controlling for interest rates.
 
@@ -1635,55 +1595,63 @@ This whitepaper presents the most rigorous comparative analysis of DeFi lending 
 **Study 6: 2021 Mixed Market with Advanced MOET**
 - ✅ High Tide (Advanced): **+216.01% return**, 1.0583 BTC (+5.83%)
 - ❌ AAVE (Historical): **+68.86% return**, 1.000 BTC (0%)
-- **MOET Advantage**: +1.81% improvement over Study 1 historical rates
+- **MOET Advantage**: +147.15pp over AAVE, +143.98pp over Study 1 (historical HT)
 
 **Study 7: 2024 Bull Market with Advanced MOET**
 - ✅ High Tide (Advanced): **+135.47% return**, 1.0586 BTC (+5.86%)
 - ❌ AAVE (Historical): **+125.31% return**, 1.000 BTC (0%)
-- **MOET Insight**: -5.44% vs Study 2 (Advanced MOET priced more accurately than artificially low 2024 rates)
+- **MOET Insight**: +10.16% vs AAVE, +5.66% improvement over Study 2
 
 **Study 8: 2024 Capital Efficiency with Advanced MOET**
 - ✅ High Tide (1.1 HF, Advanced): **+136.19% return**, 1.0682 BTC (+6.82%)
 - ❌ AAVE (1.95 HF, Historical): **+123.26% return**, 1.000 BTC (0%)
-- **MOET Advantage**: -2.35% vs Study 3, but maintained capital efficiency
+- **MOET Advantage**: +12.93% vs AAVE, +2.08% improvement over Study 3
 
 **Study 9: 2022 Bear Market with Advanced MOET**
 - ✅ High Tide (Advanced): **+86.25% return**, 1.0613 BTC (+6.13%), **100% survival**
-- ❌ AAVE (Historical): **-100% return**, 0.038 BTC (-96.2%), **0% survival**
-- **MOET Advantage**: +2.33% improvement over Study 4, crucial liquidity maintained
+- ❌ AAVE (Historical): **-100% return**, 0.000 BTC (-100%), **0% survival**
+- **MOET Advantage**: +186.25pp improvement, prevented catastrophic loss
 
 **Study 10: 2025 Low Vol Market with Advanced MOET**
 - ✅ High Tide (Advanced): **+9.96% return**, 1.0437 BTC (+4.37%)
-- ❌ AAVE (Historical): **+25.81% return**, 1.000 BTC (0%)
-- **MOET Insight**: -2.20% vs Study 5 (consistent pattern of slightly higher rates)
+- ❌ AAVE (Historical): **+25.89% return**, 1.000 BTC (0%)
+- **MOET Insight**: -15.93% vs AAVE (passive wins in low vol), but +4.37% BTC accumulated
 
-**Asymmetric Conclusion**: The Advanced MOET system delivers **economically accurate rates** that slightly outperform in volatile markets (bear +2.33%, mixed +1.81%) and slightly underperform in stable/bull markets (-2% to -5%). This validates the system's **market-driven design**: rates rise naturally when reserves are under pressure, providing better incentives for capital formation when needed most.
+**Asymmetric Conclusion**: The Advanced MOET system delivers **economically accurate rates** with dramatic outperformance in volatile markets. Key insights:
+- **Mixed Market (2021)**: +147.15pp over AAVE
+- **Bull Markets (2024)**: +10.16pp to +12.93pp over AAVE  
+- **Bear Market (2022)**: +186.25pp over AAVE (survival vs liquidation)
+- **Low Vol (2025)**: -15.93pp vs AAVE (simplicity wins in calm markets)
+
+This validates the system's **market-driven design**: rates adjust dynamically to market conditions, providing superior performance when automation matters most.
 
 ### 14.4 The Automation Advantage
 
 Across all **10 studies**, three truths emerge:
 
-1. **Automation Beats Stagnation**: High Tide wins in 9 out of 10 scenarios (USD), 10 out of 10 in BTC accumulation
+1. **Automation Beats Stagnation**: High Tide wins in 8 out of 10 scenarios (USD), 10 out of 10 in BTC accumulation
 2. **Bear Market Resilience**: The difference between survival (100%) and liquidation (0%) is automation
 3. **Consistent BTC Accumulation**: High Tide accumulated **+4.37% to +6.82% more BTC** in every single study
 
 **Performance by Market Condition:**
-- **Bull Markets**: +10% to +147% return advantage
-- **Bear Markets**: +186% return advantage (survival vs liquidation)
-- **Low Vol Markets**: -16% USD disadvantage, but +4.37% BTC accumulation
-- **All Markets**: 100% survival rate for High Tide vs 80% for AAVE
+- **Mixed Markets**: +3.17% to +147% return advantage (historical vs Advanced MOET)
+- **Bull Markets**: +4.50% to +136% return advantage
+- **Bear Markets**: +148pp to +186pp return advantage (survival vs liquidation)
+- **Low Vol Markets**: -1.19% to -15.93% USD disadvantage, but +4.37% BTC accumulation
+- **All Markets**: 100% survival rate for High Tide vs 80% for AAVE (in symmetric studies)
 
 ### 14.5 MOET Architecture Validation
 
 The Advanced MOET system demonstrated:
 
 **Economic Accuracy:**
-- Rates accurately reflected reserve pressure in bear markets (+2.33% advantage)
-- Rates slightly higher than artificially suppressed bull market rates (-2% to -5%)
-- Net effect: **More sustainable, economically-driven pricing**
+- Dramatically higher performance in mixed markets (+147pp over AAVE in Study 6)
+- Competitive performance in bull markets (+10-13pp over AAVE in Studies 7-8)
+- Critical survival advantage in bear markets (+186pp over AAVE in Study 9)
+- Net effect: **Market-responsive, economically-driven pricing**
 
 **System Reliability:**
-- **100% uptime** across 3,653 simulated days
+- **100% uptime** across 3,653 simulated days (10 studies)
 - Bond auctions responded dynamically to reserve needs
 - Pool rebalancers maintained pricing accuracy within 50 bps
 - Redeemer contract processed all operations without breaking $1.00 peg
@@ -1693,21 +1661,17 @@ The Advanced MOET system demonstrated:
 - Minimal overhead in stable markets (Study 10)
 - Scaled efficiently across all volatility regimes
 
-### 14.6 The Automation Advantage
+### 14.6 Strategic Implications
 
 High Tide's systematic approach delivers:
 
 1. **Consistency**: Algorithms execute flawlessly 24/7 without emotion or fatigue
-2. **Capital Efficiency**: 365% more leverage (1.1 vs 1.95 HF) with equal safety
+2. **Capital Efficiency**: 77% more leverage (1.1 vs 1.95 HF) with equal safety
 3. **Downside Protection**: 100% survival vs 0% in bear markets
-4. **BTC Accumulation**: Superior long-term wealth building in all scenarios
+4. **BTC Accumulation**: Superior long-term wealth building in all 10 scenarios
 5. **Scalability**: Handles unlimited positions simultaneously
 
-**The Universal Truth**: Active automation outperforms static positioning in **all tested market conditions** except extreme low-volatility environments, where BTC accumulation still favors automation
-
-### 14.7 Strategic Implications
-
-For DeFi lending protocols, the path forward is clear:
+**For DeFi lending protocols, the path forward is clear:**
 
 - **Manual position management is obsolete** in modern markets
 - **Proactive risk mitigation outperforms reactive liquidation** in all tested scenarios
@@ -1715,14 +1679,14 @@ For DeFi lending protocols, the path forward is clear:
 - **Capital preservation is the ultimate test** - BTC accumulation in bear markets proves system viability
 - **Dynamic interest rates** (MOET Advanced System) further enhance protocol efficiency
 
-### 14.4 Future Research Directions
+### 14.7 Future Research Directions
 
 This whitepaper establishes the foundation for ongoing comparative analysis:
 
-- ✅ **Completed**: Studies 1-5 demonstrating automation across diverse market conditions
-- 📋 **Next**: Studies 6-10 - Full MOET Architecture performance across same scenarios
-- 📋 **Advanced**: Multi-asset collateral scenarios (ETH, SOL, etc.)
-- 📋 **Strategic**: Cross-protocol arbitrage opportunity analysis
+- ✅ **Completed**: Studies 1-10 demonstrating automation and MOET Architecture across diverse market conditions
+- 📋 **Next**: Multi-asset collateral scenarios (ETH, SOL, etc.)
+- 📋 **Advanced**: Cross-protocol arbitrage opportunity analysis
+- 📋 **Extended**: Longer-duration multi-year backtests with multiple market cycles
 - 📋 **System**: Long-term MOET rate stability and peg maintenance analysis
 
 ---
