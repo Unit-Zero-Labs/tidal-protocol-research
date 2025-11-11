@@ -51,16 +51,28 @@ class FullYearSimConfig:
         self.simulation_duration_hours = 24 * 364  # 364 days for 2021
         self.simulation_duration_minutes = 364 * 24 * 60  # 524,160 minutes
         
+        # Market year configuration (can be overridden by study scripts)
+        self.market_year = 2021  # Default to 2021
+        
         # BTC pricing data configuration
         self.btc_csv_path = "btc-usd-max.csv"
-        self.btc_2021_data = self._load_2021_btc_data()
+        self.btc_data = []  # Will be loaded based on market_year
+        # Legacy attribute for backward compatibility
+        self.btc_2021_data = []
         
         # AAVE comparison configuration
         self.run_aave_comparison = True  # Enable AAVE vs High Tide comparison
-        self.use_historical_rates = True  # Use 2021 AAVE rates for both protocols
+        self.use_historical_rates = True  # Use historical AAVE rates for both protocols
+        self.use_historical_btc_data = True  # Use historical BTC price data
+        self.use_historical_aave_rates = True  # Use historical AAVE rates
         self.rates_csv_path = "rates_compute.csv"
-        self.aave_rates_2021 = self._load_2021_aave_rates() if self.use_historical_rates else None
+        self.aave_rates = {}  # Will be loaded based on market_year
+        # Legacy attribute for backward compatibility
+        self.aave_rates_2021 = {}
         self.enable_advanced_moet_system = False  # Disable Advanced MOET - use historical rates for both
+        
+        # Alias for backward compatibility with study scripts
+        self.use_advanced_moet = False  # Alias for enable_advanced_moet_system
         
         # Agent configuration - Equal HF for 2021 Mixed Market
         self.num_agents = 1  # 1 agent for detailed tracking
@@ -141,6 +153,54 @@ class FullYearSimConfig:
         # Output configuration
         self.generate_charts = True
         self.save_detailed_csv = True
+    
+    def __setattr__(self, name, value):
+        """Override setattr to sync use_advanced_moet with enable_advanced_moet_system"""
+        # Sync the two Advanced MOET attributes
+        if name == 'use_advanced_moet':
+            super().__setattr__('enable_advanced_moet_system', value)
+            super().__setattr__('use_advanced_moet', value)
+        elif name == 'enable_advanced_moet_system':
+            super().__setattr__('use_advanced_moet', value)
+            super().__setattr__('enable_advanced_moet_system', value)
+        else:
+            super().__setattr__(name, value)
+    
+    def load_market_data(self):
+        """Load BTC price data and AAVE rates based on market_year configuration"""
+        print(f"\n📅 Loading market data for year: {self.market_year}")
+        
+        # Load BTC price data
+        if self.use_historical_btc_data:
+            if self.market_year == 2021:
+                self.btc_data = self._load_2021_btc_data()
+                self.btc_2021_data = self.btc_data  # For backward compatibility
+            elif self.market_year == 2024:
+                self.btc_data = self._load_2024_btc_data()
+            elif self.market_year == 2022:
+                self.btc_data = self._load_2022_btc_data()
+            elif self.market_year == 2025:
+                self.btc_data = self._load_2025_btc_data()
+            else:
+                print(f"⚠️ Warning: No loader for year {self.market_year}, using 2021 data")
+                self.btc_data = self._load_2021_btc_data()
+        
+        # Load AAVE rates
+        if self.use_historical_aave_rates:
+            if self.market_year == 2021:
+                self.aave_rates = self._load_2021_aave_rates()
+                self.aave_rates_2021 = self.aave_rates  # For backward compatibility
+            elif self.market_year == 2024:
+                self.aave_rates = self._load_2024_aave_rates()
+            elif self.market_year == 2022:
+                self.aave_rates = self._load_2022_aave_rates()
+            elif self.market_year == 2025:
+                self.aave_rates = self._load_2025_aave_rates()
+            else:
+                print(f"⚠️ Warning: No rate loader for year {self.market_year}, using 2021 rates")
+                self.aave_rates = self._load_2021_aave_rates()
+        
+        print(f"✅ Market data loaded: {len(self.btc_data)} days of BTC prices\n")
     
     def _load_2024_btc_data(self) -> List[float]:
         """Load 2024 BTC pricing data from CSV file (Bull Market Year)"""
@@ -510,36 +570,40 @@ class FullYearSimConfig:
         Returns:
             Daily borrow rate (APR as decimal, e.g. 0.05 = 5%)
         """
-        if not self.use_historical_rates or self.aave_rates_2021 is None:
+        if not self.use_historical_rates or not self.aave_rates:
             return 0.05  # Fallback to 5% APR
         
-        # Convert minute to day (0-363 for 2021 - 364 days)
-        day = min(minute // 1440, 363)
+        # Convert minute to day
+        day = minute // 1440
         
-        return self.aave_rates_2021.get(day, 0.05)
+        # Get the max day available (handles different year lengths)
+        max_day = max(self.aave_rates.keys()) if self.aave_rates else 363
+        day = min(day, max_day)
+        
+        return self.aave_rates.get(day, 0.05)
         
     def get_btc_price_at_minute(self, minute: int) -> float:
-        """Get BTC price at given minute using real 2021 data with interpolation"""
+        """Get BTC price at given minute using historical data with interpolation"""
         
-        if not self.btc_2021_data:
+        if not self.btc_data:
             # Fallback to linear progression
             progress = minute / self.simulation_duration_minutes
             return self.btc_initial_price + (self.btc_final_price - self.btc_initial_price) * progress
         
-        # Calculate which day we're on (0-363 for 2021 - 364 days)
+        # Calculate which day we're on
         minutes_per_day = 24 * 60  # 1440 minutes per day
         day_of_year = minute // minutes_per_day
         
         # Ensure we don't exceed available data
-        if day_of_year >= len(self.btc_2021_data):
-            return self.btc_2021_data[-1]  # Use last available price
+        if day_of_year >= len(self.btc_data):
+            return self.btc_data[-1]  # Use last available price
         
         # Get current day price
-        current_day_price = self.btc_2021_data[day_of_year]
+        current_day_price = self.btc_data[day_of_year]
         
         # Linear interpolation within the day if we have next day data
-        if day_of_year + 1 < len(self.btc_2021_data):
-            next_day_price = self.btc_2021_data[day_of_year + 1]
+        if day_of_year + 1 < len(self.btc_data):
+            next_day_price = self.btc_data[day_of_year + 1]
             
             # Calculate progress within the current day (0.0 to 1.0)
             minutes_into_day = minute % minutes_per_day
@@ -585,13 +649,16 @@ class FullYearSimulation:
     def run_test(self) -> Dict[str, Any]:
         """Run the complete full year simulation (High Tide only or High Tide vs AAVE comparison)"""
         
+        # Load market data based on configured year (MUST be called after config is set up)
+        self.config.load_market_data()
+        
         print("🌍 STUDY 1: 2021 MIXED MARKET - EQUAL HEALTH FACTORS")
         print("=" * 70)
         print(f"📅 Duration: {self.config.simulation_duration_hours:,} hours ({self.config.simulation_duration_hours//24} days)")
         print(f"👥 Agents: {self.config.num_agents} agents per system")
-        print(f"📊 BTC 2021 Mixed Market: ${self.config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f} ({((self.config.btc_final_price/self.config.btc_initial_price)-1)*100:+.1f}%)")
+        print(f"📊 BTC Market ({self.config.market_year}): ${self.config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f} ({((self.config.btc_final_price/self.config.btc_initial_price)-1)*100:+.1f}%)")
         print(f"🔄 Pool Arbitrage: {'ENABLED' if self.config.enable_pool_arbing else 'DISABLED'}")
-        print(f"📊 BTC Data: {len(self.config.btc_2021_data)} daily prices loaded")
+        print(f"📊 BTC Data: {len(self.config.btc_data)} daily prices loaded")
         
         if self.config.run_aave_comparison:
             print(f"📊 Mode: SYMMETRIC COMPARISON (Equal HF, Historical AAVE Rates for Both)")
@@ -723,12 +790,14 @@ class FullYearSimulation:
         # Create engine
         engine = HighTideVaultEngine(ht_config)
         
-        # CRITICAL FIX: Override the default $100k BTC price with 2024 data
-        ht_config.btc_initial_price = self.config.btc_initial_price  # $42,208.23 from 2024-01-01
+        # CRITICAL FIX: Override the default $100k BTC price with actual market data
+        ht_config.btc_initial_price = self.config.btc_initial_price
         
-        # Override MOET rates with historical AAVE rates if enabled (for fair comparison)
-        if self.config.use_historical_rates:
-            print(f"📊 Using historical 2021 AAVE rates for High Tide (avg: {sum(self.config.aave_rates_2021.values()) / len(self.config.aave_rates_2021) * 100:.2f}% APR)")
+        # Override MOET rates with historical AAVE rates ONLY if Advanced MOET is disabled
+        # When Advanced MOET is enabled, High Tide uses dynamic bond-based rates
+        if self.config.use_historical_rates and not self.config.enable_advanced_moet_system:
+            avg_rate = sum(self.config.aave_rates.values()) / len(self.config.aave_rates) * 100 if self.config.aave_rates else 5.0
+            print(f"📊 Using historical AAVE rates for High Tide (avg: {avg_rate:.2f}% APR) - Symmetric comparison")
             
             # Create rate override function that uses engine.current_step (simulation minute)
             def get_historical_aave_rate():
@@ -737,6 +806,8 @@ class FullYearSimulation:
             
             # Override the borrow rate function
             engine.protocol.get_moet_borrow_rate = get_historical_aave_rate
+        elif self.config.enable_advanced_moet_system:
+            print(f"🚀 Advanced MOET System ENABLED - High Tide uses dynamic bond-based rates (Asymmetric comparison)")
         
         # Create uniform profile agents for year-long test
         agents = self._create_uniform_agents(engine)
@@ -938,8 +1009,10 @@ class FullYearSimulation:
         engine = AaveProtocolEngine(aave_config)
         
         # Override MOET rates with historical AAVE rates if enabled
+        # AAVE always uses historical rates (even in asymmetric studies)
         if self.config.use_historical_rates:
-            print(f"📊 Using historical 2021 AAVE rates (avg: {sum(self.config.aave_rates_2021.values()) / len(self.config.aave_rates_2021) * 100:.2f}% APR)")
+            avg_rate = sum(self.config.aave_rates.values()) / len(self.config.aave_rates) * 100 if self.config.aave_rates else 5.0
+            print(f"📊 AAVE using historical rates from {self.config.market_year} (avg: {avg_rate:.2f}% APR)")
             
             # Create rate override function that uses engine.current_step (simulation minute)
             def get_historical_aave_rate():
@@ -1032,8 +1105,8 @@ class FullYearSimulation:
             })
         
         print(f"✅ Created {len(agents)} AAVE agents:")
-        print(f"   Initial HF: {self.config.aave_initial_hf} (median from 1,600+ real USDC borrowers)")
-        print(f"   Strategy: Buy-and-hold with yield accrual (no rebalancing)")
+        print(f"   Initial HF: {self.config.aave_initial_hf}")
+        print(f"   Strategy: Weekly manual rebalancing (deleverage if HF drops, harvest if HF rises)")
         
         return agents
     
@@ -1544,7 +1617,9 @@ class FullYearSimulation:
         
         print(f"Starting AAVE simulation with {len(engine.aave_agents)} agents")
         print(f"BTC progression: ${self.config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f}")
-        print(f"Strategy: Buy-and-hold with yield accrual (no active rebalancing)")
+        print(f"Strategy: Weekly manual rebalancing")
+        print(f"  • If HF < initial: Sell YT → MOET → Pay down debt (deleverage)")
+        print(f"  • If HF > initial: Sell rebased YT → BTC (harvest profits)")
         
         # Initialize tracking
         engine.btc_price_history = []
@@ -1556,6 +1631,9 @@ class FullYearSimulation:
         # Track liquidation events per agent
         liquidation_events = []
         agent_liquidation_counts = {agent.agent_id: 0 for agent in engine.aave_agents}
+        
+        # Track weekly rebalancing events
+        weekly_rebalance_events = []
         
         for minute in range(self.config.simulation_duration_minutes):
             engine.current_step = minute
@@ -1618,15 +1696,43 @@ class FullYearSimulation:
                         agent_snapshots[agent.agent_id]["collateral"].append(agent.state.btc_amount * new_btc_price)
                         agent_snapshots[agent.agent_id]["debt"].append(agent.state.moet_debt)
             
-            # Progress reporting (weekly)
+            # Weekly rebalancing and progress reporting
             if minute > 0 and minute % 10080 == 0:
                 days_elapsed = minute / 1440
                 weeks_elapsed = days_elapsed / 7
                 active_agents = sum(1 for a in engine.aave_agents if a.active)
                 avg_hf = sum(a.state.health_factor for a in engine.aave_agents if a.active) / max(active_agents, 1)
+                
+                # Execute weekly rebalancing for each active agent
+                rebalance_count = 0
+                deleverage_count = 0
+                harvest_count = 0
+                
+                for agent in engine.aave_agents:
+                    if agent.active:
+                        # Execute weekly rebalancing
+                        rebalance_event = agent.execute_weekly_rebalancing(
+                            minute, 
+                            engine.state.current_prices,
+                            engine
+                        )
+                        
+                        if rebalance_event["action_taken"] != "none":
+                            rebalance_count += 1
+                            if rebalance_event["action_taken"] == "deleverage":
+                                deleverage_count += 1
+                            elif rebalance_event["action_taken"] == "harvest_profits":
+                                harvest_count += 1
+                            
+                            # Store the event
+                            rebalance_event["agent_id"] = agent.agent_id
+                            weekly_rebalance_events.append(rebalance_event)
+                
+                # Progress reporting
                 print(f"📅 Week {weeks_elapsed:.0f}/52: BTC ${new_btc_price:,.0f} | "
-                      f"Active agents: {active_agents}/{len(engine.aave_agents)} | "
-                      f"Avg HF: {avg_hf:.3f}")
+                      f"Active: {active_agents}/{len(engine.aave_agents)} | "
+                      f"Avg HF: {avg_hf:.3f} | "
+                      f"Rebalances: {rebalance_count} ({deleverage_count} delev, {harvest_count} harvest)")
         
         # Generate results
         print("📊 Generating AAVE simulation results...")
@@ -1667,6 +1773,7 @@ class FullYearSimulation:
             },
             "agent_outcomes": agent_outcomes,
             "liquidation_events": liquidation_events,
+            "weekly_rebalance_events": weekly_rebalance_events,
             "agent_health_history": engine.agent_health_history if hasattr(engine, 'agent_health_history') else [],
             "agent_health_snapshots": agent_snapshots,
             "btc_price_history": engine.btc_price_history,
@@ -1674,7 +1781,10 @@ class FullYearSimulation:
                 "total_agents": len(engine.aave_agents),
                 "survived": sum(1 for a in agent_outcomes if a["survived"]),
                 "liquidated": sum(1 for a in agent_outcomes if a["was_liquidated"]),
-                "total_liquidation_events": len(liquidation_events)
+                "total_liquidation_events": len(liquidation_events),
+                "total_weekly_rebalances": len(weekly_rebalance_events),
+                "total_deleverages": sum(1 for e in weekly_rebalance_events if e["action_taken"] == "deleverage"),
+                "total_harvests": sum(1 for e in weekly_rebalance_events if e["action_taken"] == "harvest_profits")
             }
         }
         
@@ -5994,6 +6104,9 @@ def main():
     # Create configuration
     config = FullYearSimConfig()
     
+    # Load market data (required before accessing btc_data or aave_rates)
+    config.load_market_data()
+    
     if config.run_aave_comparison:
         print("COMPARISON MODE: High Tide vs AAVE")
         print("This simulation compares High Tide's active rebalancing vs AAVE's buy-and-hold strategy.")
@@ -6019,7 +6132,7 @@ def main():
     print()
     print(f"Configuration:")
     print(f"• Duration: {config.simulation_duration_hours:,} hours ({config.simulation_duration_hours//24} days)")
-    print(f"• BTC Data: {len(config.btc_2021_data)} daily prices from 2021")
+    print(f"• BTC Data: {len(config.btc_data)} daily prices from {config.market_year}")
     print(f"• Pool Sizes: MOET:BTC ${config.moet_btc_pool_config['size']:,}, MOET:YT ${config.moet_yt_pool_config['size']:,}")
     print()
     

@@ -20,6 +20,8 @@ def calculate_true_yield_token_price(current_minute: int, apr: float = 0.10, ini
     This is the "oracle" price that pool rebalancers use as their target.
     Yield tokens start at $1.00 and appreciate continuously at the specified APR.
     
+    Uses linear interest (simple APR): Price = Initial × (1 + APR × t)
+    
     Args:
         current_minute: Current simulation minute
         apr: Annual Percentage Rate (default 0.10 for 10%)

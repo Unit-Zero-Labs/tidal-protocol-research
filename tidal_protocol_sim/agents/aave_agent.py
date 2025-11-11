@@ -30,6 +30,9 @@ class AaveAgentState(HighTideAgentState):
         self.liquidation_events = []
         self.total_liquidated_collateral = 0.0
         self.liquidation_penalties = 0.0
+        
+        # Track weekly harvest for incremental yield calculation
+        self.last_harvest_yt_value = 0.0  # Total YT value at last harvest
 
 
 class AaveAgent(BaseAgent):
@@ -310,6 +313,125 @@ class AaveAgent(BaseAgent):
     def get_liquidation_history(self) -> list:
         """Get history of liquidation events"""
         return self.state.liquidation_events.copy()
+    
+    def execute_weekly_rebalancing(self, current_minute: int, asset_prices: Dict[Asset, float], engine=None) -> dict:
+        """
+        Execute weekly manual rebalancing for AAVE agents:
+        
+        1. Check current HF vs initial HF
+        2. If HF < initial HF: Sell YT → MOET → Pay down debt (deleverage for safety)
+        3. If HF > initial HF: Sell rebased YT → BTC (harvest profits, only sell accrued yield)
+        
+        Returns dict with rebalancing details
+        """
+        # Update current health factor
+        self._update_health_factor(asset_prices)
+        
+        current_hf = self.state.health_factor
+        initial_hf = self.state.initial_health_factor
+        
+        rebalance_event = {
+            "minute": current_minute,
+            "day": current_minute / 1440,
+            "week": current_minute / 10080,
+            "hf_before": current_hf,
+            "initial_hf": initial_hf,
+            "action_taken": "none",
+            "yt_sold": 0.0,
+            "moet_received": 0.0,
+            "btc_received": 0.0,
+            "debt_repaid": 0.0,
+            "hf_after": current_hf
+        }
+        
+        # Check if we have any yield tokens
+        yt_manager = self.state.yield_token_manager
+        total_yt_value = yt_manager.calculate_total_value(current_minute)
+        
+        if total_yt_value <= 0:
+            return rebalance_event
+        
+        # CASE 1: HF < Initial HF → Deleverage (sell YT → MOET → pay down debt)
+        if current_hf < initial_hf:
+            # Calculate how much YT to sell (sell enough to get back to initial HF)
+            # We want to reduce debt to increase HF
+            btc_price = asset_prices.get(Asset.BTC, 100_000.0)
+            btc_amount = self.state.supplied_balances.get(Asset.BTC, 0.0)
+            collateral_value = btc_amount * btc_price * 0.80  # 80% collateral factor
+            
+            # Target debt to reach initial HF: debt = collateral_value / initial_hf
+            target_debt = collateral_value / initial_hf
+            debt_to_repay = max(0, self.state.moet_debt - target_debt)
+            
+            # Limit to available YT (sell at most 50% of YT holdings per week)
+            max_yt_to_sell = total_yt_value * 0.5
+            yt_to_sell = min(debt_to_repay, max_yt_to_sell)
+            
+            if yt_to_sell > 10:  # Only if meaningful amount ($10 threshold)
+                # Sell YT for MOET
+                moet_received, actual_yt_sold = yt_manager.sell_yield_tokens(yt_to_sell, current_minute)
+                
+                if moet_received > 0:
+                    # Pay down debt
+                    debt_repaid = min(moet_received, self.state.moet_debt)
+                    self.state.moet_debt -= debt_repaid
+                    
+                    # Update event
+                    rebalance_event["action_taken"] = "deleverage"
+                    rebalance_event["yt_sold"] = actual_yt_sold
+                    rebalance_event["moet_received"] = moet_received
+                    rebalance_event["debt_repaid"] = debt_repaid
+                    
+                    # Update HF after deleveraging
+                    self._update_health_factor(asset_prices)
+                    rebalance_event["hf_after"] = self.state.health_factor
+        
+        # CASE 2: HF > Initial HF → Harvest profits (sell rebased YT → BTC)
+        elif current_hf > initial_hf:
+            # Only sell the rebasing yield (accrued interest), not the principal
+            # Calculate NEW yield since last harvest (not cumulative total)
+            current_yt_value = yt_manager.calculate_total_value(current_minute)
+            
+            # First time harvesting? Set baseline
+            if self.state.last_harvest_yt_value == 0:
+                self.state.last_harvest_yt_value = yt_manager.total_initial_value_invested
+            
+            # New yield = current value - last harvest value
+            incremental_yield = max(0, current_yt_value - self.state.last_harvest_yt_value)
+            
+            # Sell the incremental yield (100% of new yield this week)
+            yt_to_sell = incremental_yield
+            
+            if yt_to_sell > 10:  # Only if meaningful amount ($10 threshold)
+                # Sell YT for MOET first
+                moet_received, actual_yt_sold = yt_manager.sell_yield_tokens(yt_to_sell, current_minute)
+                
+                if moet_received > 0 and engine:
+                    # Swap MOET for BTC using engine's pools
+                    # This requires access to the MOET:BTC pool
+                    # For simplicity, approximate: BTC received = MOET / BTC price
+                    btc_price = asset_prices.get(Asset.BTC, 100_000.0)
+                    btc_received = moet_received / btc_price
+                    
+                    # Add to collateral
+                    self.state.supplied_balances[Asset.BTC] = self.state.supplied_balances.get(Asset.BTC, 0.0) + btc_received
+                    self.state.btc_amount += btc_received
+                    
+                    # Update last harvest value to current (after selling the yield)
+                    self.state.last_harvest_yt_value = yt_manager.calculate_total_value(current_minute)
+                    
+                    # Update event
+                    rebalance_event["action_taken"] = "harvest_profits"
+                    rebalance_event["yt_sold"] = actual_yt_sold
+                    rebalance_event["moet_received"] = moet_received
+                    rebalance_event["btc_received"] = btc_received
+                    rebalance_event["incremental_yield_this_week"] = incremental_yield
+                    
+                    # Update HF after adding BTC
+                    self._update_health_factor(asset_prices)
+                    rebalance_event["hf_after"] = self.state.health_factor
+        
+        return rebalance_event
 
 
 def create_aave_agents(num_agents: int, monte_carlo_variation: bool = True) -> list:
