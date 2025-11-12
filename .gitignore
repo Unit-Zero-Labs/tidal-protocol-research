@@ -94,3 +94,5 @@ tidal_protocol_sim/results/
 *.backup
 *~
 tidal_protocol_sim_results.zip
+*.png
+BORROW_RATE_FIX_SUMMARY.md

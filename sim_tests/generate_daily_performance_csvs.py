@@ -12,6 +12,8 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Any
 import glob
+import csv
+from datetime import datetime
 
 # Study configurations
 STUDIES = [
@@ -97,6 +99,73 @@ STUDIES = [
     }
 ]
 
+def load_historical_aave_rates(year: int, rates_csv_path: str = "rates_compute.csv") -> Dict[int, float]:
+    """
+    Load historical AAVE USDC borrow rates for a given year
+    Returns: Dict mapping day_of_year (0-364) -> daily borrow rate (as decimal, e.g. 0.05 = 5%)
+    """
+    rates_by_day = {}
+    
+    try:
+        with open(rates_csv_path, 'r') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                # Check if this is the correct year
+                if f'{year}-' in row['date']:
+                    # Parse date to get day of year
+                    date_str = row['date'].split(' ')[0]  # Extract date part before time
+                    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                    day_of_year = date_obj.timetuple().tm_yday - 1  # 0-indexed
+                    
+                    # Extract borrow rate (avg_variableRate column)
+                    borrow_rate = float(row['avg_variableRate'])
+                    rates_by_day[day_of_year] = borrow_rate
+        
+        # Fill in missing days with interpolation
+        if rates_by_day:
+            # Determine if leap year
+            is_leap = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+            total_days = 366 if is_leap else 365
+            
+            # Interpolate missing days
+            all_days = sorted(rates_by_day.keys())
+            for day in range(total_days):
+                if day not in rates_by_day:
+                    # Find nearest neighbors
+                    before = [d for d in all_days if d < day]
+                    after = [d for d in all_days if d > day]
+                    
+                    if before and after:
+                        # Linear interpolation
+                        d1, d2 = before[-1], after[0]
+                        r1, r2 = rates_by_day[d1], rates_by_day[d2]
+                        weight = (day - d1) / (d2 - d1)
+                        rates_by_day[day] = r1 + (r2 - r1) * weight
+                    elif before:
+                        # Use last known rate
+                        rates_by_day[day] = rates_by_day[before[-1]]
+                    elif after:
+                        # Use first known rate
+                        rates_by_day[day] = rates_by_day[after[0]]
+        
+        if not rates_by_day:
+            print(f"⚠️  Warning: No {year} rates found in {rates_csv_path}. Using fallback 5% APR.")
+            return {i: 0.05 for i in range(366)}
+        
+        print(f"📊 Loaded {len(rates_by_day)} days of {year} AAVE borrow rates")
+        rates_list = [rates_by_day[i] for i in sorted(rates_by_day.keys())]
+        print(f"   Rate Range: {min(rates_list)*100:.2f}% → {max(rates_list)*100:.2f}% APR")
+        print(f"   Average Rate: {np.mean(rates_list)*100:.2f}% APR")
+        
+        return rates_by_day
+        
+    except FileNotFoundError:
+        print(f"⚠️  Warning: {rates_csv_path} not found. Using fallback 5% APR.")
+        return {i: 0.05 for i in range(366)}
+    except Exception as e:
+        print(f"❌ Error loading AAVE rates: {e}. Using fallback 5% APR.")
+        return {i: 0.05 for i in range(366)}
+
 def find_latest_json_file(study_folder: Path) -> Path:
     """Find the most recent comparison JSON file in the study folder"""
     # The comparison data is in the folder with suffix "_HT_vs_AAVE_Comparison"
@@ -112,7 +181,7 @@ def find_latest_json_file(study_folder: Path) -> Path:
 
 def load_study_data(study: Dict[str, Any]) -> Dict[str, Any]:
     """Load JSON data for a study"""
-    results_dir = Path("tidal_protocol_sim/results")
+    results_dir = Path("tidal_protocol_sim/tidal_protocol_sim/results")
     # The comparison folder has the suffix "_HT_vs_AAVE_Comparison"
     study_folder = results_dir / f"{study['name']}_HT_vs_AAVE_Comparison"
     
@@ -132,6 +201,17 @@ def extract_daily_metrics(data: Dict[str, Any], study: Dict[str, Any]) -> pd.Dat
     # Get High Tide and AAVE data
     ht_data = data.get("high_tide_results", {})
     aave_data = data.get("aave_results", {})
+    
+    # Load historical AAVE rates for this study's year
+    aave_rates = load_historical_aave_rates(study['year'])
+    
+    # Get MOET rate history for asymmetric studies
+    moet_rate_history = []
+    if study['advanced_moet'] and 'moet_system_state' in ht_data:
+        moet_state = ht_data['moet_system_state']
+        if 'tracking_data' in moet_state and 'moet_rate_history' in moet_state['tracking_data']:
+            moet_rate_history = moet_state['tracking_data']['moet_rate_history']
+            print(f"   📍 Loaded {len(moet_rate_history)} MOET rate entries for High Tide")
     
     # Extract time series data
     ht_health_history = ht_data.get("agent_health_history", [])
@@ -299,18 +379,35 @@ def extract_daily_metrics(data: Dict[str, Any], study: Dict[str, Any]) -> pd.Dat
             aave_daily_return_usd_pct = 0
             aave_daily_yield_btc_pct = 0
         
-        # Estimate borrow rate (simplified - using a typical rate)
-        # In symmetric studies, both use AAVE rates
-        # In asymmetric, HT uses advanced MOET rates
-        # For now, use a placeholder - ideally this would come from the data
-        daily_borrow_rate_pct = 0.01  # ~3.65% APR
+        # Calculate borrow rates
+        # AAVE always uses historical rates from rates_compute.csv
+        aave_daily_borrow_rate_pct = aave_rates.get(day, 0.05) / 365  # Convert APR to daily
+        
+        # High Tide rate depends on study type
+        if study['advanced_moet'] and moet_rate_history:
+            # Asymmetric: Use MOET rates from simulation
+            # Find the MOET rate at the end of this day (day * 1440 minutes)
+            target_minute = day * 1440
+            ht_apr = 0.05  # Default fallback
+            
+            # Find closest minute in MOET rate history
+            for rate_entry in moet_rate_history:
+                if rate_entry['minute'] >= target_minute:
+                    ht_apr = rate_entry.get('moet_interest_rate', 0.05)
+                    break
+            
+            ht_daily_borrow_rate_pct = ht_apr / 365  # Convert APR to daily
+        else:
+            # Symmetric: Both use AAVE rates
+            ht_daily_borrow_rate_pct = aave_daily_borrow_rate_pct
         
         # Create record
         record = {
             "day": day,
             "btc_price": btc_price,
             "btc_daily_return_pct": btc_daily_return_pct,
-            "daily_borrow_rate_pct": daily_borrow_rate_pct,
+            "ht_daily_borrow_rate_pct": ht_daily_borrow_rate_pct,
+            "aave_daily_borrow_rate_pct": aave_daily_borrow_rate_pct,
             "ht_net_position": ht_net_position,
             "ht_daily_return_usd_pct": ht_daily_return_usd_pct,
             "ht_btc_amount": ht_btc_amount,
@@ -354,10 +451,13 @@ def calculate_summary_stats(df: pd.DataFrame, protocol: str = "ht") -> Dict[str,
             "Daily Average BTC StdDev": 0
         }
     
+    # Use protocol-specific borrow rate column
+    borrow_rate_col = f"{prefix}_daily_borrow_rate_pct"
+    
     return {
         "Daily Average USD Return %": df_no_zero[f"{prefix}_daily_return_usd_pct"].mean(),
         "Daily Average USD Return StdDev": df_no_zero[f"{prefix}_daily_return_usd_pct"].std(),
-        "Daily Average Borrow Cost": df_no_zero["daily_borrow_rate_pct"].mean(),
+        "Daily Average Borrow Cost": df_no_zero[borrow_rate_col].mean(),
         "Daily Average BTC Return": df_no_zero[f"{prefix}_daily_yield_btc_pct"].mean(),
         "Daily Average BTC StdDev": df_no_zero[f"{prefix}_daily_yield_btc_pct"].std()
     }
@@ -368,8 +468,8 @@ def main():
     print("GENERATING DAILY PERFORMANCE CSV FILES")
     print("=" * 70 + "\n")
     
-    # Create output directory
-    output_dir = Path("tidal_protocol_sim/results/daily_performance_csvs")
+    # Create output directory  
+    output_dir = Path("tidal_protocol_sim/tidal_protocol_sim/results/daily_performance_csvs")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Summary table data
