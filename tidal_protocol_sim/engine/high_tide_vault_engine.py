@@ -679,10 +679,15 @@ class HighTideVaultEngine(TidalProtocolEngine):
         # Base metrics
         super()._record_metrics()
         
-        # PERFORMANCE OPTIMIZATION: Only record detailed agent health daily
-        # This reduces memory usage from 12.6 GB to 8.8 MB (1,440x improvement)
-        if minute % 1440 == 0:  # Every 24 hours (1440 minutes)
-            print(f"📊 Recording daily agent health snapshot at minute {minute} (day {minute//1440 + 1})")
+        # PERFORMANCE OPTIMIZATION: Record detailed agent health at configurable frequency
+        # Default: daily (1440 min) for year-long sims, but can be every minute for crash studies
+        # This reduces memory usage from 12.6 GB to 8.8 MB (1,440x improvement) for daily snapshots
+        snapshot_freq = getattr(self.high_tide_config, 'agent_snapshot_frequency_minutes', 1440)
+        if minute % snapshot_freq == 0:  # Configurable frequency
+            if snapshot_freq >= 1440:
+                print(f"📊 Recording daily agent health snapshot at minute {minute} (day {minute//1440 + 1})")
+            elif minute % 60 == 0:  # Only log hourly for minute-by-minute tracking to avoid spam
+                print(f"📊 Recording agent health snapshot at minute {minute} (hour {minute//60:.1f})")
             
             # High Tide specific metrics
             agent_health_data = []

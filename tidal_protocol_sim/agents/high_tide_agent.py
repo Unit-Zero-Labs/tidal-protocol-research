@@ -32,9 +32,11 @@ class HighTideAgentState(AgentState):
         btc_price = initial_balance  # Use the provided initial_balance as BTC price
         btc_amount = 1.0  # Exactly 1 BTC
         
-        # Calculate borrowing capacity using BTC collateral factor
-        btc_collateral_factor = 0.80  # BTC collateral factor
-        effective_collateral_value = btc_amount * btc_price * btc_collateral_factor  # 1 BTC × price × 0.80
+        # Calculate borrowing capacity using liquidation threshold (not collateral factor)
+        # HF = (collateral × liquidation_threshold) / debt
+        # Therefore: debt = (collateral × liquidation_threshold) / HF
+        liquidation_threshold = 0.85  # BTC liquidation threshold on Aave
+        effective_collateral_value = btc_amount * btc_price * liquidation_threshold  # 1 BTC × price × 0.85
         moet_to_borrow = effective_collateral_value / initial_hf  # Borrow based on initial HF
         
         # Reset balances for High Tide scenario
@@ -474,15 +476,16 @@ class HighTideAgent(BaseAgent):
             self.state.health_factor = 0.001  # Small positive value to indicate critical state
     
     def _calculate_effective_collateral_value(self, asset_prices: Dict[Asset, float]) -> float:
-        """Calculate effective collateral value using BTC collateral factor"""
+        """Calculate effective collateral value using Aave's liquidation threshold"""
         btc_price = asset_prices.get(Asset.BTC)
         if btc_price is None:
             raise ValueError("BTC price not provided in asset_prices for collateral value calculation")
         
         btc_amount = self.state.supplied_balances.get(Asset.BTC, 0.0)
-        # Use BTC collateral factor (should be 0.80)
-        btc_collateral_factor = 0.80  # This matches what we set in protocol.py
-        return btc_amount * btc_price * btc_collateral_factor
+        # Use Aave's BTC liquidation threshold (85%), not collateral factor (80%)
+        # This must match the liquidation threshold used in debt calculation
+        btc_liquidation_threshold = 0.85  # Aave's BTC liquidation threshold
+        return btc_amount * btc_price * btc_liquidation_threshold
     
     def update_debt_interest(self, current_minute: int, btc_pool_borrow_rate: float):
         """Update debt with accrued interest based on BTC pool utilization"""

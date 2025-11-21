@@ -112,12 +112,13 @@ class AaveAgent(BaseAgent):
             self.state.health_factor = collateral_value / debt_value
     
     def _calculate_effective_collateral_value(self, asset_prices: Dict[Asset, float]) -> float:
-        """Calculate effective collateral value using BTC collateral factor (same as High Tide)"""
+        """Calculate effective collateral value using Aave's liquidation threshold (not collateral factor)"""
         btc_price = asset_prices.get(Asset.BTC, 100_000.0)
         btc_amount = self.state.supplied_balances.get(Asset.BTC, 0.0)
-        # Use BTC collateral factor (should be 0.80)
-        btc_collateral_factor = 0.80  # This matches what we set in protocol.py
-        return btc_amount * btc_price * btc_collateral_factor
+        # Use Aave's BTC liquidation threshold (85%), not collateral factor (80%)
+        # This must match the liquidation threshold used in debt calculation
+        btc_liquidation_threshold = 0.85  # Aave's BTC liquidation threshold
+        return btc_amount * btc_price * btc_liquidation_threshold
     
     def update_debt_interest(self, current_minute: int, btc_pool_borrow_rate: float):
         """Update debt with accrued interest (same as High Tide)"""

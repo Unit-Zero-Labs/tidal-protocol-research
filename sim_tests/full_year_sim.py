@@ -128,6 +128,9 @@ class FullYearSimConfig:
         self.collect_pool_state_every_n_minutes = 1440  # Daily pool state snapshots
         self.track_all_rebalancing_events = True
         
+        # Agent health snapshot frequency (NEW for Study 14 minute-by-minute tracking)
+        self.agent_snapshot_frequency_minutes = 1440  # Default: daily (once per day)
+        
         # Progress reporting
         self.progress_report_every_n_minutes = 10080  # Weekly progress reports (7 days)
         
@@ -153,6 +156,10 @@ class FullYearSimConfig:
         # Output configuration
         self.generate_charts = True
         self.save_detailed_csv = True
+        
+        # Optimization configuration (for binary search studies)
+        self.fail_fast_on_liquidation = False  # Exit immediately on first liquidation
+        self.suppress_progress_output = False  # Suppress detailed progress for optimization runs
     
     def __setattr__(self, name, value):
         """Override setattr to sync use_advanced_moet with enable_advanced_moet_system"""
@@ -184,6 +191,11 @@ class FullYearSimConfig:
             else:
                 print(f"⚠️ Warning: No loader for year {self.market_year}, using 2021 data")
                 self.btc_data = self._load_2021_btc_data()
+        
+        # Update btc_initial_price and btc_final_price from loaded data
+        if self.btc_data and len(self.btc_data) > 0:
+            self.btc_initial_price = self.btc_data[0]
+            self.btc_final_price = self.btc_data[-1]
         
         # Load AAVE rates
         if self.use_historical_aave_rates:
@@ -776,6 +788,9 @@ class FullYearSimulation:
         ht_config.num_arbitrage_agents = 5  # Enable arbitrage agents for peg maintenance
         ht_config.arbitrage_agent_balance = 100_000.0  # $100K per agent
         
+        # CRITICAL: Propagate agent snapshot frequency for minute-by-minute tracking (Study 14)
+        ht_config.agent_snapshot_frequency_minutes = getattr(self.config, 'agent_snapshot_frequency_minutes', 1440)
+        
         print(f"🔧 DEBUG: Configuring BTC decline over {ht_config.btc_decline_duration} minutes")
         print(f"🔧 DEBUG: Price range: ${ht_config.btc_initial_price:,.0f} → ${self.config.btc_final_price:,.0f}")
         
@@ -1004,6 +1019,9 @@ class FullYearSimulation:
         # Configure arbitrage (same as High Tide)
         aave_config.num_arbitrage_agents = 5
         aave_config.arbitrage_agent_balance = 100_000.0
+        
+        # CRITICAL: Propagate agent snapshot frequency for minute-by-minute tracking (Study 14)
+        aave_config.agent_snapshot_frequency_minutes = getattr(self.config, 'agent_snapshot_frequency_minutes', 1440)
         
         # Create engine
         engine = AaveProtocolEngine(aave_config)
@@ -1675,13 +1693,52 @@ class FullYearSimulation:
                             if agent_id in agent_liquidation_counts:
                                 agent_liquidation_counts[agent_id] += 1
                             liquidation_events.append(event)
+                        
+                        # FAIL-FAST MODE: Exit immediately on first liquidation
+                        if self.config.fail_fast_on_liquidation:
+                            if not self.config.suppress_progress_output:
+                                print(f"\n⚠️  LIQUIDATION DETECTED at minute {minute} - Exiting immediately (fail-fast mode)")
+                            
+                            # Build agent outcomes with snapshots
+                            fail_fast_outcomes = []
+                            for agent in engine.aave_agents:
+                                outcome = {
+                                    "agent_id": agent.agent_id,
+                                    "survived": False,
+                                    "was_liquidated": True,
+                                    "liquidation_minute": minute
+                                }
+                                # Add snapshots collected up to liquidation point
+                                if agent.agent_id in agent_snapshots:
+                                    outcome["snapshots"] = agent_snapshots[agent.agent_id]
+                                fail_fast_outcomes.append(outcome)
+                            
+                            # Return minimal failure result
+                            return {
+                                "simulation_metadata": {
+                                    "duration_minutes": minute,
+                                    "duration_days": minute / 1440,
+                                    "btc_initial": self.config.btc_initial_price,
+                                    "btc_final": engine.state.current_prices[Asset.BTC],
+                                    "terminated_early": True,
+                                    "termination_reason": "liquidation_detected"
+                                },
+                                "agent_outcomes": fail_fast_outcomes,
+                                "liquidation_events": liquidation_events,
+                                "summary": {
+                                    "total_agents": len(engine.aave_agents),
+                                    "survived": 0,
+                                    "liquidated": len(engine.aave_agents),
+                                    "total_liquidation_events": len(liquidation_events)
+                                }
+                            }
             
             # Record AAVE metrics (includes agent_health_history tracking)
             if hasattr(engine, '_record_aave_metrics'):
                 engine._record_aave_metrics(minute)
             
-            # Collect agent health factor snapshots (daily for memory efficiency)
-            if minute % 1440 == 0:
+            # Collect agent health factor snapshots (configurable frequency for different study types)
+            if minute % self.config.agent_snapshot_frequency_minutes == 0:
                 for agent in engine.aave_agents:
                     if agent.active:
                         if agent.agent_id not in agent_snapshots:
@@ -1696,21 +1753,22 @@ class FullYearSimulation:
                         agent_snapshots[agent.agent_id]["collateral"].append(agent.state.btc_amount * new_btc_price)
                         agent_snapshots[agent.agent_id]["debt"].append(agent.state.moet_debt)
             
-            # Weekly rebalancing and progress reporting
-            if minute > 0 and minute % 10080 == 0:
+            # Rebalancing and progress reporting (frequency controlled by config)
+            rebalance_frequency = self.config.leverage_frequency_minutes
+            if minute > 0 and minute % rebalance_frequency == 0:
                 days_elapsed = minute / 1440
                 weeks_elapsed = days_elapsed / 7
                 active_agents = sum(1 for a in engine.aave_agents if a.active)
                 avg_hf = sum(a.state.health_factor for a in engine.aave_agents if a.active) / max(active_agents, 1)
                 
-                # Execute weekly rebalancing for each active agent
+                # Execute rebalancing for each active agent (deleverage if HF < initial, harvest if HF > initial)
                 rebalance_count = 0
                 deleverage_count = 0
                 harvest_count = 0
                 
                 for agent in engine.aave_agents:
                     if agent.active:
-                        # Execute weekly rebalancing
+                        # Execute rebalancing (method name says 'weekly' but frequency is configurable)
                         rebalance_event = agent.execute_weekly_rebalancing(
                             minute, 
                             engine.state.current_prices,
@@ -1728,16 +1786,18 @@ class FullYearSimulation:
                             rebalance_event["agent_id"] = agent.agent_id
                             weekly_rebalance_events.append(rebalance_event)
                 
-                # Progress reporting
-                print(f"📅 Week {weeks_elapsed:.0f}/52: BTC ${new_btc_price:,.0f} | "
-                      f"Active: {active_agents}/{len(engine.aave_agents)} | "
-                      f"Avg HF: {avg_hf:.3f} | "
-                      f"Rebalances: {rebalance_count} ({deleverage_count} delev, {harvest_count} harvest)")
+                # Progress reporting (suppress if configured for optimization runs)
+                if not self.config.suppress_progress_output:
+                    print(f"📅 Week {weeks_elapsed:.0f}/52: BTC ${new_btc_price:,.0f} | "
+                          f"Active: {active_agents}/{len(engine.aave_agents)} | "
+                          f"Avg HF: {avg_hf:.3f} | "
+                          f"Rebalances: {rebalance_count} ({deleverage_count} delev, {harvest_count} harvest)")
         
-        # Generate results
-        print("📊 Generating AAVE simulation results...")
-        print(f"   Total liquidation events: {len(liquidation_events)}")
-        print(f"   Agents liquidated: {sum(1 for count in agent_liquidation_counts.values() if count > 0)}/{len(agent_liquidation_counts)}")
+        # Generate results (suppress if configured for optimization runs)
+        if not self.config.suppress_progress_output:
+            print("📊 Generating AAVE simulation results...")
+            print(f"   Total liquidation events: {len(liquidation_events)}")
+            print(f"   Agents liquidated: {sum(1 for count in agent_liquidation_counts.values() if count > 0)}/{len(agent_liquidation_counts)}")
         
         # Build agent_outcomes with liquidation tracking
         agent_outcomes = []
@@ -1761,6 +1821,11 @@ class FullYearSimulation:
                 "net_position_value": portfolio["net_position_value"],
                 "total_yield_earned": portfolio["yield_token_portfolio"]["total_accrued_yield"],
             }
+            
+            # Add agent snapshots to outcome
+            if agent.agent_id in agent_snapshots:
+                outcome["snapshots"] = agent_snapshots[agent.agent_id]
+            
             agent_outcomes.append(outcome)
         
         # Build comprehensive results
