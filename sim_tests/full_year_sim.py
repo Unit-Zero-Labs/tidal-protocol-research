@@ -2076,9 +2076,10 @@ class FullYearSimulation:
                 "liquidated_agents": sum(1 for a in aave_perf if not a.get("survived", True)),
                 "total_liquidation_events": sum(a.get("liquidation_count", 0) for a in aave_perf),
                 "avg_final_hf": np.mean([a.get("final_health_factor", 0) for a in aave_perf if a.get("survived", False)]) if aave_perf else 0,
-                "total_rebalances": 0,  # AAVE doesn't rebalance
-                "total_leverage_increases": 0,  # AAVE doesn't actively manage leverage
-                "total_position_adjustments": 0,  # AAVE is buy-and-hold
+                "total_weekly_rebalances": aave_results.get("summary", {}).get("total_weekly_rebalances", 0),
+                "total_deleverages": aave_results.get("summary", {}).get("total_deleverages", 0),
+                "total_harvests": aave_results.get("summary", {}).get("total_harvests", 0),
+                "total_position_adjustments": aave_results.get("summary", {}).get("total_weekly_rebalances", 0),  # Weekly rebalancing counts as position adjustments
                 "avg_net_position_value": aave_avg_net_value,
                 "avg_return_pct": aave_avg_return * 100,
                 "initial_investment": initial_investment_per_agent
@@ -2392,9 +2393,14 @@ class FullYearSimulation:
         x_pos = np.arange(2)
         width = 0.5
         
+        # Get AAVE rebalancing data from results
+        aave_results_summary = aave_results.get("summary", {})
+        aave_delev = aave_results_summary.get("total_deleverages", 0)
+        aave_harvest = aave_results_summary.get("total_harvests", 0)
+        
         # Stacked bars for High Tide showing defensive rebalancing and leverage increases
-        defensive_counts = [ht_rebalances, 0]  # AAVE doesn't rebalance
-        aggressive_counts = [ht_leverage_increases, 0]  # AAVE doesn't increase leverage
+        defensive_counts = [ht_rebalances, aave_delev]  # AAVE deleverages (sell YT -> pay debt)
+        aggressive_counts = [ht_leverage_increases, aave_harvest]  # AAVE harvests (sell YT -> BTC)
         
         bars1 = ax.bar(x_pos, defensive_counts, width, label='Defensive (Sell YT)', color='#e74c3c', alpha=0.7)
         bars2 = ax.bar(x_pos, aggressive_counts, width, bottom=defensive_counts, label='Aggressive (Borrow More)', color='#2ecc71', alpha=0.7)
@@ -2408,7 +2414,7 @@ class FullYearSimulation:
         ax.set_ylabel('Position Adjustments', fontsize=11, fontweight='bold')
         ax.set_title('Active Position Management (Full Year)', fontsize=12, fontweight='bold')
         ax.set_xticks(x_pos)
-        ax.set_xticklabels(['High Tide\n(Active)', 'AAVE\n(Passive)'])
+        ax.set_xticklabels(['High Tide\n(Automated)', 'AAVE\n(Weekly Manual)'])
         ax.legend(loc='upper left', fontsize=9)
         ax.grid(axis='y', alpha=0.3)
         
@@ -2440,11 +2446,13 @@ Position Adjustments: {ht_total_adjustments:,}
   • Defensive: {ht_rebalances:,}
   • Aggressive: {ht_leverage_increases:,}
 
-AAVE (Buy & Hold):
+AAVE (Weekly Rebalancing):
   • Survived: {aave_active}/{aave_total} ({aave_survival_pct:.1f}%)
   • Avg Return: {aave_return:+.1f}%
   • Avg Position: ${aave_avg_pos:,.0f}
-  • Position Adjustments: 0
+  • Position Adjustments: {aave_delev + aave_harvest:,}
+  • Deleverages: {aave_delev:,}
+  • Harvests: {aave_harvest:,}
 
 Outperformance: {(ht_return - aave_return):+.1f}%
 
@@ -2667,10 +2675,10 @@ High Tide (Active Management):
 • Final HF: {np.mean([a.get("final_health_factor", 0) for a in ht_survivors]) if ht_survivors else 0:.3f}
 • Position Adjustments: {sum(a.get("total_position_adjustments", 0) for a in ht_perf):,}
 
-AAVE (Buy & Hold):
+AAVE (Weekly Rebalancing):
 • Avg Return: +{aave_avg_return:.2f}%
 • Final HF: {np.mean([a.get("final_health_factor", 0) for a in aave_survivors]) if aave_survivors else 0:.3f}
-• Position Adjustments: 0
+• Position Adjustments: {aave_results.get("summary", {}).get("total_weekly_rebalances", 0):,}
 
 Performance Advantage:
 • Return Difference: +{ht_avg_return - aave_avg_return:.2f}%
@@ -2701,14 +2709,14 @@ Performance Advantage:
         ht_sim_results = ht_results.get("simulation_results", ht_results)
         aave_sim_results = aave_results.get("simulation_results", aave_results)
         
-        # Extract High Tide time series data
+        # Extract Flow Vaults time series data
         ht_health_history = ht_sim_results.get("agent_health_history", [])
         ht_btc_data = []
         if ht_health_history and len(ht_health_history) > 0:
             first_timestep = ht_health_history[0]
             if "agents" in first_timestep and len(first_timestep["agents"]) > 0:
                 first_agent_id = first_timestep["agents"][0]["agent_id"]
-                print(f"📊 Extracting High Tide BTC data for agent {first_agent_id}")
+                print(f"📊 Extracting Flow Vaults BTC data for agent {first_agent_id}")
                 for timestep in ht_health_history:
                     agent_data = next((a for a in timestep.get("agents", []) if a.get("agent_id") == first_agent_id), None)
                     if agent_data:
@@ -2722,7 +2730,7 @@ Performance Advantage:
                             "btc_value": btc_value,
                             "btc_price": btc_price
                         })
-                print(f"   ✅ Extracted {len(ht_btc_data)} High Tide data points")
+                print(f"   ✅ Extracted {len(ht_btc_data)} Flow Vaults data points")
                 if ht_btc_data:
                     print(f"   📈 First BTC amount: {ht_btc_data[0]['btc_amount']:.4f}, Last BTC amount: {ht_btc_data[-1]['btc_amount']:.4f}")
         
@@ -2752,7 +2760,7 @@ Performance Advantage:
                 if aave_btc_data:
                     print(f"   📈 First BTC amount: {aave_btc_data[0]['btc_amount']:.4f}, Last BTC amount: {aave_btc_data[-1]['btc_amount']:.4f}")
         
-        # Top Left: High Tide BTC Value vs. BTC Buy and Hold
+        # Top Left: Flow Vaults BTC Value vs. BTC Buy and Hold
         if ht_btc_data:
             hours = [d["hour"] for d in ht_btc_data]
             ht_values = [d["btc_value"] for d in ht_btc_data]
@@ -2760,13 +2768,13 @@ Performance Advantage:
             # Buy and hold: 1 BTC throughout
             buyhold_values = [1.0 * d["btc_price"] for d in ht_btc_data]
             
-            ax1.plot(hours, ht_values, linewidth=2.5, color='#2E86AB', label='High Tide BTC Value', alpha=0.9)
+            ax1.plot(hours, ht_values, linewidth=2.5, color='#2E86AB', label='Flow Vaults BTC Value', alpha=0.9)
             ax1.plot(hours, buyhold_values, linewidth=2.5, color='#FFB84D', label='BTC Buy & Hold', alpha=0.9, linestyle='--')
             ax1.fill_between(hours, ht_values, buyhold_values, where=[hv >= bh for hv, bh in zip(ht_values, buyhold_values)], 
                             alpha=0.2, color='green', label='Outperformance')
             ax1.fill_between(hours, ht_values, buyhold_values, where=[hv < bh for hv, bh in zip(ht_values, buyhold_values)], 
                             alpha=0.2, color='red', label='Underperformance')
-            ax1.set_title('High Tide: BTC Value vs. Buy & Hold', fontsize=13, fontweight='bold')
+            ax1.set_title('Flow Vaults: BTC Value vs. Buy & Hold', fontsize=13, fontweight='bold')
             ax1.set_xlabel('Hours', fontsize=11)
             ax1.set_ylabel('BTC Value ($)', fontsize=11)
             ax1.grid(True, alpha=0.3)
@@ -2777,12 +2785,12 @@ Performance Advantage:
                 final_ht = ht_values[-1]
                 final_bh = buyhold_values[-1]
                 diff_pct = ((final_ht / final_bh) - 1) * 100
-                ax1.text(0.02, 0.02, f'Final HT: ${final_ht:,.0f}\nFinal B&H: ${final_bh:,.0f}\nDifference: {diff_pct:+.1f}%',
+                ax1.text(0.02, 0.02, f'Final FV: ${final_ht:,.0f}\nFinal B&H: ${final_bh:,.0f}\nDifference: {diff_pct:+.1f}%',
                         transform=ax1.transAxes, fontsize=10, verticalalignment='bottom',
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         else:
-            ax1.text(0.5, 0.5, 'No High Tide data available', ha='center', va='center', transform=ax1.transAxes, fontsize=12)
-            ax1.set_title('High Tide: BTC Value vs. Buy & Hold', fontsize=13, fontweight='bold')
+            ax1.text(0.5, 0.5, 'No Flow Vaults data available', ha='center', va='center', transform=ax1.transAxes, fontsize=12)
+            ax1.set_title('Flow Vaults: BTC Value vs. Buy & Hold', fontsize=13, fontweight='bold')
         
         # Top Right: AAVE BTC Value vs. BTC Buy and Hold
         if aave_btc_data:
@@ -2816,15 +2824,15 @@ Performance Advantage:
             ax2.text(0.5, 0.5, 'No AAVE data available', ha='center', va='center', transform=ax2.transAxes, fontsize=12)
             ax2.set_title('AAVE: BTC Value vs. Buy & Hold', fontsize=13, fontweight='bold')
         
-        # Bottom Left: High Tide BTC Holdings (quantity)
+        # Bottom Left: Flow Vaults BTC Holdings (quantity)
         if ht_btc_data:
             hours = [d["hour"] for d in ht_btc_data]
             btc_amounts = [d["btc_amount"] for d in ht_btc_data]
             
-            ax3.plot(hours, btc_amounts, linewidth=2.5, color='#2E86AB', label='High Tide BTC Holdings')
+            ax3.plot(hours, btc_amounts, linewidth=2.5, color='#2E86AB', label='Flow Vaults BTC Holdings')
             ax3.fill_between(hours, btc_amounts, alpha=0.2, color='#2E86AB')
             ax3.axhline(y=1.0, color='orange', linestyle='--', alpha=0.7, linewidth=2, label='Initial (1 BTC)')
-            ax3.set_title('High Tide: BTC Holdings Over Time', fontsize=13, fontweight='bold')
+            ax3.set_title('Flow Vaults: BTC Holdings Over Time', fontsize=13, fontweight='bold')
             ax3.set_xlabel('Hours', fontsize=11)
             ax3.set_ylabel('BTC Amount', fontsize=11)
             ax3.grid(True, alpha=0.3)
@@ -2839,8 +2847,8 @@ Performance Advantage:
                         ha='right', fontsize=11, fontweight='bold',
                         bbox=dict(boxstyle='round', facecolor='lightgreen' if change_pct > 0 else 'lightcoral', alpha=0.8))
         else:
-            ax3.text(0.5, 0.5, 'No High Tide data available', ha='center', va='center', transform=ax3.transAxes, fontsize=12)
-            ax3.set_title('High Tide: BTC Holdings Over Time', fontsize=13, fontweight='bold')
+            ax3.text(0.5, 0.5, 'No Flow Vaults data available', ha='center', va='center', transform=ax3.transAxes, fontsize=12)
+            ax3.set_title('Flow Vaults: BTC Holdings Over Time', fontsize=13, fontweight='bold')
         
         # Bottom Right: AAVE BTC Holdings (quantity)
         if aave_btc_data:
@@ -2916,7 +2924,8 @@ Performance Advantage:
         print(f"      • Leverage Increases (borrow more when HF > {self.config.agent_initial_hf}): {ht.get('total_leverage_increases', 0):,}")
         print(f"      • Total Position Adjustments: {ht.get('total_position_adjustments', 0):,}")
         print(f"   AAVE (Initial HF: {self.config.aave_initial_hf}):")
-        print(f"      • Total Position Adjustments: {aave.get('total_position_adjustments', 0):,} (buy-and-hold)")
+        print(f"      • Weekly Rebalancing: {aave.get('total_weekly_rebalances', 0):,} ({aave.get('total_deleverages', 0):,} delev, {aave.get('total_harvests', 0):,} harvest)")
+        print(f"      • Total Position Adjustments: {aave.get('total_position_adjustments', 0):,}")
         
         # Add detailed accounting breakdown for High Tide
         print(f"\n📋 HIGH TIDE ACCOUNTING BREAKDOWN:")

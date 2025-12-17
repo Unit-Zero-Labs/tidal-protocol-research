@@ -166,3 +166,4 @@ All studies employed:
 - Real historical price data from on-chain sources
 - Symmetric comparison methodology (both protocols using identical interest rates and market conditions)
 
+

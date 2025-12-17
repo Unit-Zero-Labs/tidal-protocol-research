@@ -353,7 +353,7 @@ class AaveAgent(BaseAgent):
             return rebalance_event
         
         # CASE 1: HF < Initial HF → Deleverage (sell YT → MOET → pay down debt)
-        if current_hf < initial_hf:
+        if current_hf < initial_hf * 0.99:  # Allow 1% buffer to avoid flip-flopping
             # Calculate how much YT to sell (sell enough to get back to initial HF)
             # We want to reduce debt to increase HF
             btc_price = asset_prices.get(Asset.BTC, 100_000.0)
@@ -368,7 +368,7 @@ class AaveAgent(BaseAgent):
             max_yt_to_sell = total_yt_value * 0.5
             yt_to_sell = min(debt_to_repay, max_yt_to_sell)
             
-            if yt_to_sell > 10:  # Only if meaningful amount ($10 threshold)
+            if yt_to_sell > 0:  # Deleverage any positive amount
                 # Sell YT for MOET
                 moet_received, actual_yt_sold = yt_manager.sell_yield_tokens(yt_to_sell, current_minute)
                 
@@ -387,8 +387,8 @@ class AaveAgent(BaseAgent):
                     self._update_health_factor(asset_prices)
                     rebalance_event["hf_after"] = self.state.health_factor
         
-        # CASE 2: HF > Initial HF → Harvest profits (sell rebased YT → BTC)
-        elif current_hf > initial_hf:
+        # CASE 2: HF >= Initial HF (within buffer) → Harvest profits (sell rebased YT → BTC)
+        else:  # If not deleveraging, harvest any accumulated yield
             # Only sell the rebasing yield (accrued interest), not the principal
             # Calculate NEW yield since last harvest (not cumulative total)
             current_yt_value = yt_manager.calculate_total_value(current_minute)
@@ -403,11 +403,11 @@ class AaveAgent(BaseAgent):
             # Sell the incremental yield (100% of new yield this week)
             yt_to_sell = incremental_yield
             
-            if yt_to_sell > 10:  # Only if meaningful amount ($10 threshold)
+            if yt_to_sell > 0 and engine:  # Harvest any positive yield
                 # Sell YT for MOET first
                 moet_received, actual_yt_sold = yt_manager.sell_yield_tokens(yt_to_sell, current_minute)
                 
-                if moet_received > 0 and engine:
+                if moet_received > 0:
                     # Swap MOET for BTC using engine's pools
                     # This requires access to the MOET:BTC pool
                     # For simplicity, approximate: BTC received = MOET / BTC price

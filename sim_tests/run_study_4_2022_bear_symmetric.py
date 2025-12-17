@@ -23,7 +23,7 @@ def main():
     print("=" * 80)
     print("Configuration:")
     print("  - Market: 2022 (Bear, -64.2% BTC)")
-    print("  - High Tide HF: 1.3 (trigger: 1.1, target: 1.2)")
+    print("  - High Tide HF: 1.2 (trigger: 1.1, target: 1.15)")
     print("  - AAVE HF: 1.3 (static)")
     print("  - Rates: Historical AAVE 2022 (both protocols)")
     print("  - Advanced MOET: OFF")
@@ -36,7 +36,7 @@ def main():
     config = FullYearSimConfig()
     
     # Study 4 parameters
-    config.test_name = "Full_Year_2022_BTC_Bear_Market_Equal_HF_Weekly_Yield_Harvest_HT_vs_AAVE_Comparison"
+    config.test_name = "Full_Year_2022_BTC_Bear_Market_HF_1.2_vs_1.3_Weekly_Yield_Harvest_HT_vs_AAVE_Comparison"
     config.simulation_duration_days = 365
     config.num_agents = 1  # Single agent per protocol
     config.initial_btc_per_agent = 1.0
@@ -46,14 +46,17 @@ def main():
     config.use_historical_btc_data = True
     config.use_historical_aave_rates = True
     
-    # Health factors (Equal for symmetric comparison)
-    config.agent_initial_hf = 1.3
+    # Health factors (High Tide 1.2 initial, AAVE 1.3)
+    config.agent_initial_hf = 1.2
     config.agent_rebalancing_hf = 1.1
-    config.agent_target_hf = 1.2
-    config.aave_initial_hf = 1.3  # Same as High Tide
+    config.agent_target_hf = 1.15
+    config.aave_initial_hf = 1.3  # AAVE baseline
     
     # Advanced MOET: OFF for symmetric study
     config.use_advanced_moet = False
+    
+    # Weekly rebalancing frequency
+    config.leverage_frequency_minutes = 10080  # 1 week = 10,080 minutes
     
     # Weekly yield harvesting
     config.enable_weekly_yield_harvest = True

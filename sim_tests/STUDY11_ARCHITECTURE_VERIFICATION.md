@@ -203,3 +203,4 @@ Study 11 is **100% integrated** with the core codebase:
 
 The only new major functionality is the `MinimumHFOptimizer` class, which is purely an orchestration layer that calls existing methods in a loop with different parameters. This is the correct design pattern for optimization studies.
 
+

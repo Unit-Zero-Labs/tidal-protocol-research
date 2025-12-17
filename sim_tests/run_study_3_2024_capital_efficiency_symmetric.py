@@ -55,6 +55,9 @@ def main():
     # Advanced MOET: OFF for symmetric study
     config.use_advanced_moet = False
     
+    # Weekly rebalancing frequency
+    config.leverage_frequency_minutes = 10080  # 1 week = 10,080 minutes
+    
     # Weekly yield harvesting
     config.enable_weekly_yield_harvest = True
     
