@@ -1,50 +1,52 @@
 #!/usr/bin/env python3
 """
-Study 7: 2024 Bull Market - Asymmetric Comparison (Equal HF)
+Study 9: 2022 Bear Market - Asymmetric Comparison
 - High Tide: Advanced MOET (dynamic market-driven rates)
-- AAVE: Historical AAVE rates (2024)
+- AAVE: Historical AAVE rates (2022)
 - Equal initial health factor: 1.3
 - Advanced MOET: ON
-- Duration: 365 days (Jan 1 - Dec 31, 2024)
-- BTC: $42,208 → $92,627 (+119%)
+- Duration: 365 days (Jan 1 - Dec 31, 2022)
+- BTC: $46,320 → $16,604 (-64.2%)
 """
 
 import sys
 from pathlib import Path
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sim_tests.full_year_sim import FullYearSimConfig, FullYearSimulation
 
 
 def main():
     print("=" * 80)
-    print("STUDY 7: 2024 Bull Market - Asymmetric Comparison (Advanced MOET)")
+    print("STUDY 9: 2022 Bear Market - Asymmetric Comparison (Advanced MOET)")
     print("=" * 80)
     print("Configuration:")
-    print("  - Market: 2024 (Bull, +119% BTC)")
+    print("  - Market: 2022 (Bear, -64.2% BTC)")
     print("  - High Tide HF: 1.3 (trigger: 1.1, target: 1.2)")
     print("  - AAVE HF: 1.3 (static)")
     print("  - High Tide Rates: Advanced MOET (dynamic)")
-    print("  - AAVE Rates: Historical AAVE 2024")
+    print("  - AAVE Rates: Historical AAVE 2022")
     print("  - Advanced MOET: ON")
     print("  - Duration: 365 days")
     print("  - Agents: 1 per protocol (clean comparison)")
     print("  - Ecosystem Growth: OFF")
     print("=" * 80)
+    print("\n⚠️  CRITICAL STRESS TEST: Bear market capital preservation ⚠️")
+    print()
     
     # Create configuration
     config = FullYearSimConfig()
     
-    # Study 7 parameters
-    config.test_name = "Full_Year_2024_BTC_Bull_Market_Advanced_MOET_vs_AAVE_Historical_HT_vs_AAVE_Comparison"
+    # Study 9 parameters
+    config.test_name = "Full_Year_2022_BTC_Bear_Market_Advanced_MOET_vs_AAVE_Historical_HT_vs_AAVE_Comparison"
     config.simulation_duration_days = 365
     config.num_agents = 100  # 100 agents per protocol
     config.initial_btc_per_agent = 1.0
     
     # Market data
-    config.market_year = 2024
+    config.market_year = 2022
     config.use_historical_btc_data = True
     config.use_historical_aave_rates = True  # AAVE still uses historical
     
@@ -76,7 +78,7 @@ def main():
     results = sim.run_test()
     
     print("\n" + "=" * 80)
-    print("STUDY 7 COMPLETE")
+    print("STUDY 9 COMPLETE")
     print("=" * 80)
     print(f"Results saved to: tidal_protocol_sim/results/{config.test_name}/")
     print()

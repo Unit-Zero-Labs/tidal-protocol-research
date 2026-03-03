@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Dict, Tuple, Any, List
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sim_tests.full_year_sim import FullYearSimConfig, FullYearSimulation
 from tidal_protocol_sim.core.protocol import Asset
@@ -37,7 +37,7 @@ class MinimumHFOptimizer:
         
     def _load_oct10_data(self) -> List[float]:
         """Load minute-by-minute BTC price data from October 10th 2025"""
-        csv_path = Path(__file__).parent.parent / 'dune_query_6227486.csv'
+        csv_path = Path(__file__).parent.parent.parent / 'dune_query_6227486.csv'
         
         prices = []
         with open(csv_path, 'r') as f:
@@ -187,7 +187,7 @@ class MinimumHFOptimizer:
             import json
             
             # Create directory for test iteration data
-            output_dir = Path(__file__).parent.parent / "tidal_protocol_sim" / "results" / "Study_14_Oct10_2025_Liquidation_Cascade_Test_Data"
+            output_dir = Path(__file__).parent.parent.parent / "tidal_protocol_sim" / "results" / "Study_14_Oct10_2025_Liquidation_Cascade_Test_Data"
             output_dir.mkdir(parents=True, exist_ok=True)
             
             # Extract agent snapshots (HF over time)
@@ -223,7 +223,7 @@ class MinimumHFOptimizer:
         """Clean up temporary result files"""
         try:
             import shutil
-            results_dir = Path(__file__).parent.parent / "tidal_protocol_sim" / "results"
+            results_dir = Path(__file__).parent.parent.parent / "tidal_protocol_sim" / "results"
             
             # Remove any directories starting with underscore (temp tests)
             for item in results_dir.glob("_temp_*"):
@@ -316,7 +316,7 @@ def run_comparison_with_optimal_hf(optimal_aave_hf: float, optimization_summary:
     config.initial_btc_per_agent = 1.0
     
     # Load October 10th 2025 data
-    csv_path = Path(__file__).parent.parent / 'dune_query_6227486.csv'
+    csv_path = Path(__file__).parent.parent.parent / 'dune_query_6227486.csv'
     prices = []
     with open(csv_path, 'r') as f:
         reader = csv.DictReader(f)
@@ -430,7 +430,7 @@ def main():
     
     # Save optimization summary
     import json
-    output_dir = Path(__file__).parent.parent / "tidal_protocol_sim" / "results" / f"Study_14_Oct10_2025_Liquidation_Cascade_Aave_{optimal_hf:.2f}_vs_HT_1.10"
+    output_dir = Path(__file__).parent.parent.parent / "tidal_protocol_sim" / "results" / f"Study_14_Oct10_2025_Liquidation_Cascade_Aave_{optimal_hf:.2f}_vs_HT_1.10"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     summary_path = output_dir / "optimization_summary.json"

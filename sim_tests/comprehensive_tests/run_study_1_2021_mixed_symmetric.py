@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
 """
-Study 4: 2022 Bear Market - Symmetric Comparison
-- Both protocols use historical AAVE rates (2022)
+Study 1: 2021 Mixed Market - Symmetric Comparison
+- Both protocols use historical AAVE rates (2021)
 - Equal initial health factor: 1.3
 - Advanced MOET: OFF
-- Duration: 365 days (Jan 1 - Dec 31, 2022)
-- BTC: $46,320 → $16,604 (-64.2%)
+- Duration: 365 days (Jan 1 - Dec 31, 2021)
+- BTC: $29,001.72 → $46,306.45 (+59.6%)
 """
 
 import sys
 from pathlib import Path
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sim_tests.full_year_sim import FullYearSimConfig, FullYearSimulation
 
 
 def main():
     print("=" * 80)
-    print("STUDY 4: 2022 Bear Market - Symmetric Comparison")
+    print("STUDY 1: 2021 Mixed Market - Symmetric Comparison")
     print("=" * 80)
     print("Configuration:")
-    print("  - Market: 2022 (Bear, -64.2% BTC)")
-    print("  - High Tide HF: 1.2 (trigger: 1.1, target: 1.15)")
+    print("  - Market: 2021 (Mixed, +59.6% BTC)")
+    print("  - High Tide HF: 1.3 (trigger: 1.1, target: 1.2)")
     print("  - AAVE HF: 1.3 (static)")
-    print("  - Rates: Historical AAVE 2022 (both protocols)")
+    print("  - Rates: Historical AAVE 2021 (both protocols)")
     print("  - Advanced MOET: OFF")
     print("  - Duration: 365 days")
     print("  - Agents: 1 per protocol (clean comparison)")
@@ -35,28 +35,25 @@ def main():
     # Create configuration
     config = FullYearSimConfig()
     
-    # Study 4 parameters
-    config.test_name = "Full_Year_2022_BTC_Bear_Market_HF_1.2_vs_1.3_Weekly_Yield_Harvest_HT_vs_AAVE_Comparison"
+    # Study 1 parameters
+    config.test_name = "Full_Year_2021_BTC_Mixed_Market_Equal_HF_Weekly_Yield_Harvest_HT_vs_AAVE_Comparison"
     config.simulation_duration_days = 365
     config.num_agents = 1  # Single agent per protocol
     config.initial_btc_per_agent = 1.0
     
     # Market data
-    config.market_year = 2022
+    config.market_year = 2021
     config.use_historical_btc_data = True
     config.use_historical_aave_rates = True
     
-    # Health factors (High Tide 1.2 initial, AAVE 1.3)
-    config.agent_initial_hf = 1.2
+    # Health factors (Equal for symmetric comparison)
+    config.agent_initial_hf = 1.3
     config.agent_rebalancing_hf = 1.1
-    config.agent_target_hf = 1.15
-    config.aave_initial_hf = 1.3  # AAVE baseline
+    config.agent_target_hf = 1.2
+    config.aave_initial_hf = 1.3  # Same as High Tide
     
     # Advanced MOET: OFF for symmetric study
     config.use_advanced_moet = False
-    
-    # Weekly rebalancing frequency
-    config.leverage_frequency_minutes = 10080  # 1 week = 10,080 minutes
     
     # Weekly yield harvesting
     config.enable_weekly_yield_harvest = True
@@ -77,7 +74,7 @@ def main():
     results = sim.run_test()
     
     print("\n" + "=" * 80)
-    print("STUDY 4 COMPLETE")
+    print("STUDY 1 COMPLETE")
     print("=" * 80)
     print(f"Results saved to: tidal_protocol_sim/results/{config.test_name}/")
     print()

@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
 """
-Study 1: 2021 Mixed Market - Symmetric Comparison
-- Both protocols use historical AAVE rates (2021)
+Study 7: 2024 Bull Market - Asymmetric Comparison (Equal HF)
+- High Tide: Advanced MOET (dynamic market-driven rates)
+- AAVE: Historical AAVE rates (2024)
 - Equal initial health factor: 1.3
-- Advanced MOET: OFF
-- Duration: 365 days (Jan 1 - Dec 31, 2021)
-- BTC: $29,001.72 → $46,306.45 (+59.6%)
+- Advanced MOET: ON
+- Duration: 365 days (Jan 1 - Dec 31, 2024)
+- BTC: $42,208 → $92,627 (+119%)
 """
 
 import sys
 from pathlib import Path
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sim_tests.full_year_sim import FullYearSimConfig, FullYearSimulation
 
 
 def main():
     print("=" * 80)
-    print("STUDY 1: 2021 Mixed Market - Symmetric Comparison")
+    print("STUDY 7: 2024 Bull Market - Asymmetric Comparison (Advanced MOET)")
     print("=" * 80)
     print("Configuration:")
-    print("  - Market: 2021 (Mixed, +59.6% BTC)")
+    print("  - Market: 2024 (Bull, +119% BTC)")
     print("  - High Tide HF: 1.3 (trigger: 1.1, target: 1.2)")
     print("  - AAVE HF: 1.3 (static)")
-    print("  - Rates: Historical AAVE 2021 (both protocols)")
-    print("  - Advanced MOET: OFF")
+    print("  - High Tide Rates: Advanced MOET (dynamic)")
+    print("  - AAVE Rates: Historical AAVE 2024")
+    print("  - Advanced MOET: ON")
     print("  - Duration: 365 days")
     print("  - Agents: 1 per protocol (clean comparison)")
     print("  - Ecosystem Growth: OFF")
@@ -35,25 +37,25 @@ def main():
     # Create configuration
     config = FullYearSimConfig()
     
-    # Study 1 parameters
-    config.test_name = "Full_Year_2021_BTC_Mixed_Market_Equal_HF_Weekly_Yield_Harvest_HT_vs_AAVE_Comparison"
+    # Study 7 parameters
+    config.test_name = "Full_Year_2024_BTC_Bull_Market_Advanced_MOET_vs_AAVE_Historical_HT_vs_AAVE_Comparison"
     config.simulation_duration_days = 365
-    config.num_agents = 1  # Single agent per protocol
+    config.num_agents = 100  # 100 agents per protocol
     config.initial_btc_per_agent = 1.0
     
     # Market data
-    config.market_year = 2021
+    config.market_year = 2024
     config.use_historical_btc_data = True
-    config.use_historical_aave_rates = True
+    config.use_historical_aave_rates = True  # AAVE still uses historical
     
-    # Health factors (Equal for symmetric comparison)
+    # Health factors (Equal for comparison)
     config.agent_initial_hf = 1.3
     config.agent_rebalancing_hf = 1.1
     config.agent_target_hf = 1.2
     config.aave_initial_hf = 1.3  # Same as High Tide
     
-    # Advanced MOET: OFF for symmetric study
-    config.use_advanced_moet = False
+    # Advanced MOET: ON for asymmetric study
+    config.use_advanced_moet = True
     
     # Weekly yield harvesting
     config.enable_weekly_yield_harvest = True
@@ -66,7 +68,7 @@ def main():
     config.ecosystem_growth_enabled = False
     
     print("\nStarting simulation...")
-    print("Expected runtime: ~5-10 minutes")
+    print("Expected runtime: ~8-15 minutes (Advanced MOET adds complexity)")
     print()
     
     # Run simulation
@@ -74,7 +76,7 @@ def main():
     results = sim.run_test()
     
     print("\n" + "=" * 80)
-    print("STUDY 1 COMPLETE")
+    print("STUDY 7 COMPLETE")
     print("=" * 80)
     print(f"Results saved to: tidal_protocol_sim/results/{config.test_name}/")
     print()

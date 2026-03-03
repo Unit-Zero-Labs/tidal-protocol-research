@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Any, Tuple
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sim_tests.full_year_sim import FullYearSimConfig, FullYearSimulation
 
@@ -272,7 +272,7 @@ class MinimumHFOptimizer:
             import json
             
             # Create directory for test iteration data
-            output_dir = Path(__file__).parent.parent / "tidal_protocol_sim" / "results" / "Study_11_2022_Bear_Minimum_HF_Weekly_Test_Data"
+            output_dir = Path(__file__).parent.parent.parent / "tidal_protocol_sim" / "results" / "Study_11_2022_Bear_Minimum_HF_Weekly_Test_Data"
             output_dir.mkdir(parents=True, exist_ok=True)
             
             # Extract agent snapshots (HF over time)
@@ -308,7 +308,7 @@ class MinimumHFOptimizer:
         """Remove temporary result files"""
         try:
             import shutil
-            results_dir = Path(__file__).parent.parent / "tidal_protocol_sim" / "results" / test_name
+            results_dir = Path(__file__).parent.parent.parent / "tidal_protocol_sim" / "results" / test_name
             if results_dir.exists():
                 shutil.rmtree(results_dir)
         except Exception:
@@ -397,7 +397,7 @@ def run_comparison_with_optimal_hf(optimal_aave_hf: float, optimization_summary:
     # SAVE OPTIMIZATION SUMMARY TO DEDICATED FILE
     import json
     from pathlib import Path
-    results_dir = Path(__file__).parent.parent / "tidal_protocol_sim" / "results" / config.test_name
+    results_dir = Path(__file__).parent.parent.parent / "tidal_protocol_sim" / "results" / config.test_name
     results_dir.mkdir(parents=True, exist_ok=True)
     optimization_file = results_dir / "optimization_summary.json"
     

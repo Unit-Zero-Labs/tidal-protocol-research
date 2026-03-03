@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
 def format_time(seconds):
@@ -42,7 +42,7 @@ def run_study(study_num, module_name, description, expected_runtime_min):
     
     try:
         # Import and run the study module
-        module = __import__(f"sim_tests.{module_name}", fromlist=['main'])
+        module = __import__(f"sim_tests.comprehensive_tests.{module_name}", fromlist=['main'])
         module.main()
         
         elapsed = time.time() - start_time
