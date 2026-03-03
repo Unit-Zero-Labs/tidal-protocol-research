@@ -131,6 +131,9 @@ class FullYearSimConfig:
         # Agent health snapshot frequency (NEW for Study 14 minute-by-minute tracking)
         self.agent_snapshot_frequency_minutes = 1440  # Default: daily (once per day)
         
+        # Leverage/rebalancing frequency for AAVE agents
+        self.leverage_frequency_minutes = 10080  # Weekly rebalancing (7 days)
+        
         # Progress reporting
         self.progress_report_every_n_minutes = 10080  # Weekly progress reports (7 days)
         
